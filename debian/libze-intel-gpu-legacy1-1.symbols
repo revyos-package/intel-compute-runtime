@@ -1,5 +1,4 @@
-libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
-* Build-Depends-Package: libze-intel-gpu-dev
+libze_intel_gpu_legacy1.so.1 libze-intel-gpu-legacy1 #MINVER#
  zeCommandListAppendBarrier@Base 24.35.30872.14
  zeCommandListAppendBarrierTracing@Base 24.35.30872.14
  zeCommandListAppendEventReset@Base 24.35.30872.14

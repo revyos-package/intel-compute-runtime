@@ -1,4 +1,4 @@
-Source: intel-compute-runtime
+Source: intel-compute-runtime-legacy
 Section: libs
 Priority: optional
 Maintainer: Debian OpenCL Maintainers <pkg-opencl-devel@lists.alioth.debian.org>
@@ -20,7 +20,7 @@ Homepage: https://github.com/intel/compute-runtime
 Vcs-Browser: https://salsa.debian.org/opencl-team/intel-compute-runtime
 Vcs-Git: https://salsa.debian.org/opencl-team/intel-compute-runtime.git
 
-Package: intel-opencl-icd
+Package: intel-opencl-icd-legacy
 Architecture: any-amd64
 Depends:
  ${shlibs:Depends},
@@ -38,62 +38,31 @@ Replaces:
  intel-opencl
 Provides:
  opencl-icd
-Description: Intel graphics compute runtime for OpenCL
+Description: Intel graphics compute runtime for OpenCL -- legacy platforms
  The Intel(R) Graphics Compute Runtime for OpenCL(TM) is an open source
  project to converge Intel's development efforts on OpenCL(TM) compute
  stacks supporting the GEN graphics hardware architecture.
  .
  Supported platforms - OpenCL 3.0, Production:
-  - DG1
   - Intel Core Processors with Gen9 GPU (Skylake)
   - Intel Core Processors with Gen9.5 GPU (Kaby Lake, Coffee Lake)
   - Intel Core Processors with Gen11 GPU (Ice Lake)
-  - Intel Core Processors with Xe LP (Gen12) GPU (Tiger Lake, Rocket Lake)
-  - Intel Core Processors with Xe (Gen12.2) GPU (Alder Lake)
   - Intel Atom Processors with Gen11 GPU (Elkhart Lake)
  Supported platforms - OpenCL 3.0, Maintenance:
   - Intel Core Processors with Gen8 GPU (Broadwell)
   - Intel Atom Processors with Gen9 GPU (Apollo Lake, Gemini Lake)
 
-Package: intel-ocloc
+Package: intel-ocloc-legacy
 Architecture: any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
-Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
-Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
-Description: Tool for managing Intel Compute GPU device binary format
+Description: Tool for managing Intel Compute GPU device binary format -- legacy platforms
  ocloc is a tool for managing Intel Compute GPU device binary format.
  It can be used for generation as well as manipulation of such binary files.
 
-Package: intel-ocloc-dev
+Package: libze-intel-gpu-legacy1-1
 Architecture: any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
-Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
-Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
-Description: Tool for managing Intel Compute GPU device binary format -- devel files
- ocloc is a tool for managing Intel Compute GPU device binary format.
- It can be used for generation as well as manipulation of such binary files.
- .
- This package includes the development headers for intel-ocloc.
-
-Package: libze-intel-gpu1
-Architecture: any-amd64
-Depends: ${shlibs:Depends}, ${misc:Depends},
-Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
-Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
-Description: Intel oneAPI L0 support implementation for Intel GPUs -- shared library
- Implementation for the Intel GPUs of the oneAPI L0 specification - which
- provides direct-to-metal interfaces to offload accelerator devices. Its
- programming interface can be tailored to any device needs and can be
- adapted to support broader set of languages features such as function
- pointers, virtual functions, unified memory, and I/O capabilities.
- .
- This package contains the shared library.
-
-Package: libze-intel-gpu-dev
-Architecture: any-amd64
-Depends: ${shlibs:Depends}, ${misc:Depends},
- libze-intel-gpu1 (= ${binary:Version}),
-Description: Intel oneAPI L0 support implementation for Intel GPUs -- shared library
+Description: Intel oneAPI L0 support implementation for Intel legacy GPUs
  Implementation for the Intel GPUs of the oneAPI L0 specification - which
  provides direct-to-metal interfaces to offload accelerator devices. Its
  programming interface can be tailored to any device needs and can be

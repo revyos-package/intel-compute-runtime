@@ -9,6 +9,8 @@ export DEB_CPPFLAGS_MAINT_STRIP = -D_FORTIFY_SOURCE=3
 override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \
+		-DNEO_LEGACY_PLATFORMS_SUPPORT=true \
+		-DNEO_CURRENT_PLATFORMS_SUPPORT=false \
 		-DSKIP_UNIT_TESTS=1 \
 		-Wno-dev
 
