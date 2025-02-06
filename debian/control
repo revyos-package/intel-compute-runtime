@@ -8,8 +8,8 @@ Uploaders:
 Build-Depends:
  debhelper-compat (= 13),
  cmake,
- libigc1 (>= 1.0.17193.2),
- libigdfcl-dev (>= 1.0.17193.2),
+ libigc2,
+ libigdfcl2-dev,
  libigdgmm-dev (>= 21.2.1),
  libva-dev,
  libze-dev (>= 1.17.6),
@@ -25,12 +25,12 @@ Architecture: any-amd64
 Depends:
  ${shlibs:Depends},
  ${misc:Depends},
- libigc1 (>= ${igc:Upstream-Version}),
- libigc1 (<< ${igc:Upstream-Version}+~),
- libigc1+llvm${igc:LLVM-Version},
- libigdfcl1 (>= ${igc:Upstream-Version}),
- libigdfcl1 (<< ${igc:Upstream-Version}+~),
- libigdfcl1+llvm${igc:LLVM-Version},
+ libigc2 (>= ${igc:Upstream-Version}),
+ libigc2 (<< ${igc:Upstream-Version}+~),
+ libigc2+llvm${igc:LLVM-Version},
+ libigdfcl2 (>= ${igc:Upstream-Version}),
+ libigdfcl2 (<< ${igc:Upstream-Version}+~),
+ libigdfcl2+llvm${igc:LLVM-Version},
  ocl-icd-libopencl1,
 Breaks:
  intel-opencl
