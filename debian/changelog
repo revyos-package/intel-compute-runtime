@@ -1,3 +1,10 @@
+intel-compute-runtime (24.52.32224.13-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+    - drops support for pre-GEN12 GPU's
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 06 Feb 2025 20:30:42 +0200
+
 intel-compute-runtime (24.35.30872.32-1) unstable; urgency=medium
 
   * New upstream release. (Closes: #1087579)
