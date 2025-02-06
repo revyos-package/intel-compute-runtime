@@ -4,6 +4,7 @@ intel-compute-runtime (24.52.32224.13-1) UNRELEASED; urgency=medium
     - drops support for pre-GEN12 GPU's
   * control, rules: Bump depends for IGC2.
   * install, alternatives: Updated.
+  * symbols: Updated.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Thu, 06 Feb 2025 20:30:42 +0200
 
