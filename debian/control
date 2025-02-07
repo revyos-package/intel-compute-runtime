@@ -18,7 +18,7 @@ Rules-Requires-Root: no
 Standards-Version: 4.7.0
 Homepage: https://github.com/intel/compute-runtime
 Vcs-Browser: https://salsa.debian.org/opencl-team/intel-compute-runtime
-Vcs-Git: https://salsa.debian.org/opencl-team/intel-compute-runtime.git
+Vcs-Git: https://salsa.debian.org/opencl-team/intel-compute-runtime.git -b master-legacy
 
 Package: intel-opencl-icd-legacy
 Architecture: any-amd64
