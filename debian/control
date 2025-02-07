@@ -96,11 +96,11 @@ Package: libze-intel-gpu-dev
 Architecture: any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
  libze-intel-gpu1 (= ${binary:Version}),
-Description: Intel oneAPI L0 support implementation for Intel GPUs -- shared library
+Description: Intel oneAPI L0 support implementation for Intel GPUs -- devel files
  Implementation for the Intel GPUs of the oneAPI L0 specification - which
  provides direct-to-metal interfaces to offload accelerator devices. Its
  programming interface can be tailored to any device needs and can be
  adapted to support broader set of languages features such as function
  pointers, virtual functions, unified memory, and I/O capabilities.
  .
- This package contains the shared library.
+ This package contains the development headers for libze-intel-gpu1.
