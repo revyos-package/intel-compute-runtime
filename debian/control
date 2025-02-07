@@ -15,7 +15,7 @@ Build-Depends:
  libze-dev (>= 1.17.6),
  pkgconf,
 Rules-Requires-Root: no
-Standards-Version: 4.6.1
+Standards-Version: 4.7.0
 Homepage: https://github.com/intel/compute-runtime
 Vcs-Browser: https://salsa.debian.org/opencl-team/intel-compute-runtime
 Vcs-Git: https://salsa.debian.org/opencl-team/intel-compute-runtime.git
