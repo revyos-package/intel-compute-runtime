@@ -1,3 +1,9 @@
+intel-compute-runtime (24.52.32224.13-2) UNRELEASED; urgency=medium
+
+  * control: Update supported platforms.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 07 Feb 2025 09:21:22 +0200
+
 intel-compute-runtime (24.52.32224.13-1) experimental; urgency=medium
 
   * New upstream release.
