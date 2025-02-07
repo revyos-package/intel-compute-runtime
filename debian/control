@@ -32,6 +32,8 @@ Depends:
  libigdfcl2 (<< ${igc:Upstream-Version}+~),
  libigdfcl2+llvm${igc:LLVM-Version},
  ocl-icd-libopencl1,
+Recommends:
+ intel-opencl-icd-legacy
 Breaks:
  intel-opencl
 Replaces:
@@ -57,6 +59,7 @@ Description: Intel graphics compute runtime for OpenCL
 Package: intel-ocloc
 Architecture: any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
+Recommends: intel-ocloc-legacy
 Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
 Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
 Description: Tool for managing Intel Compute GPU device binary format
@@ -77,6 +80,7 @@ Description: Tool for managing Intel Compute GPU device binary format -- devel f
 Package: libze-intel-gpu1
 Architecture: any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
+Recommends: libze-intel-gpu-legacy1-1
 Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
 Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
 Description: Intel oneAPI L0 support implementation for Intel GPUs -- shared library
