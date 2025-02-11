@@ -1,11 +1,11 @@
-intel-compute-runtime-legacy (24.35.30872.32-1) UNRELEASED; urgency=medium
+intel-compute-runtime-legacy (24.35.30872.32-2) unstable; urgency=medium
 
   * Fork for legacy platforms. This is the last version to support
     GEN8..GEN11 GPU's.
   * control: Bump policy to 4.7.0.
   * control: Fix Vcs link to point to master-legacy branch.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Thu, 06 Feb 2025 21:23:21 +0200
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 11 Feb 2025 08:49:21 +0200
 
 intel-compute-runtime (24.35.30872.32-1) unstable; urgency=medium
 
