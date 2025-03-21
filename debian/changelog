@@ -5,6 +5,7 @@ intel-compute-runtime (25.05.32567.18-1) UNRELEASED; urgency=medium
   * control: Add recommends on legacy packages.
   * control: Update libze-intel-gpu-dev description.
   * control: Bump build-depends on libigdfcl2-dev.
+  * Update intel-ocloc.alternatives.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Fri, 07 Feb 2025 09:21:22 +0200
 
