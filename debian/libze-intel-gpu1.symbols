@@ -239,6 +239,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeKernelCreateTracing@Base 24.35.30872.14
  zeKernelDestroy@Base 24.35.30872.14
  zeKernelDestroyTracing@Base 24.35.30872.14
+ zeKernelGetBinaryExp@Base 25.05.32567.18
  zeKernelGetIndirectAccess@Base 24.35.30872.14
  zeKernelGetIndirectAccessTracing@Base 24.35.30872.14
  zeKernelGetName@Base 24.35.30872.14
@@ -489,6 +490,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zesTemperatureGetProperties@Base 24.35.30872.14
  zesTemperatureGetState@Base 24.35.30872.14
  zesTemperatureSetConfig@Base 24.35.30872.14
+ zesVFManagementGetVFCapabilitiesExp2@Base 25.05.32567.18
  zesVFManagementGetVFCapabilitiesExp@Base 24.52.32224.13
  zesVFManagementGetVFEngineUtilizationExp2@Base 24.52.32224.13
  zesVFManagementGetVFEngineUtilizationExp@Base 24.35.30872.14
