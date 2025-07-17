@@ -112,7 +112,6 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen.h
     ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen_special.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen_sse4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/local_work_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/local_work_size.h
     ${CMAKE_CURRENT_SOURCE_DIR}/memory_properties_helpers.cpp
@@ -157,8 +156,6 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/topology.h
     ${CMAKE_CURRENT_SOURCE_DIR}/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topology_map.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/uint16_avx2.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/uint16_sse4.h
     ${CMAKE_CURRENT_SOURCE_DIR}/validators.h
     ${CMAKE_CURRENT_SOURCE_DIR}/vec.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions${BRANCH_DIR_SUFFIX}blit_properties_ext.h
