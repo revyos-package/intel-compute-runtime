@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -428,7 +428,7 @@ __kernel void CopyImageToImage2d(
 
 #pragma OPENCL EXTENSION cl_khr_3d_image_writes : enable
 
-__kernel void CopyImageToImage3d(
+__kernel void CopyImage3dToImage3d(
     __read_only image3d_t input,
     __write_only image3d_t output,
     int4 srcOffset,
@@ -441,6 +441,51 @@ __kernel void CopyImageToImage3d(
     const int4 dstCoord = (int4)(x, y, z, 0) + dstOffset;
     const uint4 c = read_imageui(input, srcCoord);
     write_imageui(output, dstCoord, c);
+}
+
+__kernel void CopyImage1dBufferToImage3d(
+    __read_only image1d_buffer_t input,
+    __write_only image3d_t output,
+    int4 srcOffset,
+    int4 dstOffset) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+    const int z = get_global_id(2);
+
+    const int4 srcCoord = (int4)(x, y, z, 0) + srcOffset;
+    const int4 dstCoord = (int4)(x, y, z, 0) + dstOffset;
+    const uint4 c = read_imageui(input, srcCoord.x);
+    write_imageui(output, dstCoord, c);
+}
+
+__kernel void CopyImage3dToImage1dBuffer(
+    __read_only image3d_t input,
+    __write_only image1d_buffer_t output,
+    int4 srcOffset,
+    int4 dstOffset) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+    const int z = get_global_id(2);
+
+    const int4 srcCoord = (int4)(x, y, z, 0) + srcOffset;
+    const int4 dstCoord = (int4)(x, y, z, 0) + dstOffset;
+    const uint4 c = read_imageui(input, srcCoord);
+    write_imageui(output, dstCoord.x, c);
+}
+
+__kernel void CopyImage1dBufferToImage1dBuffer(
+    __read_only image1d_buffer_t input,
+    __write_only image1d_buffer_t output,
+    int4 srcOffset,
+    int4 dstOffset) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+    const int z = get_global_id(2);
+
+    const int4 srcCoord = (int4)(x, y, z, 0) + srcOffset;
+    const int4 dstCoord = (int4)(x, y, z, 0) + dstOffset;
+    const uint4 c = read_imageui(input, srcCoord.x);
+    write_imageui(output, dstCoord.x, c);
 }
 
 #pragma OPENCL EXTENSION cl_khr_3d_image_writes : enable
@@ -725,4 +770,14 @@ __kernel void CopyImage3dToBuffer16Bytes(__read_only image3d_t input,
     else{
         *(__global uint4*)(dst + DstOffset + x * 16) = c;
     }
+}
+
+__kernel void FillImage1dBuffer(
+    __write_only image1d_buffer_t output,
+    uint4 color,
+    int4 dstOffset) {
+    const int x = get_global_id(0);
+
+    const int dstCoord = x + dstOffset.x;
+    write_imageui(output, dstCoord, color);
 }

@@ -5,7 +5,6 @@
  *
  */
 
-#include "shared/source/built_ins/built_ins.h"
 #include "shared/source/gen_common/reg_configs_common.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
@@ -124,7 +123,13 @@ HWTEST_F(EnqueueWriteBufferRectTest, GivenNonBlockingEnqueueWhenWritingBufferThe
 
     enqueueWriteBufferRect2D<FamilyType>(CL_FALSE);
     EXPECT_EQ(csr.peekTaskCount(), pCmdQ->taskCount);
-    EXPECT_EQ(csr.peekTaskLevel(), pCmdQ->taskLevel + 1);
+
+    auto cmdQTaskLevel = pCmdQ->taskLevel;
+    if (!csr.isUpdateTagFromWaitEnabled()) {
+        cmdQTaskLevel++;
+    }
+
+    EXPECT_EQ(csr.peekTaskLevel(), cmdQTaskLevel);
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueWriteBufferRectTest, Given2dRegionWhenWritingBufferThenCommandsAreProgrammedCorrectly) {
@@ -289,7 +294,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueWriteBufferRectTest, WhenWritingBufferThen
     EXPECT_NE(0u, idd.getConstantIndirectUrbEntryReadLength());
 }
 
-HWTEST2_F(EnqueueWriteBufferRectTest, WhenWritingBufferThenOnePipelineSelectIsProgrammed, IsAtMostXeHpcCore) {
+HWTEST2_F(EnqueueWriteBufferRectTest, WhenWritingBufferThenOnePipelineSelectIsProgrammed, IsAtMostXeCore) {
     enqueueWriteBufferRect2D<FamilyType>();
     int numCommands = getNumberOfPipelineSelectsThatEnablePipelineSelect<FamilyType>();
     EXPECT_EQ(1, numCommands);

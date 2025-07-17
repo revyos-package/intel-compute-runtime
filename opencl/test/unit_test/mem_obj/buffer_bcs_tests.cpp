@@ -13,6 +13,7 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
 #include "shared/test/common/helpers/gtest_helpers.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/mocks/mock_os_context.h"
@@ -42,7 +43,10 @@ struct BcsBufferTests : public ::testing::Test {
 
         WaitStatus waitForTaskCountWithKmdNotifyFallback(TaskCountType taskCountToWait, FlushStamp flushStampToWait,
                                                          bool useQuickKmdSleep, QueueThrottle throttle) override {
-            EXPECT_EQ(this->latestFlushedTaskCount, taskCountToWait);
+
+            if (!this->isUpdateTagFromWaitEnabled()) {
+                EXPECT_EQ(this->latestFlushedTaskCount, taskCountToWait);
+            }
             EXPECT_EQ(0u, flushStampToWait);
             EXPECT_FALSE(useQuickKmdSleep);
             EXPECT_EQ(throttle, QueueThrottle::MEDIUM);
@@ -54,7 +58,9 @@ struct BcsBufferTests : public ::testing::Test {
 
         WaitStatus waitForTaskCountAndCleanTemporaryAllocationList(TaskCountType requiredTaskCount) override {
             EXPECT_EQ(1u, waitForTaskCountWithKmdNotifyFallbackCalled);
-            EXPECT_EQ(this->latestFlushedTaskCount, requiredTaskCount);
+            if (!this->isUpdateTagFromWaitEnabled()) {
+                EXPECT_EQ(this->latestFlushedTaskCount, requiredTaskCount);
+            }
             waitForTaskCountAndCleanAllocationListCalled++;
 
             return WaitStatus::ready;
@@ -309,11 +315,12 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenDebugFlagSetWhenDispatchingBlitCommandsT
 
     uint64_t bufferGpuAddr = bufferForBlt->getGraphicsAllocation(0)->getGpuAddress();
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
 
     commandQueue->enqueueWriteBuffer(bufferForBlt.get(), CL_TRUE, 0, copySize, myHostPtr.get(), nullptr, 0, nullptr, nullptr);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     EXPECT_NE(0u, output.size());
 
     char expectedStr[512] = {};
@@ -585,6 +592,8 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenAllEnginesReadyWhenWaitingForEventThenCl
 }
 
 HWTEST_TEMPLATED_F(BcsBufferTests, givenAllBcsEnginesReadyWhenWaitingForEventThenClearDeferredNodes) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
     auto &productHelper = device->getProductHelper();
     auto copyDefaultEngineType = productHelper.getDefaultCopyEngine();
     auto mockCmdQ = static_cast<MockCommandQueueHw<FamilyType> *>(commandQueue.get());
@@ -955,7 +964,7 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBufferOperationWithoutKernelWhenEstimati
     auto expectedSize = TimestampPacketHelper::getRequiredCmdStreamSizeForNodeDependencyWithBlitEnqueue<FamilyType>();
 
     if (cmdQ->isCacheFlushForBcsRequired()) {
-        expectedSize += MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(cmdQ->getDevice().getRootDeviceEnvironment(), false);
+        expectedSize += MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(cmdQ->getDevice().getRootDeviceEnvironment(), NEO::PostSyncMode::immediateData);
     }
 
     EXPECT_EQ(expectedSize, readBufferCmdsSize);
@@ -1036,8 +1045,9 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenInputAndOutputTimestampPacketWhenBlitCal
 
     EXPECT_NE(outputTimestampPacketAllocation, inputTimestampPacketAllocation);
 
-    EXPECT_EQ(cmdQ->taskCount, inputTimestampPacketAllocation->getDefaultGraphicsAllocation()->getTaskCount(bcsCsr->getOsContext().getContextId()));
-    EXPECT_EQ(cmdQ->taskCount, outputTimestampPacketAllocation->getDefaultGraphicsAllocation()->getTaskCount(bcsCsr->getOsContext().getContextId()));
+    auto expectedTaskCount = bcsCsr->isUpdateTagFromWaitEnabled() ? cmdQ->taskCount + 1 : cmdQ->taskCount;
+    EXPECT_EQ(expectedTaskCount, inputTimestampPacketAllocation->getDefaultGraphicsAllocation()->getTaskCount(bcsCsr->getOsContext().getContextId()));
+    EXPECT_EQ(expectedTaskCount, outputTimestampPacketAllocation->getDefaultGraphicsAllocation()->getTaskCount(bcsCsr->getOsContext().getContextId()));
 }
 
 HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingWriteBufferWhenUsingBcsThenCallWait) {
@@ -1063,8 +1073,13 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingWriteBufferWhenUsingBcsThenCallW
 
     cmdQ->enqueueWriteBuffer(buffer.get(), false, 0, 1, hostPtr, nullptr, 0, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     bool tempAllocationFound = false;
     auto tempAllocation = myMockCsr->getTemporaryAllocations().peekHead();
@@ -1110,8 +1125,13 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingReadBufferRectWhenUsingBcsThenCa
                                 MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize,
                                 MemoryConstants::cacheLineSize, hostPtr, 0, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     bool tempAllocationFound = false;
     auto tempAllocation = myMockCsr->getTemporaryAllocations().peekHead();
@@ -1159,8 +1179,13 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingWriteBufferRectWhenUsingBcsThenC
                                  MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize,
                                  MemoryConstants::cacheLineSize, hostPtr, 0, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     bool tempAllocationFound = false;
     auto tempAllocation = myMockCsr->getTemporaryAllocations().peekHead();
@@ -1202,8 +1227,12 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingReadBufferWhenUsingBcsThenCallWa
 
     cmdQ->enqueueReadBuffer(buffer.get(), false, 0, 1, hostPtr, nullptr, 0, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     bool tempAllocationFound = false;
     auto tempAllocation = myMockCsr->getTemporaryAllocations().peekHead();
@@ -1241,8 +1270,12 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenBlockingSVMMemcpyAndEnqueuReadBufferIsCa
 
     cmdQ->enqueueSVMMemcpy(false, pDstSVM.get(), pSrcSVM, 256, 0, nullptr, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     auto tempAlloc = myMockCsr->getTemporaryAllocations().peekHead();
 
@@ -1276,8 +1309,12 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenSrcHostPtrBlockingEnqueueSVMMemcpyAndEnq
 
     cmdQ->enqueueSVMMemcpy(false, pDstSVM, pSrcSVM.get(), 256, 0, nullptr, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     auto tempAlloc = myMockCsr->getTemporaryAllocations().peekHead();
 
@@ -1311,8 +1348,12 @@ HWTEST_TEMPLATED_F(BcsBufferTests, givenDstHostPtrAndSrcHostPtrBlockingEnqueueSV
 
     cmdQ->enqueueSVMMemcpy(false, pDstSVM.get(), pSrcSVM.get(), 256, 0, nullptr, nullptr, nullptr);
     EXPECT_EQ(0u, myMockCsr->waitForTaskCountAndCleanAllocationListCalled);
-    EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
-    EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    if (device->getMemoryManager()->isSingleTemporaryAllocationsListEnabled()) {
+        EXPECT_FALSE(device->getMemoryManager()->getTemporaryAllocationsList().peekIsEmpty());
+    } else {
+        EXPECT_TRUE(gpgpuCsr.getTemporaryAllocations().peekIsEmpty());
+        EXPECT_FALSE(myMockCsr->getTemporaryAllocations().peekIsEmpty());
+    }
 
     auto tempAlloc = myMockCsr->getTemporaryAllocations().peekHead();
 

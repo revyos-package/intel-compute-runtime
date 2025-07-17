@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -23,11 +23,6 @@ constexpr uint32_t AUBCommandStreamReceiverHw<Family>::getMaskAndValueForPollFor
 }
 
 template <>
-void AUBCommandStreamReceiverHw<Family>::addContextToken(uint32_t dumpHandle) {
-    AUB::createContext(*stream, dumpHandle);
-}
-
-template <>
 void populateFactoryTable<AUBCommandStreamReceiverHw<Family>>() {
     extern AubCommandStreamReceiverCreateFunc aubCommandStreamReceiverFactory[IGFX_MAX_CORE];
     UNRECOVERABLE_IF(!isInRange(gfxCore, aubCommandStreamReceiverFactory));
@@ -43,4 +38,5 @@ uint32_t AUBCommandStreamReceiverHw<Family>::getGUCWorkQueueItemHeader() {
 }
 
 template class AUBCommandStreamReceiverHw<Family>;
+static_assert(NEO::NonCopyableAndNonMovable<NEO::AUBCommandStreamReceiverHw<Family>>);
 } // namespace NEO

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -28,6 +28,7 @@
 #include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/source/os_interface/os_context.h"
 #include "shared/source/program/kernel_info.h"
+#include "shared/source/program/metadata_generation.h"
 
 #include "opencl/source/cl_device/cl_device.h"
 #include "opencl/source/context/context.h"
@@ -59,15 +60,15 @@ Program::Program(Context *context, bool isBuiltIn, const ClDeviceVector &clDevic
 
     buildInfos.resize(maxRootDeviceIndex + 1);
     debuggerInfos.resize(maxRootDeviceIndex + 1);
-    metadataGenerationFlags = std::make_unique<MetadataGenerationFlags>();
+    metadataGeneration = std::make_unique<MetadataGeneration>();
 }
 
 std::string Program::getInternalOptions() const {
     auto pClDevice = clDevices[0];
-    auto force32BitAddressess = pClDevice->getSharedDeviceInfo().force32BitAddressess;
+    auto force32BitAddresses = pClDevice->getSharedDeviceInfo().force32BitAddresses;
     auto internalOptions = getOclVersionCompilerInternalOption(pClDevice->getEnabledClVersion());
 
-    if (force32BitAddressess && !isBuiltIn) {
+    if (force32BitAddresses && !isBuiltIn) {
         CompilerOptions::concatenateAppend(internalOptions, CompilerOptions::arch32bit);
     }
 
@@ -80,7 +81,7 @@ std::string Program::getInternalOptions() const {
         CompilerOptions::concatenateAppend(internalOptions, CompilerOptions::greaterThan4gbBuffersRequired);
     }
 
-    if (debugManager.flags.UseBindlessMode.get() == 1) {
+    if (NEO::ApiSpecificConfig::getBindlessMode(pClDevice->getDevice())) {
         CompilerOptions::concatenateAppend(internalOptions, CompilerOptions::bindlessMode);
     }
 
@@ -109,7 +110,7 @@ std::string Program::getInternalOptions() const {
     CompilerOptions::concatenateAppend(internalOptions, CompilerOptions::preserveVec3Type);
     auto isDebuggerActive = pClDevice->getDevice().getDebugger() != nullptr;
     CompilerOptions::concatenateAppend(internalOptions, compilerProductHelper.getCachingPolicyOptions(isDebuggerActive));
-    CompilerOptions::applyExtraInternalOptions(internalOptions, compilerProductHelper);
+    CompilerOptions::applyExtraInternalOptions(internalOptions, hwInfo, compilerProductHelper, NEO::CompilerOptions::HeaplessMode::defaultMode);
 
     return internalOptions;
 }
@@ -367,7 +368,7 @@ void Program::cleanCurrentKernelInfo(uint32_t rootDeviceIndex) {
         delete kernelInfo;
     }
     buildInfo.kernelInfoArray.clear();
-    metadataGenerationFlags.reset(new MetadataGenerationFlags());
+    metadataGeneration.reset(new MetadataGeneration());
 }
 
 void Program::updateNonUniformFlag() {
@@ -681,4 +682,16 @@ StackVec<NEO::GraphicsAllocation *, 32> Program::getModuleAllocations(uint32_t r
     }
     return allocs;
 }
+
+void Program::callPopulateZebinExtendedArgsMetadataOnce(uint32_t rootDeviceIndex) {
+    auto &buildInfo = this->buildInfos[rootDeviceIndex];
+    auto refBin = ArrayRef<const uint8_t>(reinterpret_cast<const uint8_t *>(buildInfo.unpackedDeviceBinary.get()), buildInfo.unpackedDeviceBinarySize);
+    metadataGeneration->callPopulateZebinExtendedArgsMetadataOnce(refBin, buildInfo.kernelMiscInfoPos, buildInfo.kernelInfoArray);
+}
+
+void Program::callGenerateDefaultExtendedArgsMetadataOnce(uint32_t rootDeviceIndex) {
+    auto &buildInfo = this->buildInfos[rootDeviceIndex];
+    metadataGeneration->callGenerateDefaultExtendedArgsMetadataOnce(buildInfo.kernelInfoArray);
+}
+
 } // namespace NEO

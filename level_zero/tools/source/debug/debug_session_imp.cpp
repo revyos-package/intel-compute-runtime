@@ -816,7 +816,7 @@ void DebugSessionImp::generateEventsAndResumeStoppedThreads() {
 }
 
 bool DebugSessionImp::isForceExceptionOrForceExternalHaltOnlyExceptionReason(uint32_t *cr0) {
-    const uint32_t cr0ExceptionBitmask = 0xFC010000;
+    const uint32_t cr0ExceptionBitmask = 0xFC810000;
     const uint32_t cr0ForcedExcpetionBitmask = 0x44000000;
 
     return (((cr0[1] & cr0ExceptionBitmask) & (~cr0ForcedExcpetionBitmask)) == 0);
@@ -1443,7 +1443,9 @@ ze_result_t DebugSession::getRegisterSetProperties(Device *device, uint32_t *pCo
         parseRegsetDesc(pStateSaveArea->regHeaderV3.msg, ZET_DEBUG_REGSET_TYPE_MSG_INTEL_GPU);
         parseRegsetDesc(*DebugSessionImp::getModeFlagsRegsetDesc(), ZET_DEBUG_REGSET_TYPE_MODE_FLAGS_INTEL_GPU);
         parseRegsetDesc(*DebugSessionImp::getDebugScratchRegsetDesc(), ZET_DEBUG_REGSET_TYPE_DEBUG_SCRATCH_INTEL_GPU);
-        parseRegsetDesc(*DebugSessionImp::getThreadScratchRegsetDesc(), ZET_DEBUG_REGSET_TYPE_THREAD_SCRATCH_INTEL_GPU);
+        if (DebugSessionImp::isHeaplessMode(pStateSaveArea->regHeaderV3)) {
+            parseRegsetDesc(*DebugSessionImp::getThreadScratchRegsetDesc(), ZET_DEBUG_REGSET_TYPE_THREAD_SCRATCH_INTEL_GPU);
+        }
         parseRegsetDesc(pStateSaveArea->regHeaderV3.scalar, ZET_DEBUG_REGSET_TYPE_SCALAR_INTEL_GPU);
 
     } else if (pStateSaveArea->versionHeader.version.major < 3) {
@@ -1680,7 +1682,9 @@ ze_result_t DebugSessionImp::isValidNode(uint64_t vmHandle, uint64_t gpuVa, SIP:
 
 ze_result_t DebugSessionImp::readFifo(uint64_t vmHandle, std::vector<EuThread::ThreadId> &threadsWithAttention) {
     auto stateSaveAreaHeader = getStateSaveAreaHeader();
-    if (stateSaveAreaHeader->versionHeader.version.major != 3) {
+    if (!stateSaveAreaHeader) {
+        return ZE_RESULT_ERROR_UNKNOWN;
+    } else if (stateSaveAreaHeader->versionHeader.version.major != 3) {
         return ZE_RESULT_SUCCESS;
     }
 

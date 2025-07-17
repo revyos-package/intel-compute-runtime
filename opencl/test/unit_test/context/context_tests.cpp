@@ -7,6 +7,7 @@
 
 #include "shared/source/device/device.h"
 #include "shared/source/helpers/blit_commands_helper.h"
+#include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/local_memory_access_modes.h"
 #include "shared/source/memory_manager/unified_memory_manager.h"
@@ -15,6 +16,8 @@
 #include "shared/test/common/mocks/mock_deferred_deleter.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
+#include "shared/test/common/mocks/mock_usm_memory_pool.h"
 #include "shared/test/common/mocks/ult_device_factory.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
@@ -256,22 +259,6 @@ TEST_F(ContextTest, givenContextWhenSharingTableIsNotEmptyThenReturnsSharingFunc
     context.registerSharing<MockSharingFunctions>(sharingFunctions);
     auto *sharingF = context.getSharing<MockSharingFunctions>();
     EXPECT_EQ(sharingF, sharingFunctions);
-}
-
-TEST(Context, givenFtrSvmFalseWhenContextIsCreatedThenSVMAllocsManagerIsNotCreated) {
-    ExecutionEnvironment *executionEnvironment = platform()->peekExecutionEnvironment();
-    executionEnvironment->prepareRootDeviceEnvironments(1u);
-    auto hwInfo = executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo();
-    hwInfo->capabilityTable.ftrSvm = false;
-
-    auto device = std::make_unique<MockClDevice>(MockDevice::createWithExecutionEnvironment<MockDevice>(hwInfo, executionEnvironment, 0));
-
-    cl_device_id clDevice = device.get();
-    cl_int retVal = CL_SUCCESS;
-    auto context = std::unique_ptr<MockContext>(Context::create<MockContext>(nullptr, ClDeviceVector(&clDevice, 1), nullptr, nullptr, retVal));
-    ASSERT_NE(nullptr, context);
-    auto svmManager = context->getSVMAllocsManager();
-    EXPECT_EQ(nullptr, svmManager);
 }
 
 TEST(Context, whenCreateContextThenSpecialQueueUsesInternalEngine) {
@@ -617,7 +604,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, ContextCreateTests, givenGpuHangOnFlushBcsTaskAndLo
     executionEnv->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.blitterOperationsSupported = true;
 
     const auto rootDevice = testedDevice->getDevice().getRootDevice();
-    const auto blitDevice = rootDevice->getNearestGenericSubDevice(0);
+    const auto leastOccupiedBankDevice = rootDevice->getRTMemoryBackedBuffer() ? 1u : 0u;
+    const auto blitDevice = rootDevice->getNearestGenericSubDevice(leastOccupiedBankDevice);
     auto &selectorCopyEngine = blitDevice->getSelectorCopyEngine();
     auto deviceBitfield = blitDevice->getDeviceBitfield();
 
@@ -793,7 +781,7 @@ struct MockGTPinTestContext : Context {
 };
 
 struct MockSVMAllocManager : SVMAllocsManager {
-    MockSVMAllocManager() : SVMAllocsManager(nullptr, false) {}
+    MockSVMAllocManager() : SVMAllocsManager(nullptr) {}
     ~MockSVMAllocManager() override {
         svmAllocManagerDeleted = true;
     }
@@ -822,8 +810,7 @@ TEST_F(GTPinContextDestroyTest, whenCallingConxtextDestructorThenGTPinIsNotified
     if (mockContext->svmAllocsManager) {
         mockContext->getDeviceMemAllocPool().cleanup();
         mockContext->getHostMemAllocPool().cleanup();
-        mockContext->svmAllocsManager->trimUSMDeviceAllocCache();
-        mockContext->svmAllocsManager->trimUSMHostAllocCache();
+        mockContext->svmAllocsManager->cleanupUSMAllocCaches();
         delete mockContext->svmAllocsManager;
     }
     mockContext->svmAllocsManager = new MockSVMAllocManager();
@@ -833,3 +820,106 @@ TEST_F(GTPinContextDestroyTest, whenCallingConxtextDestructorThenGTPinIsNotified
     EXPECT_TRUE(MockSVMAllocManager::svmAllocManagerDeleted);
 }
 } // namespace NEO
+
+struct ContextUsmPoolParamsTest : public ::testing::Test {
+    void SetUp() override {
+        deviceFactory = std::make_unique<UltClDeviceFactory>(2, 0);
+        device = deviceFactory->rootDevices[rootDeviceIndex];
+        mockNeoDevice = static_cast<MockDevice *>(&device->getDevice());
+        mockProductHelper = new MockProductHelper;
+        mockNeoDevice->getRootDeviceEnvironmentRef().productHelper.reset(mockProductHelper);
+    }
+
+    bool compareUsmPoolParams(const MockContext::UsmPoolParams &first, const MockContext::UsmPoolParams &second) {
+        return first.poolSize == second.poolSize &&
+               first.minServicedSize == second.minServicedSize &&
+               first.maxServicedSize == second.maxServicedSize;
+    }
+
+    const size_t rootDeviceIndex = 1u;
+    std::unique_ptr<UltClDeviceFactory> deviceFactory;
+    MockClDevice *device;
+    MockDevice *mockNeoDevice;
+    MockProductHelper *mockProductHelper;
+    std::unique_ptr<MockContext> context;
+    cl_int retVal = CL_SUCCESS;
+    DebugManagerStateRestore restore;
+};
+
+TEST_F(ContextUsmPoolParamsTest, GivenDisabled2MBLocalMemAlignmentWhenGettingUsmPoolParamsThenReturnCorrectValues) {
+    mockProductHelper->is2MBLocalMemAlignmentEnabledResult = false;
+
+    cl_device_id devices[] = {device};
+    context.reset(Context::create<MockContext>(nullptr, ClDeviceVector(devices, 1), nullptr, nullptr, retVal));
+    EXPECT_EQ(CL_SUCCESS, retVal);
+
+    const MockContext::UsmPoolParams expectedUsmHostPoolParams{
+        .poolSize = 2 * MemoryConstants::megaByte,
+        .minServicedSize = 0u,
+        .maxServicedSize = 1 * MemoryConstants::megaByte};
+
+    const MockContext::UsmPoolParams expectedUsmDevicePoolParams{
+        .poolSize = 2 * MemoryConstants::megaByte,
+        .minServicedSize = 0u,
+        .maxServicedSize = 1 * MemoryConstants::megaByte};
+
+    EXPECT_TRUE(compareUsmPoolParams(expectedUsmHostPoolParams, context->getUsmHostPoolParams()));
+    EXPECT_TRUE(compareUsmPoolParams(expectedUsmDevicePoolParams, context->getUsmDevicePoolParams()));
+}
+
+TEST_F(ContextUsmPoolParamsTest, GivenEnabled2MBLocalMemAlignmentWhenGettingUsmPoolParamsThenReturnCorrectValues) {
+    mockProductHelper->is2MBLocalMemAlignmentEnabledResult = true;
+
+    cl_device_id devices[] = {device};
+    context.reset(Context::create<MockContext>(nullptr, ClDeviceVector(devices, 1), nullptr, nullptr, retVal));
+    EXPECT_EQ(CL_SUCCESS, retVal);
+
+    const MockContext::UsmPoolParams expectedUsmHostPoolParams{
+        .poolSize = 2 * MemoryConstants::megaByte,
+        .minServicedSize = 0u,
+        .maxServicedSize = 1 * MemoryConstants::megaByte};
+
+    const MockContext::UsmPoolParams expectedUsmDevicePoolParams{
+        .poolSize = 16 * MemoryConstants::megaByte,
+        .minServicedSize = 0u,
+        .maxServicedSize = 2 * MemoryConstants::megaByte};
+
+    EXPECT_TRUE(compareUsmPoolParams(expectedUsmHostPoolParams, context->getUsmHostPoolParams()));
+    EXPECT_TRUE(compareUsmPoolParams(expectedUsmDevicePoolParams, context->getUsmDevicePoolParams()));
+}
+
+TEST_F(ContextUsmPoolParamsTest, GivenUsmPoolAllocatorSupportedWhenInitializingUsmPoolsThenPoolsAreInitializedWithCorrectParams) {
+    mockProductHelper->isHostUsmPoolAllocatorSupportedResult = true;
+    mockProductHelper->isDeviceUsmPoolAllocatorSupportedResult = true;
+
+    cl_device_id devices[] = {device};
+    context.reset(Context::create<MockContext>(nullptr, ClDeviceVector(devices, 1), nullptr, nullptr, retVal));
+    EXPECT_EQ(CL_SUCCESS, retVal);
+
+    context->initializeUsmAllocationPools();
+
+    EXPECT_TRUE(context->getHostMemAllocPool().isInitialized());
+    EXPECT_TRUE(context->getDeviceMemAllocPool().isInitialized());
+
+    {
+        auto mockHostUsmMemAllocPool = static_cast<MockUsmMemAllocPool *>(&context->getHostMemAllocPool());
+        const MockContext::UsmPoolParams givenUsmHostPoolParams{
+            .poolSize = mockHostUsmMemAllocPool->poolSize,
+            .minServicedSize = mockHostUsmMemAllocPool->minServicedSize,
+            .maxServicedSize = mockHostUsmMemAllocPool->maxServicedSize};
+        const MockContext::UsmPoolParams expectedUsmHostPoolParams = context->getUsmHostPoolParams();
+
+        EXPECT_TRUE(compareUsmPoolParams(expectedUsmHostPoolParams, givenUsmHostPoolParams));
+    }
+
+    {
+        auto mockDeviceUsmMemAllocPool = static_cast<MockUsmMemAllocPool *>(&context->getDeviceMemAllocPool());
+        const MockContext::UsmPoolParams givenUsmDevicePoolParams{
+            .poolSize = mockDeviceUsmMemAllocPool->poolSize,
+            .minServicedSize = mockDeviceUsmMemAllocPool->minServicedSize,
+            .maxServicedSize = mockDeviceUsmMemAllocPool->maxServicedSize};
+        const MockContext::UsmPoolParams expectedUsmDevicePoolParams = context->getUsmDevicePoolParams();
+
+        EXPECT_TRUE(compareUsmPoolParams(expectedUsmDevicePoolParams, givenUsmDevicePoolParams));
+    }
+}

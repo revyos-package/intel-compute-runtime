@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -20,6 +20,7 @@ struct ContextParamEnginesI915 {
 
 class DrmQueryMock : public DrmMock {
   public:
+    using Drm::ioctlHelper;
     using Drm::rootDeviceEnvironment;
 
     DrmQueryMock(RootDeviceEnvironment &rootDeviceEnvironment);
@@ -27,7 +28,7 @@ class DrmQueryMock : public DrmMock {
     DrmMockPrelimContext context{
         nullptr,
         rootDeviceEnvironment,
-        getL3CacheInfo(),
+        getCacheInfo(),
         failRetTopology,
         supportedCopyEnginesMask,
         contextDebugSupported,

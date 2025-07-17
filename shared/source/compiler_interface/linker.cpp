@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -402,17 +402,20 @@ void Linker::patchAddress(void *relocAddress, const uint64_t value, const Linker
     switch (relocation.type) {
     default:
         UNRECOVERABLE_IF(RelocationInfo::Type::address != relocation.type);
-        *reinterpret_cast<uint64_t *>(relocAddress) = value;
+        memcpy_s(relocAddress, sizeof(uint64_t), &value, sizeof(uint64_t));
         break;
-    case RelocationInfo::Type::addressLow:
-        *reinterpret_cast<uint32_t *>(relocAddress) = static_cast<uint32_t>(value & 0xffffffff);
-        break;
-    case RelocationInfo::Type::addressHigh:
-        *reinterpret_cast<uint32_t *>(relocAddress) = static_cast<uint32_t>((value >> 32) & 0xffffffff);
-        break;
-    case RelocationInfo::Type::address16:
-        *reinterpret_cast<uint16_t *>(relocAddress) = static_cast<uint16_t>(value);
-        break;
+    case RelocationInfo::Type::addressLow: {
+        uint32_t valueToPatch = static_cast<uint32_t>(value & 0xffffffff);
+        memcpy_s(relocAddress, sizeof(uint32_t), &valueToPatch, sizeof(uint32_t));
+    } break;
+    case RelocationInfo::Type::addressHigh: {
+        uint32_t valueToPatch = static_cast<uint32_t>((value >> 32) & 0xffffffff);
+        memcpy_s(relocAddress, sizeof(uint32_t), &valueToPatch, sizeof(uint32_t));
+    } break;
+    case RelocationInfo::Type::address16: {
+        uint16_t valueToPatch = static_cast<uint16_t>(value & 0xffff);
+        memcpy_s(relocAddress, sizeof(uint16_t), &valueToPatch, sizeof(uint16_t));
+    } break;
     }
 }
 
@@ -447,10 +450,9 @@ void Linker::patchInstructionsSegments(const std::vector<PatchableSegment> &inst
 
             auto relocAddress = ptrOffset(segment.hostPointer, static_cast<uintptr_t>(relocation.offset));
             if (relocation.type == LinkerInput::RelocationInfo::Type::perThreadPayloadOffset) {
-                uint32_t crossThreadDataSize = kernelDescriptors.at(segId)->kernelAttributes.crossThreadDataSize - kernelDescriptors.at(segId)->kernelAttributes.inlineDataPayloadSize;
-                *reinterpret_cast<uint32_t *>(relocAddress) = crossThreadDataSize;
+                *reinterpret_cast<uint32_t *>(relocAddress) = kernelDescriptors.at(segId)->getPerThreadDataOffset();
             } else if (relocation.symbolName == implicitArgsRelocationSymbolName) {
-                pImplicitArgsRelocationAddresses[static_cast<uint32_t>(segId)].push_back(reinterpret_cast<uint32_t *>(relocAddress));
+                pImplicitArgsRelocationAddresses[static_cast<uint32_t>(segId)].push_back(std::pair<void *, RelocationInfo::Type>(relocAddress, relocation.type));
             } else if (relocation.symbolName.empty()) {
                 uint64_t patchValue = 0;
                 patchAddress(relocAddress, patchValue, relocation);
@@ -654,9 +656,20 @@ void Linker::resolveImplicitArgs(const KernelDescriptorsT &kernelDescriptors, De
         if (pImplicitArgsRelocs != pImplicitArgsRelocationAddresses.end()) {
             for (const auto &pImplicitArgsReloc : pImplicitArgsRelocs->second) {
                 UNRECOVERABLE_IF(!pDevice);
-                kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs = kernelDescriptor.kernelAttributes.flags.useStackCalls || pDevice->getDebugger() != nullptr;
+                bool addImplcictArgs = kernelDescriptor.kernelAttributes.flags.useStackCalls || (userModule && pDevice->getDebugger() != nullptr);
+                kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs |= addImplcictArgs;
                 if (kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs) {
-                    *pImplicitArgsReloc = ImplicitArgs::getSize();
+                    uint64_t implicitArgsSize = 0;
+                    if (pDevice->getGfxCoreHelper().getImplicitArgsVersion() == 0) {
+                        implicitArgsSize = ImplicitArgsV0::getAlignedSize();
+                    } else if (pDevice->getGfxCoreHelper().getImplicitArgsVersion() == 1) {
+                        implicitArgsSize = ImplicitArgsV1::getAlignedSize();
+                    } else {
+                        UNRECOVERABLE_IF(true);
+                    }
+                    // Choose relocation size based on relocation type
+                    auto patchSize = pImplicitArgsReloc.second == RelocationInfo::Type::address ? 8 : 4;
+                    patchWithRequiredSize(pImplicitArgsReloc.first, patchSize, implicitArgsSize);
                 }
             }
         }
@@ -687,8 +700,7 @@ void Linker::resolveBuiltins(Device *pDevice, UnresolvedExternals &outUnresolved
 
             auto kernelDescriptor = std::find_if(kernelDescriptors.begin(), kernelDescriptors.end(), [&kernelName](const KernelDescriptor *obj) { return obj->kernelMetadata.kernelName == kernelName; });
             if (kernelDescriptor != std::end(kernelDescriptors)) {
-                uint64_t crossThreadDataSize = (*kernelDescriptor)->kernelAttributes.crossThreadDataSize - (*kernelDescriptor)->kernelAttributes.inlineDataPayloadSize;
-                symbol.gpuAddress = crossThreadDataSize;
+                symbol.gpuAddress = (*kernelDescriptor)->getPerThreadDataOffset();
                 auto relocAddress = ptrOffset(instructionsSegments[outUnresolvedExternals[vecIndex].instructionsSegmentId].hostPointer,
                                               static_cast<uintptr_t>(outUnresolvedExternals[vecIndex].unresolvedRelocation.offset));
 

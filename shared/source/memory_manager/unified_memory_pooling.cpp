@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -52,7 +52,8 @@ size_t UsmMemAllocPool::getPoolSize() const {
 
 void UsmMemAllocPool::cleanup() {
     if (isInitialized()) {
-        this->svmMemoryManager->freeSVMAlloc(this->pool, true);
+        [[maybe_unused]] const auto status = this->svmMemoryManager->freeSVMAlloc(this->pool, true);
+        DEBUG_BREAK_IF(false == status);
         this->svmMemoryManager = nullptr;
         this->pool = nullptr;
         this->poolEnd = nullptr;
@@ -62,7 +63,7 @@ void UsmMemAllocPool::cleanup() {
 }
 
 bool UsmMemAllocPool::alignmentIsAllowed(size_t alignment) {
-    return alignment % chunkAlignment == 0;
+    return alignment % chunkAlignment == 0 && alignment <= poolAlignment;
 }
 
 bool UsmMemAllocPool::sizeIsAllowed(size_t size) {
@@ -70,7 +71,11 @@ bool UsmMemAllocPool::sizeIsAllowed(size_t size) {
 }
 
 bool UsmMemAllocPool::flagsAreAllowed(const UnifiedMemoryProperties &memoryProperties) {
-    return memoryProperties.allocationFlags.allFlags == 0u &&
+    auto flagsWithoutCompression = memoryProperties.allocationFlags;
+    flagsWithoutCompression.flags.compressedHint = 0u;
+    flagsWithoutCompression.flags.uncompressedHint = 0u;
+
+    return flagsWithoutCompression.allFlags == 0u &&
            memoryProperties.allocationFlags.allAllocFlags == 0u;
 }
 
@@ -160,6 +165,10 @@ size_t UsmMemAllocPool::getOffsetInPool(const void *ptr) const {
         return ptrDiff(ptr, this->pool);
     }
     return 0u;
+}
+
+uint64_t UsmMemAllocPool::getPoolAddress() const {
+    return castToUint64(this->pool);
 }
 
 bool UsmMemAllocPoolsManager::PoolInfo::isPreallocated() const {

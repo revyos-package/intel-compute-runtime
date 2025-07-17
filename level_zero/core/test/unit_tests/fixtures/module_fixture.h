@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -16,7 +16,16 @@
 #include "level_zero/core/test/unit_tests/mocks/mock_kernel.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_module.h"
 
+namespace NEO {
+class ExecutionEnvironment;
+struct KernelDescriptor;
+struct KernelInfo;
+} // namespace NEO
+
 namespace L0 {
+struct Device;
+struct ModuleBuildLog;
+
 namespace ult {
 
 struct ModuleImmutableDataFixture : public DeviceFixture {
@@ -83,27 +92,38 @@ struct ModuleImmutableDataFixture : public DeviceFixture {
         using KernelImp::dynamicStateHeapData;
         using KernelImp::dynamicStateHeapDataSize;
         using KernelImp::internalResidencyContainer;
+        using KernelImp::isArgUncached;
         using KernelImp::kernelArgHandlers;
+        using KernelImp::kernelArgInfos;
         using KernelImp::kernelHasIndirectAccess;
         using KernelImp::kernelImmData;
         using KernelImp::kernelRequiresGenerationOfLocalIdsByRuntime;
         using KernelImp::kernelRequiresUncachedMocsCount;
         using KernelImp::patchBindlessOffsetsInCrossThreadData;
+        using KernelImp::perThreadDataForWholeThreadGroup;
+        using KernelImp::perThreadDataSizeForWholeThreadGroup;
         using KernelImp::pImplicitArgs;
         using KernelImp::printfBuffer;
         using KernelImp::privateMemoryGraphicsAllocation;
         using KernelImp::requiredWorkgroupOrder;
+        using KernelImp::slmArgOffsetValues;
+        using KernelImp::slmArgSizes;
         using KernelImp::surfaceStateHeapData;
         using KernelImp::surfaceStateHeapDataSize;
         using KernelImp::unifiedMemoryControls;
 
         MockKernel(MockModule *mockModule) : WhiteBox<L0::KernelImp>(mockModule) {
+            implicitArgsVersion = 0;
         }
         void setBufferSurfaceState(uint32_t argIndex, void *address, NEO::GraphicsAllocation *alloc) override {
         }
         void evaluateIfRequiresGenerationOfLocalIdsByRuntime(const NEO::KernelDescriptor &kernelDescriptor) override {
         }
         void setCrossThreadData(uint32_t dataSize);
+
+        uint32_t getIndirectSize() const override {
+            return getCrossThreadDataSize() + getPerThreadDataSizeForWholeThreadGroup();
+        }
     };
 
     void setUp();

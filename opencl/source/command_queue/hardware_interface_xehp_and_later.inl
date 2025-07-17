@@ -5,7 +5,6 @@
  *
  */
 
-#pragma once
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_container/implicit_scaling.h"
 #include "shared/source/command_stream/command_stream_receiver.h"
@@ -19,6 +18,8 @@
 #include "shared/source/utilities/tag_allocator.h"
 
 #include "opencl/source/command_queue/hardware_interface_base.inl"
+
+#include "encode_dispatch_kernel_args_ext.h"
 
 namespace NEO {
 
@@ -85,18 +86,41 @@ inline void HardwareInterface<GfxFamily>::programWalker(
     auto &device = commandQueue.getDevice();
     auto &rootDeviceEnvironment = device.getRootDeviceEnvironment();
 
+    bool kernelSystemAllocation = false;
+    if (kernel.isBuiltInKernel()) {
+        kernelSystemAllocation = kernel.getDestinationAllocationInSystemMemory();
+    } else {
+        kernelSystemAllocation = kernel.isAnyKernelArgumentUsingSystemMemory();
+    }
+
     TagNodeBase *timestampPacketNode = nullptr;
     if (walkerArgs.currentTimestampPacketNodes && (walkerArgs.currentTimestampPacketNodes->peekNodes().size() > walkerArgs.currentDispatchIndex)) {
         timestampPacketNode = walkerArgs.currentTimestampPacketNodes->peekNodes()[walkerArgs.currentDispatchIndex];
     }
 
+    constexpr bool heaplessModeEnabled = GfxFamily::template isHeaplessMode<WalkerType>();
+
     if (timestampPacketNode) {
+
         GpgpuWalkerHelper<GfxFamily>::template setupTimestampPacket<WalkerType>(&commandStream, &walkerCmd, timestampPacketNode, rootDeviceEnvironment);
+
+        if constexpr (heaplessModeEnabled) {
+            auto &productHelper = rootDeviceEnvironment.getHelper<ProductHelper>();
+            bool flushL3AfterPostSyncForHostUsm = kernelSystemAllocation;
+            bool flushL3AfterPostSyncForExternalAllocation = kernel.isUsingSharedObjArgs();
+
+            if (debugManager.flags.RedirectFlushL3HostUsmToExternal.get() && flushL3AfterPostSyncForHostUsm) {
+                flushL3AfterPostSyncForHostUsm = false;
+                flushL3AfterPostSyncForExternalAllocation = true;
+            }
+
+            if (walkerArgs.event != nullptr || walkerArgs.blocking) {
+                GpgpuWalkerHelper<GfxFamily>::template setupTimestampPacketFlushL3<WalkerType>(&walkerCmd, productHelper, flushL3AfterPostSyncForHostUsm, flushL3AfterPostSyncForExternalAllocation);
+            }
+        }
     }
 
     auto isCcsUsed = EngineHelpers::isCcs(commandQueue.getGpgpuEngine().osContext->getEngineType());
-
-    constexpr bool heaplessModeEnabled = GfxFamily::template isHeaplessMode<WalkerType>();
 
     if constexpr (heaplessModeEnabled == false) {
         if (auto kernelAllocation = kernelInfo.getGraphicsAllocation()) {
@@ -136,14 +160,10 @@ inline void HardwareInterface<GfxFamily>::programWalker(
         scratchAddress,
         device);
 
-    bool kernelSystemAllocation = false;
-    if (kernel.isBuiltIn) {
-        kernelSystemAllocation = kernel.getDestinationAllocationInSystemMemory();
-    } else {
-        kernelSystemAllocation = kernel.isAnyKernelArgumentUsingSystemMemory();
-    }
+    EncodeKernelArgsExt argsExtended{};
 
     EncodeWalkerArgs encodeWalkerArgs{
+        .argsExtended = &argsExtended,
         .kernelExecutionType = kernel.getExecutionType(),
         .requiredDispatchWalkOrder = kernelAttributes.dispatchWalkOrder,
         .localRegionSize = kernelAttributes.localRegionSize,
@@ -151,8 +171,10 @@ inline void HardwareInterface<GfxFamily>::programWalker(
         .requiredSystemFence = kernelSystemAllocation && walkerArgs.event != nullptr,
         .hasSample = kernelInfo.kernelDescriptor.kernelAttributes.flags.hasSample};
 
+    HardwareInterfaceHelper::setEncodeWalkerArgsExt(encodeWalkerArgs, kernelInfo);
+
     EncodeDispatchKernel<GfxFamily>::template encodeAdditionalWalkerFields<WalkerType>(rootDeviceEnvironment, walkerCmd, encodeWalkerArgs);
-    EncodeDispatchKernel<GfxFamily>::template encodeWalkerPostSyncFields<WalkerType>(walkerCmd, encodeWalkerArgs);
+    EncodeDispatchKernel<GfxFamily>::template encodeWalkerPostSyncFields<WalkerType>(walkerCmd, rootDeviceEnvironment, encodeWalkerArgs);
     EncodeDispatchKernel<GfxFamily>::template encodeComputeDispatchAllWalker<WalkerType, InterfaceDescriptorType>(walkerCmd, interfaceDescriptor, rootDeviceEnvironment, encodeWalkerArgs);
     EncodeDispatchKernel<GfxFamily>::template overrideDefaultValues<WalkerType, InterfaceDescriptorType>(walkerCmd, *interfaceDescriptor);
 

@@ -1,14 +1,16 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/source/command_stream/command_stream_receiver.h"
+#include "shared/source/helpers/api_specific_config.h"
 #include "shared/source/helpers/gfx_core_helper.h"
+#include "shared/source/helpers/local_memory_access_modes.h"
 #include "shared/source/memory_manager/memory_manager.h"
-#include "shared/source/os_interface/product_helper_xe_hpg_and_xe_hpc.inl"
+#include "shared/source/unified_memory/usm_memory_support.h"
 
 #include "aubstream/product_family.h"
 
@@ -64,7 +66,7 @@ uint32_t ProductHelperHw<gfxProduct>::getSteppingFromHwRevId(const HardwareInfo 
 }
 
 template <>
-bool ProductHelperHw<gfxProduct>::isGlobalFenceInDirectSubmissionRequired(const HardwareInfo &hwInfo) const {
+bool ProductHelperHw<gfxProduct>::isAcquireGlobalFenceInDirectSubmissionRequired(const HardwareInfo &hwInfo) const {
     return true;
 }
 
@@ -107,14 +109,6 @@ bool ProductHelperHw<gfxProduct>::isDefaultEngineTypeAdjustmentRequired(const Ha
 template <>
 bool ProductHelperHw<gfxProduct>::isDisableOverdispatchAvailable(const HardwareInfo &hwInfo) const {
     if (DG2::isG10(hwInfo) && GfxCoreHelper::isWorkaroundRequired(REVISION_A0, REVISION_B, hwInfo, *this)) {
-        return false;
-    }
-    return true;
-}
-
-template <>
-bool ProductHelperHw<gfxProduct>::allowCompression(const HardwareInfo &hwInfo) const {
-    if (DG2::isG10(hwInfo) && GfxCoreHelper::isWorkaroundRequired(REVISION_A0, REVISION_A1, hwInfo, *this)) {
         return false;
     }
     return true;
@@ -200,16 +194,6 @@ bool ProductHelperHw<gfxProduct>::isResolveDependenciesByPipeControlsSupported(c
 }
 
 template <>
-bool ProductHelperHw<gfxProduct>::isBufferPoolAllocatorSupported() const {
-    return true;
-}
-
-template <>
-bool ProductHelperHw<gfxProduct>::isUsmPoolAllocatorSupported() const {
-    return true;
-}
-
-template <>
 bool ProductHelperHw<gfxProduct>::useLocalPreferredForCacheableBuffers() const {
     return true;
 }
@@ -252,18 +236,28 @@ void ProductHelperHw<gfxProduct>::adjustNumberOfCcs(HardwareInfo &hwInfo) const 
 }
 
 template <>
-std::optional<bool> ProductHelperHw<gfxProduct>::isCoherentAllocation(uint64_t patIndex) const {
-    return std::nullopt;
-}
-
-template <>
 bool ProductHelperHw<gfxProduct>::isDeviceUsmAllocationReuseSupported() const {
     return false;
 }
 
 template <>
-bool ProductHelperHw<gfxProduct>::isHostUsmAllocationReuseSupported() const {
-    return true;
+uint64_t ProductHelperHw<gfxProduct>::getHostMemCapabilitiesValue() const {
+    return (UnifiedSharedMemoryFlags::access);
+}
+
+template <>
+bool ProductHelperHw<gfxProduct>::isCompressionForbidden(const HardwareInfo &hwInfo) const {
+    return isCompressionForbiddenCommon(false);
+}
+
+template <>
+bool ProductHelperHw<gfxProduct>::isDeviceUsmPoolAllocatorSupported() const {
+    return ApiSpecificConfig::OCL == ApiSpecificConfig::getApiType();
+}
+
+template <>
+bool ProductHelperHw<gfxProduct>::isHostUsmPoolAllocatorSupported() const {
+    return ApiSpecificConfig::OCL == ApiSpecificConfig::getApiType();
 }
 
 } // namespace NEO

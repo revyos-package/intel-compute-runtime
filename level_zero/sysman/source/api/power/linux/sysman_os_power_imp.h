@@ -21,7 +21,7 @@ class SysFsAccessInterface;
 class SysmanKmdInterface;
 class SysmanProductHelper;
 class LinuxSysmanImp;
-class LinuxPowerImp : public OsPower, NEO::NonCopyableOrMovableClass {
+class LinuxPowerImp : public OsPower, NEO::NonCopyableAndNonMovableClass {
   public:
     ze_result_t getProperties(zes_power_properties_t *pProperties) override;
     ze_result_t getEnergyCounter(zes_power_energy_counter_t *pEnergy) override;
@@ -31,7 +31,7 @@ class LinuxPowerImp : public OsPower, NEO::NonCopyableOrMovableClass {
     ze_result_t setEnergyThreshold(double threshold) override;
     ze_result_t getLimitsExt(uint32_t *pCount, zes_power_limit_ext_desc_t *pSustained) override;
     ze_result_t setLimitsExt(uint32_t *pCount, zes_power_limit_ext_desc_t *pSustained) override;
-    ze_result_t getPropertiesExt(zes_power_ext_properties_t *pExtPoperties) override;
+    ze_result_t getPropertiesExt(zes_power_ext_properties_t *pExtProperties) override;
 
     bool isPowerModuleSupported() override;
     bool isIntelGraphicsHwmonDir(const std::string &name);
@@ -49,14 +49,20 @@ class LinuxPowerImp : public OsPower, NEO::NonCopyableOrMovableClass {
 
   private:
     std::string intelGraphicsHwmonDir = {};
-    std::string criticalPowerLimit = {};
-    std::string sustainedPowerLimit = {};
-    std::string sustainedPowerLimitInterval = {};
+    std::string energyCounterNodeFile = {};
+    std::string burstPowerLimitFile = {};
+    std::string burstPowerLimitIntervalFile = {};
+    std::string criticalPowerLimitFile = {};
+    std::string sustainedPowerLimitFile = {};
+    std::string sustainedPowerLimitIntervalFile = {};
+    bool burstPowerLimitFileExists = false;
+    bool criticalPowerLimitFileExists = false;
+    bool sustainedPowerLimitFileExists = false;
     bool canControl = false;
     bool isSubdevice = false;
     uint32_t subdeviceId = 0;
     uint32_t powerLimitCount = 0;
-    zes_power_domain_t powerDomain = ZES_POWER_DOMAIN_CARD;
+    zes_power_domain_t powerDomain = ZES_POWER_DOMAIN_UNKNOWN;
 
     ze_result_t getErrorCode(ze_result_t result) {
         if (result == ZE_RESULT_ERROR_NOT_AVAILABLE) {
@@ -66,6 +72,7 @@ class LinuxPowerImp : public OsPower, NEO::NonCopyableOrMovableClass {
     }
 
     ze_result_t getDefaultLimit(int32_t &defaultLimit);
+    void init();
 };
 } // namespace Sysman
 } // namespace L0

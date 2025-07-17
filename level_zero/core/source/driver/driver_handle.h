@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,19 +7,16 @@
 
 #pragma once
 
+#include "shared/source/helpers/non_copyable_or_moveable.h"
+
 #include "level_zero/core/source/helpers/api_handle_helper.h"
-#include <level_zero/ze_api.h>
-#include <level_zero/zes_api.h>
 
 #include <memory>
 #include <string>
 #include <vector>
 
-struct _ze_driver_handle_t {
-    const uint64_t objMagic = objMagicValue;
-    static const zel_handle_type_t handleType = ZEL_HANDLE_DRIVER;
-    virtual ~_ze_driver_handle_t() = default;
-};
+struct _ze_driver_handle_t : BaseHandleWithLoaderTranslation<ZEL_HANDLE_DRIVER> {};
+static_assert(IsCompliantWithDdiHandlesExt<_ze_driver_handle_t>);
 
 namespace NEO {
 class Device;
@@ -34,11 +31,12 @@ struct Device;
 struct L0EnvVariables;
 
 struct BaseDriver : _ze_driver_handle_t {
+    virtual ~BaseDriver() = default;
     virtual ze_result_t getExtensionFunctionAddress(const char *pFuncName, void **pfunc) = 0;
     static BaseDriver *fromHandle(ze_driver_handle_t handle) { return static_cast<BaseDriver *>(handle); }
 };
 
-struct DriverHandle : BaseDriver {
+struct DriverHandle : BaseDriver, NEO::NonCopyableAndNonMovableClass {
     virtual ze_result_t createContext(const ze_context_desc_t *desc,
                                       uint32_t numDevices,
                                       ze_device_handle_t *phDevices,
@@ -87,13 +85,14 @@ struct DriverHandle : BaseDriver {
     virtual ze_result_t getErrorDescription(const char **ppString) = 0;
     virtual ze_result_t clearErrorDescription() = 0;
 
+    virtual ze_context_handle_t getDefaultContext() const = 0;
+
     static DriverHandle *fromHandle(ze_driver_handle_t handle) { return static_cast<DriverHandle *>(handle); }
     inline ze_driver_handle_t toHandle() { return this; }
 
-    DriverHandle &operator=(const DriverHandle &) = delete;
-    DriverHandle &operator=(DriverHandle &&) = delete;
-
     static DriverHandle *create(std::vector<std::unique_ptr<NEO::Device>> devices, const L0EnvVariables &envVariables, ze_result_t *returnValue);
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<DriverHandle>);
 
 } // namespace L0

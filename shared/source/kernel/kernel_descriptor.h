@@ -10,6 +10,7 @@
 #include "shared/source/command_stream/thread_arbitration_policy.h"
 #include "shared/source/device_binary_format/device_binary_formats.h"
 #include "shared/source/helpers/definitions/command_encoder_args.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/kernel/debug_data.h"
 #include "shared/source/kernel/grf_config.h"
 #include "shared/source/kernel/kernel_arg_descriptor.h"
@@ -32,7 +33,7 @@ struct KernelDescriptorExt;
 KernelDescriptorExt *allocateKernelDescriptorExt();
 void freeKernelDescriptorExt(KernelDescriptorExt *);
 
-struct KernelDescriptor {
+struct KernelDescriptor : NEO::NonCopyableAndNonMovableClass {
     static bool isBindlessAddressingKernel(const KernelDescriptor &desc);
 
     enum AddressingMode : uint8_t {
@@ -58,6 +59,9 @@ struct KernelDescriptor {
     void initBindlessOffsetToSurfaceState();
     const BindlessToSurfaceStateMap &getBindlessOffsetToSurfaceState() const {
         return bindlessArgsMap;
+    }
+    uint16_t getPerThreadDataOffset() const {
+        return kernelAttributes.crossThreadDataSize - std::min(kernelAttributes.crossThreadDataSize, kernelAttributes.inlineDataPayloadSize);
     }
 
     struct KernelAttributes {
@@ -85,6 +89,7 @@ struct KernelDescriptor {
         bool hasNonKernelArgAtomic = false;
         bool hasIndirectStatelessAccess = false;
         bool hasIndirectAccessInImplicitArg = false;
+        bool hasImageWriteArg = false;
 
         AddressingMode bufferAddressingMode = BindfulAndStateless;
         AddressingMode imageAddressingMode = Bindful;
@@ -264,6 +269,7 @@ struct KernelDescriptor {
 
         uint16_t compiledSubGroupsNumber = 0U;
         uint8_t requiredSubGroupSize = 0U;
+        uint8_t requiredThreadGroupDispatchSize = 0U;
         bool isGeneratedByIgc = true;
     } kernelMetadata;
 
@@ -279,5 +285,7 @@ struct KernelDescriptor {
     BindlessToSurfaceStateMap bindlessArgsMap;
     std::once_flag initBindlessArgsMapOnce;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<KernelDescriptor>);
 
 } // namespace NEO

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -21,7 +21,6 @@ class MockReleaseHelper : public ReleaseHelper {
     ADDMETHOD_CONST_NOBASE(isPipeControlPriorToPipelineSelectWaRequired, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isProgramAllStateComputeCommandFieldsWARequired, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isSplitMatrixMultiplyAccumulateSupported, bool, false, ());
-    ADDMETHOD_CONST_NOBASE(isBFloat16ConversionSupported, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isAuxSurfaceModeOverrideRequired, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isResolvingSubDeviceIDNeeded, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isDirectSubmissionSupported, bool, false, ());
@@ -36,16 +35,24 @@ class MockReleaseHelper : public ReleaseHelper {
     ADDMETHOD_CONST_NOBASE(isRayTracingSupported, bool, true, ());
     ADDMETHOD_CONST_NOBASE(getAdditionalFp16Caps, uint32_t, {}, ());
     ADDMETHOD_CONST_NOBASE(getAdditionalExtraCaps, uint32_t, {}, ());
-    ADDMETHOD_CONST_NOBASE(getStackSizePerRay, uint32_t, {}, ());
+    ADDMETHOD_CONST_NOBASE(getAsyncStackSizePerRay, uint32_t, {}, ());
     ADDMETHOD_CONST_NOBASE(isLocalOnlyAllowed, bool, {}, ());
-    ADDMETHOD_CONST_NOBASE(isDisablingMsaaRequired, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isDummyBlitWaRequired, bool, false, ());
-    ADDMETHOD_CONST_NOBASE(isNumRtStacksPerDssFixedValue, bool, true, ());
+    ADDMETHOD_CONST_NOBASE(isBlitImageAllowedForDepthFormat, bool, true, ());
     ADDMETHOD_CONST_NOBASE(getFtrXe2Compression, bool, false, ());
+    ADDMETHOD_CONST_NOBASE(isDirectSubmissionLightSupported, bool, false, ());
+    ADDMETHOD_CONST_NOBASE(computeSlmValues, uint32_t, {}, (uint32_t slmSize, bool isHeapless));
+    ADDMETHOD_CONST_NOBASE(programmAdditionalStallPriorToBarrierWithTimestamp, bool, false, ());
+    ADDMETHOD_CONST_NOBASE(isPostImageWriteFlushRequired, bool, false, ());
 
     const SizeToPreferredSlmValueArray &getSizeToPreferredSlmValue(bool isHeapless) const override {
         static SizeToPreferredSlmValueArray sizeToPreferredSlmValue = {};
         return sizeToPreferredSlmValue;
     }
+
+    bool isBFloat16ConversionSupported() const override {
+        return bFloat16Support;
+    }
+    bool bFloat16Support = false;
 };
 } // namespace NEO

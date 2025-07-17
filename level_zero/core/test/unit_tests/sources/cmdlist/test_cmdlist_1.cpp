@@ -11,9 +11,11 @@
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/indirect_heap/indirect_heap.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
+#include "shared/source/unified_memory/usm_memory_support.h"
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/relaxed_ordering_commands_helper.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_command_stream_receiver.h"
@@ -89,6 +91,43 @@ TEST_F(ContextCommandListCreate, givenInvalidDescWhenCreatingCommandListImmediat
     ze_result_t result = context->createCommandListImmediate(device, &desc, &hCommandList);
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, result);
     EXPECT_EQ(CommandList::fromHandle(hCommandList), nullptr);
+}
+
+struct DefautlDescriptorWithBlitterTest : Test<DeviceFixture> {
+
+    void SetUp() override {
+        NEO::HardwareInfo hwInfo = *NEO::defaultHwInfo.get();
+        hwInfo.capabilityTable.blitterOperationsSupported = true;
+        hwInfo.featureTable.ftrBcsInfo.set(0);
+        DeviceFixture::setUpImpl(&hwInfo);
+    }
+};
+
+struct DefautlDescriptorWithoutBlitterTest : Test<DeviceFixture> {
+
+    void SetUp() override {
+        NEO::HardwareInfo hwInfo = *NEO::defaultHwInfo.get();
+        hwInfo.capabilityTable.blitterOperationsSupported = false;
+        DeviceFixture::setUpImpl(&hwInfo);
+    }
+};
+
+TEST_F(DefautlDescriptorWithoutBlitterTest, givenDeviceWithoutBlitterSupportWhenCreatingCommandListImmediateWithoutDescriptorThenInOrderAsyncCmdListWithoutCopyOffloadIsCreated) {
+    ze_command_list_handle_t hCommandList = {};
+    ze_result_t result = context->createCommandListImmediate(device, nullptr, &hCommandList);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
+
+    auto commandList = CommandList::whiteboxCast(L0::CommandList::fromHandle(hCommandList));
+    uint32_t ordinal = std::numeric_limits<uint32_t>::max();
+    EXPECT_EQ(commandList->getOrdinal(&ordinal), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(ordinal, 0u);
+    uint32_t index = std::numeric_limits<uint32_t>::max();
+    EXPECT_EQ(commandList->getImmediateIndex(&index), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(index, 0u);
+    EXPECT_TRUE(commandList->isInOrderExecutionEnabled());
+    EXPECT_FALSE(commandList->isSyncModeQueue);
+    EXPECT_FALSE(commandList->isCopyOffloadEnabled());
+    commandList->destroy();
 }
 
 TEST_F(CommandListCreateTests, whenCommandListIsCreatedWithInvalidProductFamilyThenFailureIsReturned) {
@@ -177,12 +216,14 @@ TEST_F(CommandListCreateTests, givenNonExistingPtrThenAppendMemoryPrefetchReturn
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(0);
 
     auto res = commandList->appendMemoryPrefetch(nullptr, 0);
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, res);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseFailsThenReturnSuccess) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrWhenExecuteMemAdviseFailsThenReturnSuccess) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -201,14 +242,183 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseFailsThenReturnSu
     auto memoryManager = static_cast<MockMemoryManager *>(device->getDriverHandle()->getMemoryManager());
     memoryManager->failSetMemAdvise = true;
 
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+
+    res = context->freeMem(ptr);
+    ASSERT_EQ(res, ZE_RESULT_SUCCESS);
+}
+
+TEST_F(CommandListCreateTests, givenValidSystemAlloctedPtrAndNotSharedSystemAllocationsAllowedWhenExecuteMemAdviseFailsThenReturnError) {
+
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1u);
+    debugManager.flags.EnableRecoverablePageFaults.set(1u);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
+    auto &hwInfo = *device->getNEODevice()->getRootDeviceEnvironment().getMutableHardwareInfo();
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+
+    sharedSystemMemCapabilities = 0; // enables return false for Device::areSharedSystemAllocationsAllowed()
+
+    size_t size = 10;
+    void *ptr = nullptr;
+
+    ptr = malloc(size);
+    EXPECT_NE(nullptr, ptr);
+
+    auto res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, res);
+
+    free(ptr);
+}
+
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrWhenAppendMemAdviseSuccedsThenMemAdviseOperationsGrows) {
+
+    size_t size = 10;
+    size_t alignment = 1u;
+    void *ptr = nullptr;
+
+    ze_device_mem_alloc_desc_t deviceDesc = {};
+    auto res = context->allocDeviceMem(device->toHandle(),
+                                       &deviceDesc,
+                                       size, alignment, &ptr);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+    EXPECT_NE(nullptr, ptr);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
     res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    EXPECT_EQ(1u, commandList->getMemAdviseOperations().size());
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
 
     res = context->freeMem(ptr);
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseSucceedsThenReturnSuccess) {
+TEST_F(CommandListCreateTests, givenValidSystemAlloctedPtrAndSharedSystemAllocationsAllowedWhenAppendMemAdviseSuccedsThenMemAdviseOperationsGrows) {
+
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1u);
+    debugManager.flags.EnableRecoverablePageFaults.set(1u);
+
+    size_t size = 10;
+    void *ptr = nullptr;
+
+    ptr = malloc(size);
+    EXPECT_NE(nullptr, ptr);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
+    auto &hwInfo = *device->getNEODevice()->getRootDeviceEnvironment().getMutableHardwareInfo();
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+
+    sharedSystemMemCapabilities = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+
+    auto res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    EXPECT_EQ(1u, commandList->getMemAdviseOperations().size());
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+
+    free(ptr);
+}
+
+using ::testing::ValuesIn;
+
+class SupportedMemAdviceSystemAllocatorTests : public CommandListCreateTests, public ::testing::WithParamInterface<ze_memory_advice_t> {};
+
+TEST_P(SupportedMemAdviceSystemAllocatorTests, givenValidSystemAlloctedPtrWhenExecuteMemAdviseWithSupportedAdviceFailsThenReturnSuccess) {
+
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1u);
+    debugManager.flags.EnableRecoverablePageFaults.set(1u);
+
+    size_t size = 10;
+    void *ptr = nullptr;
+
+    ptr = malloc(size);
+    EXPECT_NE(nullptr, ptr);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
+    auto memoryManager = static_cast<MockMemoryManager *>(device->getDriverHandle()->getMemoryManager());
+    memoryManager->failSetSharedSystemMemAdvise = true;
+
+    auto &hwInfo = *device->getNEODevice()->getRootDeviceEnvironment().getMutableHardwareInfo();
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+
+    sharedSystemMemCapabilities = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+
+    auto res = commandList->executeMemAdvise(device, ptr, size, GetParam());
+    EXPECT_EQ(1u, memoryManager->setSharedSystemMemAdviseCalledCount);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+
+    free(ptr);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SupportedMemAdviceTests,
+    SupportedMemAdviceSystemAllocatorTests,
+    ValuesIn(std::vector<ze_memory_advice_t>{
+        ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION,
+        ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION,
+        ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION,
+        ZE_MEMORY_ADVICE_CLEAR_SYSTEM_MEMORY_PREFERRED_LOCATION}));
+
+class UnSupportedMemAdviceSystemAllocatorTests : public CommandListCreateTests, public ::testing::WithParamInterface<ze_memory_advice_t> {};
+
+TEST_P(UnSupportedMemAdviceSystemAllocatorTests, givenValidSystemAlloctedPtrWhenExecuteMemAdviseWithUnSupportedAdviceFailsThenReturnSuccess) {
+
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1u);
+    debugManager.flags.EnableRecoverablePageFaults.set(1u);
+
+    size_t size = 10;
+    void *ptr = nullptr;
+
+    ptr = malloc(size);
+    EXPECT_NE(nullptr, ptr);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
+    auto memoryManager = static_cast<MockMemoryManager *>(device->getDriverHandle()->getMemoryManager());
+    memoryManager->failSetSharedSystemMemAdvise = true;
+
+    auto &hwInfo = *device->getNEODevice()->getRootDeviceEnvironment().getMutableHardwareInfo();
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+
+    sharedSystemMemCapabilities = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+
+    auto res = commandList->executeMemAdvise(device, ptr, size, GetParam());
+    EXPECT_EQ(0u, memoryManager->setSharedSystemMemAdviseCalledCount);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+
+    free(ptr);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UnSupportedMemAdviceTests,
+    UnSupportedMemAdviceSystemAllocatorTests,
+    ValuesIn(std::vector<ze_memory_advice_t>{
+        ZE_MEMORY_ADVICE_SET_READ_MOSTLY,
+        ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY,
+        ZE_MEMORY_ADVICE_SET_NON_ATOMIC_MOSTLY,
+        ZE_MEMORY_ADVICE_CLEAR_NON_ATOMIC_MOSTLY,
+        ZE_MEMORY_ADVICE_BIAS_CACHED,
+        ZE_MEMORY_ADVICE_BIAS_UNCACHED,
+        ZE_MEMORY_ADVICE_FORCE_UINT32}));
+
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrWhenExecuteMemAdviseSucceedsThenReturnSuccess) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -224,14 +434,14 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseSucceedsThenRetur
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
 
     res = context->freeMem(ptr);
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetWithMaxHintThenSuccessReturned) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseSetWithMaxHintThenSuccessReturned) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -247,14 +457,14 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetWithMaxHintThe
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_FORCE_UINT32);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_FORCE_UINT32);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
 
     res = context->freeMem(ptr);
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearReadMostlyThenMemAdviseReadOnlySet) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseSetAndClearReadMostlyThenMemAdviseReadOnlySet) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -271,13 +481,13 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearReadMo
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
     L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.readOnly);
@@ -286,7 +496,7 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearReadMo
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearPreferredLocationThenMemAdvisePreferredDeviceSet) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseSetAndClearPreferredLocationThenMemAdvisePreferredDeviceSet) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -303,13 +513,13 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearPrefer
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
     L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.devicePreferredLocation);
@@ -318,7 +528,7 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearPrefer
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseIsCalledWithSetAndClearSystemMemoryPreferredLocationThenMemAdviseSetPreferredSystemMemoryFlagIsSetCorrectly) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrWhenExecuteMemAdviseIsCalledWithSetAndClearSystemMemoryPreferredLocationThenMemAdviseSetPreferredSystemMemoryFlagIsSetCorrectly) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -337,13 +547,13 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseIsCalledWithSetAn
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
     L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.systemPreferredLocation);
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_SYSTEM_MEMORY_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_SYSTEM_MEMORY_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.systemPreferredLocation);
@@ -352,7 +562,7 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseIsCalledWithSetAn
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseSetAndClearNonAtomicMostlyThenMemAdviseNonAtomicIgnored) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrWhenExecuteMemAdviseSetAndClearNonAtomicMostlyThenMemAdviseNonAtomicIgnored) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -369,13 +579,13 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseSetAndClearNonAto
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_NON_ATOMIC_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_NON_ATOMIC_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
     L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.nonAtomic);
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_NON_ATOMIC_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_NON_ATOMIC_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.nonAtomic);
@@ -384,7 +594,7 @@ TEST_F(CommandListCreateTests, givenValidPtrWhenAppendMemAdviseSetAndClearNonAto
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearCachingThenMemAdviseCachingSet) {
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseSetAndClearCachingThenMemAdviseCachingSet) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -401,7 +611,7 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearCachin
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     ASSERT_NE(nullptr, commandList);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_CACHED);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_CACHED);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
     L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
@@ -409,7 +619,7 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearCachin
     EXPECT_EQ(1, flags.cachedMemory);
     auto memoryManager = static_cast<MockMemoryManager *>(device->getDriverHandle()->getMemoryManager());
     EXPECT_EQ(1, memoryManager->memAdviseFlags.cachedMemory);
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_UNCACHED);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_UNCACHED);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.cachedMemory);
@@ -421,7 +631,7 @@ TEST_F(CommandListCreateTests, givenValidPtrThenAppendMemAdviseSetAndClearCachin
 
 using CommandListMemAdvisePageFault = Test<PageFaultDeviceFixture>;
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenAppendMemAdviseWithReadOnlyAndDevicePreferredClearsMigrationBlocked) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerThenExecuteMemAdviseWithReadOnlyAndDevicePreferredClearsMigrationBlocked) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -445,20 +655,20 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenAppend
     flags.cpuMigrationBlocked = 1;
     deviceImp->memAdviseSharedAllocations[allocData] = flags;
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.readOnly);
@@ -469,7 +679,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenAppend
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenGpuDomainHanlderWithHintsIsSet) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerThenGpuDomainHanlderWithHintsIsSet) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -492,12 +702,12 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenGpuDom
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     deviceImp->memAdviseSharedAllocations[allocData] = flags;
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
@@ -510,7 +720,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerThenGpuDom
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetThenHandlerBlocksCpuMigration) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetThenHandlerBlocksCpuMigration) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -531,12 +741,12 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
@@ -556,7 +766,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndOnlyReadOnlyOrDevicePreferredHintThenHandlerAllowsCpuMigration) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndOnlyReadOnlyOrDevicePreferredHintThenHandlerAllowsCpuMigration) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -577,7 +787,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
@@ -597,12 +807,12 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.cpuMigrationBlocked);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
@@ -611,7 +821,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.cpuMigrationBlocked);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_CLEAR_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.devicePreferredLocation);
@@ -624,7 +834,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndWithPrintUsmSharedMigrationDebugKeyThenMessageIsPrinted) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndWithPrintUsmSharedMigrationDebugKeyThenMessageIsPrinted) {
     DebugManagerStateRestore restorer;
     debugManager.flags.PrintUmdSharedMigration.set(1);
 
@@ -650,7 +860,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
@@ -659,7 +869,8 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     EXPECT_EQ(handlerWithHints, reinterpret_cast<void *>(mockPageFaultManager->gpuDomainHandler));
 
-    testing::internal::CaptureStdout(); // start capturing
+    StreamCapture capture;
+    capture.captureStdout(); // start capturing
 
     NEO::CpuPageFaultManager::PageFaultData pageData;
     pageData.cmdQ = deviceImp;
@@ -669,7 +880,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.cpuMigrationBlocked);
 
-    std::string output = testing::internal::GetCapturedStdout(); // stop capturing
+    std::string output = capture.getCapturedStdout(); // stop capturing
 
     std::string expectedString = "UMD transferred shared allocation";
     uint32_t occurrences = 0u;
@@ -685,7 +896,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndInvalidHintsThenHandlerAllowsCpuMigration) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndInvalidHintsThenHandlerAllowsCpuMigration) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -706,7 +917,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_CACHED);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_BIAS_CACHED);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.cachedMemory);
@@ -727,7 +938,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndCpuDomainThenHandlerAllowsCpuMigration) {
+TEST_F(CommandListMemAdvisePageFault, givenValidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetAndCpuDomainThenHandlerAllowsCpuMigration) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -748,12 +959,12 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
@@ -774,7 +985,7 @@ TEST_F(CommandListMemAdvisePageFault, givenValidPtrAndPageFaultHandlerAndGpuDoma
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
 }
 
-TEST_F(CommandListMemAdvisePageFault, givenInvalidPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetThenHandlerAllowsCpuMigration) {
+TEST_F(CommandListMemAdvisePageFault, givenInvalidDeviceMemPtrAndPageFaultHandlerAndGpuDomainHandlerWithHintsSetThenHandlerAllowsCpuMigration) {
     size_t size = 10;
     size_t alignment = 1u;
     void *ptr = nullptr;
@@ -795,12 +1006,12 @@ TEST_F(CommandListMemAdvisePageFault, givenInvalidPtrAndPageFaultHandlerAndGpuDo
 
     auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.readOnly);
 
-    res = commandList->appendMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_PREFERRED_LOCATION);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(1, flags.devicePreferredLocation);
@@ -1164,7 +1375,7 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
     ultCsr->recordFlushedBatchBuffer = true;
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
     auto heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(heaplessEnabled);
 
     auto verifyFlags = [&ultCsr, useImmediateFlushTask](ze_result_t result, bool dispatchFlag, bool bbFlag) {
@@ -1178,10 +1389,10 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
     };
     // non-pipelined state
     bool shouldProgramNPStates = !heaplessStateInitEnabled;
-    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false), false, shouldProgramNPStates);
+    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams), false, shouldProgramNPStates);
 
     // non-pipelined state already programmed
-    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false), false, false);
+    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams), false, false);
 
     verifyFlags(commandList->appendLaunchKernelIndirect(kernel.toHandle(), groupCount, nullptr, 0, nullptr, false), false, false);
 
@@ -1192,7 +1403,7 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
 
     verifyFlags(commandList->appendMemoryCopyRegion(dstPtr, &region, 0, 0, srcPtr, &region, 0, 0, nullptr, 0, nullptr, copyParams), false, false);
 
-    verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, 0, nullptr, false), false, false);
+    verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, 0, nullptr, copyParams), false, false);
 
     verifyFlags(commandList->appendEventReset(event), true, true);
 
@@ -1209,22 +1420,24 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
         auto mockBuiltinKernel = static_cast<Mock<::L0::KernelImp> *>(kernel);
         mockBuiltinKernel->setArgRedescribedImageCallBase = false;
 
-        auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<gfxCoreFamily>>>();
+        auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<FamilyType::gfxCoreFamily>>>();
         ze_image_region_t imgRegion = {1, 1, 1, 1, 1, 1};
         ze_image_desc_t zeDesc = {};
         zeDesc.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
         image->initialize(device, &zeDesc);
         auto bytesPerPixel = static_cast<uint32_t>(image->getImageInfo().surfaceFormat->imageElementSizeInBytes);
 
-        verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, 0, nullptr, false), false, false);
+        CmdListMemoryCopyParams copyParams = {};
 
-        verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, 0, nullptr, false), false, false);
+        verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, 0, nullptr, copyParams), false, false);
 
-        verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, 0, nullptr, false), false, false);
+        verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, 0, nullptr, copyParams), false, false);
 
-        verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, 0, nullptr, false), false, false);
+        verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, 0, nullptr, copyParams), false, false);
 
-        verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, 0, nullptr, false), false, false);
+        verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, 0, nullptr, copyParams), false, false);
+
+        verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, 0, nullptr, copyParams), false, false);
     }
 
     size_t rangeSizes = 1;
@@ -1238,9 +1451,9 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
     CmdListKernelLaunchParams cooperativeParams = {};
     cooperativeParams.isCooperative = true;
 
-    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams, false), false, stallingCmdRequired);
+    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams), false, stallingCmdRequired);
 
-    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams, false), false, false);
+    verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams), false, false);
 
     driverHandle->releaseImportedPointer(dstPtr);
 }
@@ -1314,6 +1527,11 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
     for (bool inOrderExecution : {false, true}) {
         if (inOrderExecution && !inOrderExecAlreadyEnabled) {
             whiteBoxCmdList->enableInOrderExecution();
+            uint64_t *hostAddress = ptrOffset(whiteBoxCmdList->inOrderExecInfo->getBaseHostAddress(), whiteBoxCmdList->inOrderExecInfo->getAllocationOffset());
+            for (uint32_t i = 0; i < whiteBoxCmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+                *hostAddress = std::numeric_limits<uint64_t>::max();
+                hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+            }
             inOrderExecAlreadyEnabled = true;
         }
 
@@ -1324,11 +1542,11 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
 
         // non-pipelined state or first in-order exec
         resetFlags();
-        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 1, &event, launchParams, false));
+        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 1, &event, launchParams));
 
         // non-pipelined state already programmed
         resetFlags();
-        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitEvents, waitlist, launchParams, false));
+        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitEvents, waitlist, launchParams));
 
         resetFlags();
         verifyFlags(commandList->appendLaunchKernelIndirect(kernel.toHandle(), groupCount, nullptr, numWaitEvents, waitlist, false));
@@ -1340,38 +1558,38 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
         verifyFlags(commandList->appendMemoryCopyRegion(dstPtr, &region, 0, 0, srcPtr, &region, 0, 0, nullptr, numWaitEvents, waitlist, copyParams));
 
         resetFlags();
-        verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, numWaitEvents, waitlist, false));
+        verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, numWaitEvents, waitlist, copyParams));
 
         if constexpr (FamilyType::supportsSampler) {
             auto kernel = device->getBuiltinFunctionsLib()->getImageFunction(ImageBuiltin::copyImageRegion);
             auto mockBuiltinKernel = static_cast<Mock<::L0::KernelImp> *>(kernel);
             mockBuiltinKernel->setArgRedescribedImageCallBase = false;
 
-            auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<gfxCoreFamily>>>();
+            auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<FamilyType::gfxCoreFamily>>>();
             ze_image_region_t imgRegion = {1, 1, 1, 1, 1, 1};
             ze_image_desc_t zeDesc = {};
             zeDesc.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
             image->initialize(device, &zeDesc);
             auto bytesPerPixel = static_cast<uint32_t>(image->getImageInfo().surfaceFormat->imageElementSizeInBytes);
+            CmdListMemoryCopyParams copyParams = {};
+            resetFlags();
+            verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, numWaitEvents, waitlist, copyParams));
 
             resetFlags();
-            verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, numWaitEvents, waitlist, false));
+            verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, numWaitEvents, waitlist, copyParams));
 
             resetFlags();
-            verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, numWaitEvents, waitlist, false));
+            verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, numWaitEvents, waitlist, copyParams));
 
             resetFlags();
-            verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, numWaitEvents, waitlist, false));
+            verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitEvents, waitlist, copyParams));
 
             resetFlags();
-            verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitEvents, waitlist, false));
-
-            resetFlags();
-            verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitEvents, waitlist, false));
+            verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitEvents, waitlist, copyParams));
         }
 
         resetFlags();
-        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitEvents, waitlist, cooperativeParams, false));
+        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitEvents, waitlist, cooperativeParams));
     }
 
     driverHandle->releaseImportedPointer(dstPtr);
@@ -1398,7 +1616,7 @@ HWTEST2_F(CommandListCreateTests, whenDispatchingThenPassNumCsrClients, IsAtLeas
     ultCsr->registerClient(&client1);
     ultCsr->registerClient(&client2);
 
-    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     EXPECT_EQ(ultCsr->latestFlushedBatchBuffer.numCsrClients, ultCsr->getNumClients());
@@ -1438,7 +1656,7 @@ HWTEST_F(CommandListCreateTests, givenSignalEventWhenCallingSynchronizeThenUnreg
     EXPECT_EQ(ultCsr->getNumClients(), 0u);
 
     {
-        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event1, 0, nullptr, launchParams, false);
+        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event1, 0, nullptr, launchParams);
         EXPECT_EQ(ultCsr->getNumClients(), 1u);
 
         Event::fromHandle(event1)->setIsCompleted();
@@ -1448,7 +1666,7 @@ HWTEST_F(CommandListCreateTests, givenSignalEventWhenCallingSynchronizeThenUnreg
     }
 
     {
-        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event2, 0, nullptr, launchParams, false);
+        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event2, 0, nullptr, launchParams);
         EXPECT_EQ(ultCsr->getNumClients(), 1u);
 
         *reinterpret_cast<uint32_t *>(Event::fromHandle(event2)->getHostAddress()) = static_cast<uint32_t>(Event::STATE_SIGNALED);
@@ -1458,7 +1676,7 @@ HWTEST_F(CommandListCreateTests, givenSignalEventWhenCallingSynchronizeThenUnreg
     }
 
     {
-        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event3, 0, nullptr, launchParams, false);
+        commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event3, 0, nullptr, launchParams);
         EXPECT_EQ(ultCsr->getNumClients(), 1u);
 
         zeEventHostReset(event3);
@@ -1503,7 +1721,7 @@ HWTEST_F(CommandListCreateTests, givenDebugFlagSetWhenCallingSynchronizeThenDont
     ASSERT_EQ(ZE_RESULT_SUCCESS, eventPool->createEvent(&eventDesc, &event));
 
     EXPECT_EQ(ultCsr->getNumClients(), 0u);
-    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams, false);
+    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams);
     EXPECT_EQ(ultCsr->getNumClients(), 1u);
 
     Event::fromHandle(event)->setIsCompleted();
@@ -1579,7 +1797,7 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
         ze_event_handle_t *waitlist = hasEventDependencies ? &event : nullptr;
         uint32_t numWaitlistEvents = hasEventDependencies ? 1 : 0;
 
-        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitlistEvents, waitlist, launchParams, false),
+        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitlistEvents, waitlist, launchParams),
                     hasEventDependencies, hasEventDependencies);
 
         verifyFlags(commandList->appendLaunchKernelIndirect(kernel.toHandle(), groupCount, nullptr, numWaitlistEvents, waitlist, false),
@@ -1594,7 +1812,7 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
         verifyFlags(commandList->appendMemoryCopyRegion(dstPtr, &region, 0, 0, srcPtr, &region, 0, 0, nullptr, numWaitlistEvents, waitlist, copyParams),
                     hasEventDependencies, hasEventDependencies);
 
-        verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, numWaitlistEvents, waitlist, false),
+        verifyFlags(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, nullptr, numWaitlistEvents, waitlist, copyParams),
                     hasEventDependencies, hasEventDependencies);
 
         verifyFlags(commandList->appendEventReset(event), false, false);
@@ -1614,26 +1832,28 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
             auto mockBuiltinKernel = static_cast<Mock<::L0::KernelImp> *>(kernel);
             mockBuiltinKernel->setArgRedescribedImageCallBase = false;
 
-            auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<gfxCoreFamily>>>();
+            auto image = std::make_unique<WhiteBox<::L0::ImageCoreFamily<FamilyType::gfxCoreFamily>>>();
             ze_image_region_t imgRegion = {1, 1, 1, 1, 1, 1};
             ze_image_desc_t zeDesc = {};
             zeDesc.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
             image->initialize(device, &zeDesc);
             auto bytesPerPixel = static_cast<uint32_t>(image->getImageInfo().surfaceFormat->imageElementSizeInBytes);
 
-            verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, numWaitlistEvents, waitlist, false),
+            CmdListMemoryCopyParams copyParams = {};
+
+            verifyFlags(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, nullptr, numWaitlistEvents, waitlist, copyParams),
                         hasEventDependencies, hasEventDependencies);
 
-            verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, numWaitlistEvents, waitlist, false),
+            verifyFlags(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, nullptr, numWaitlistEvents, waitlist, copyParams),
                         hasEventDependencies, hasEventDependencies);
 
-            verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, numWaitlistEvents, waitlist, false),
+            verifyFlags(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, nullptr, numWaitlistEvents, waitlist, copyParams),
                         hasEventDependencies, hasEventDependencies);
 
-            verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitlistEvents, waitlist, false),
+            verifyFlags(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitlistEvents, waitlist, copyParams),
                         hasEventDependencies, hasEventDependencies);
 
-            verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitlistEvents, waitlist, false),
+            verifyFlags(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, nullptr, numWaitlistEvents, waitlist, copyParams),
                         hasEventDependencies, hasEventDependencies);
         }
 
@@ -1649,7 +1869,7 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
     for (bool hasEventDependencies : {true, false}) {
         ze_event_handle_t *waitlist = hasEventDependencies ? &event : nullptr;
         uint32_t numWaitlistEvents = hasEventDependencies ? 1 : 0;
-        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitlistEvents, waitlist, cooperativeParams, false),
+        verifyFlags(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, numWaitlistEvents, waitlist, cooperativeParams),
                     hasEventDependencies, hasEventDependencies);
     }
 
@@ -1670,6 +1890,11 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
     ASSERT_NE(nullptr, commandList);
     auto whiteBoxCmdList = static_cast<CommandList *>(commandList.get());
     whiteBoxCmdList->enableInOrderExecution();
+    uint64_t *hostAddress = ptrOffset(whiteBoxCmdList->inOrderExecInfo->getBaseHostAddress(), whiteBoxCmdList->inOrderExecInfo->getAllocationOffset());
+    for (uint32_t i = 0; i < whiteBoxCmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+        *hostAddress = std::numeric_limits<uint64_t>::max();
+        hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+    }
 
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.count = 1;
@@ -1701,9 +1926,9 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
     ultCsr->registerClient(&client1);
     ultCsr->registerClient(&client2);
 
-    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams, false);
+    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams);
 
-    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     if (useImmediateFlushTask) {
         EXPECT_TRUE(ultCsr->recordedImmediateDispatchFlags.hasRelaxedOrderingDependencies);
     } else {
@@ -1726,6 +1951,11 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingBarrierThe
     ASSERT_NE(nullptr, commandList);
     auto whiteBoxCmdList = static_cast<CommandList *>(commandList.get());
     whiteBoxCmdList->enableInOrderExecution();
+    uint64_t *hostAddress = ptrOffset(whiteBoxCmdList->inOrderExecInfo->getBaseHostAddress(), whiteBoxCmdList->inOrderExecInfo->getAllocationOffset());
+    for (uint32_t i = 0; i < whiteBoxCmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+        *hostAddress = std::numeric_limits<uint64_t>::max();
+        hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+    }
 
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.count = 1;
@@ -1798,6 +2028,11 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingBarrierWit
     auto whiteBoxCmdList0 = static_cast<CommandList *>(commandList0.get());
     auto whiteBoxCmdList = static_cast<CommandList *>(commandList.get());
     whiteBoxCmdList->enableInOrderExecution();
+    uint64_t *hostAddress = ptrOffset(whiteBoxCmdList->inOrderExecInfo->getBaseHostAddress(), whiteBoxCmdList->inOrderExecInfo->getAllocationOffset());
+    for (uint32_t i = 0; i < whiteBoxCmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+        *hostAddress = std::numeric_limits<uint64_t>::max();
+        hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+    }
 
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.count = 1;
@@ -1872,8 +2107,12 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
 
     std::unique_ptr<WhiteBox<L0::CommandListImp>> cmdList;
     cmdList.reset(CommandList::whiteboxCast(CommandList::createImmediate(productFamily, device, &desc, false, engineGroupType, returnValue)));
-    cmdList->isFlushTaskSubmissionEnabled = true;
     cmdList->enableInOrderExecution();
+    uint64_t *hostAddress = ptrOffset(cmdList->inOrderExecInfo->getBaseHostAddress(), cmdList->inOrderExecInfo->getAllocationOffset());
+    for (uint32_t i = 0; i < cmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+        *hostAddress = std::numeric_limits<uint64_t>::max();
+        hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+    }
 
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::builtin);
     Mock<::L0::KernelImp> kernel;
@@ -1891,12 +2130,12 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
 
     auto cmdStream = cmdList->getCmdContainer().getCommandStream();
 
-    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
-    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     size_t offset = cmdStream->getUsed();
 
-    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    cmdList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     GenCmdList genCmdList;
     ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(
@@ -1905,7 +2144,10 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
         cmdStream->getUsed() - offset));
 
     // init registers
-    auto lrrCmd = genCmdCast<MI_LOAD_REGISTER_REG *>(*genCmdList.begin());
+    auto iter = genCmdList.begin();
+    UnitTestHelper<FamilyType>::skipStatePrefetch(iter);
+
+    auto lrrCmd = genCmdCast<MI_LOAD_REGISTER_REG *>(*iter);
     ASSERT_NE(nullptr, lrrCmd);
     lrrCmd++;
     lrrCmd++;
@@ -1915,9 +2157,6 @@ HWTEST2_F(CommandListCreateTests, givenInOrderExecutionWhenDispatchingRelaxedOrd
 }
 
 TEST_F(CommandListCreateTests, GivenGpuHangWhenCreatingImmCmdListWithSyncModeAndAppendBarrierThenAppendBarrierReturnsDeviceLost) {
-    DebugManagerStateRestore restorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_command_queue_desc_t desc = {};
     desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
 
@@ -1963,9 +2202,6 @@ TEST_F(CommandListCreateTests, givenSplitBcsSizeWhenCreateCommandListThenProperS
 }
 
 HWTEST_F(CommandListCreateTests, GivenGpuHangWhenCreatingImmediateCommandListAndAppendingSignalEventsThenDeviceLostIsReturned) {
-    DebugManagerStateRestore restorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_command_queue_desc_t desc = {};
     desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
 
@@ -2029,8 +2265,6 @@ TEST_F(CommandListCreateTests, givenImmediateCommandListWhenThereIsNoEnoughSpace
     ASSERT_NE(nullptr, commandList);
     auto whiteBoxCmdList = static_cast<CommandList *>(commandList.get());
 
-    whiteBoxCmdList->isFlushTaskSubmissionEnabled = true;
-
     EXPECT_EQ(device, commandList->getDevice());
     EXPECT_TRUE(commandList->isImmediateType());
     EXPECT_NE(nullptr, whiteBoxCmdList->cmdQImmediate);
@@ -2079,9 +2313,6 @@ TEST_F(CommandListCreateTests, givenCreatingRegularCommandlistAndppendCommandLis
 }
 
 HWTEST_F(CommandListCreateTests, GivenGpuHangWhenCreatingImmediateCommandListAndAppendingEventResetThenDeviceLostIsReturned) {
-    DebugManagerStateRestore restorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_command_queue_desc_t desc = {};
     desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
 
@@ -2145,9 +2376,6 @@ HWTEST_F(CommandListCreateTests, GivenGpuHangWhenCreatingImmediateCommandListAnd
 }
 
 HWTEST_F(CommandListCreateTests, GivenImmediateCommandListWithFlushTaskCreatedThenNumIddPerBlockIsOne) {
-    DebugManagerStateRestore restorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_command_queue_desc_t desc = {};
     desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
 
@@ -2168,9 +2396,6 @@ HWTEST_F(CommandListCreateTests, GivenImmediateCommandListWithFlushTaskCreatedTh
 }
 
 HWTEST_F(CommandListCreateTests, GivenGpuHangAndEnabledFlushTaskSubmissionFlagWhenCreatingImmediateCommandListAndAppendingWaitOnEventsThenDeviceLostIsReturned) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(true);
-
     ze_command_queue_desc_t desc = {};
     desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
 
@@ -2469,7 +2694,7 @@ TEST_F(ContextCommandListCreate, givenDeferredEngineCreationWhenImmediateCommand
         const auto &group = groups[groupIndex];
         for (uint32_t queueIndex = 0; queueIndex < group.numQueues; queueIndex++) {
             CommandStreamReceiver *expectedCsr{};
-            EXPECT_EQ(ZE_RESULT_SUCCESS, device->getCsrForOrdinalAndIndex(&expectedCsr, groupIndex, queueIndex, ZE_COMMAND_QUEUE_PRIORITY_NORMAL, false));
+            EXPECT_EQ(ZE_RESULT_SUCCESS, device->getCsrForOrdinalAndIndex(&expectedCsr, groupIndex, queueIndex, ZE_COMMAND_QUEUE_PRIORITY_NORMAL, 0, false));
 
             ze_command_queue_desc_t desc = {};
             desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
@@ -2604,7 +2829,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, CommandListCreateTests, whenCommandListIsCreatedT
     EXPECT_TRUE(cmdSba->getSurfaceStateBaseAddressModifyEnable());
     EXPECT_EQ(ssh->getHeapGpuBase(), cmdSba->getSurfaceStateBaseAddress());
 
-    EXPECT_EQ(gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER), cmdSba->getStatelessDataPortAccessMemoryObjectControlState());
+    EXPECT_EQ(gmmHelper->getL3EnabledMOCS(), cmdSba->getStatelessDataPortAccessMemoryObjectControlState());
 }
 
 HWTEST_F(CommandListCreateTests, givenCommandListWithCopyOnlyWhenCreatedThenStateBaseAddressCmdIsNotProgrammedAndHeapIsNotAllocated) {
@@ -2682,7 +2907,7 @@ HWTEST_F(CommandListCreateTests, whenCommandListIsResetThenContainsStatelessUnca
 HWTEST_F(CommandListCreateTests, givenBindlessModeDisabledWhenCommandListsResetThenSbaReloaded) {
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
 
     if (compilerProductHelper.isHeaplessStateInitEnabled(heaplessEnabled)) {
         GTEST_SKIP();
@@ -2740,7 +2965,7 @@ HWTEST_F(CommandListCreateTests, givenCommandListWhenSetBarrierThenPipeControlIs
     EXPECT_NE(cmdList.end(), itor);
 }
 
-HWTEST2_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierThenPipeControlIsProgrammedAndHdcFlushIsSet, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierThenPipeControlIsProgrammedAndHdcFlushIsSet, IsAtLeastXeCore) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
@@ -2760,7 +2985,7 @@ HWTEST2_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierThenPipeCo
     EXPECT_TRUE(UnitTestHelper<FamilyType>::getPipeControlHdcPipelineFlush(*pipeControlCmd));
 }
 
-HWTEST2_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierThenPipeControlIsProgrammedWithHdcAndUntypedFlushSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierThenPipeControlIsProgrammedWithHdcAndUntypedFlushSet, IsAtLeastXeCore) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
@@ -2788,10 +3013,10 @@ HWTEST_F(CommandListCreateTests, givenCommandListWhenAppendingBarrierWithIncorre
     EXPECT_EQ(returnValue, ZE_RESULT_ERROR_INVALID_ARGUMENT);
 }
 
-HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingBeforeCommandForCopyOnlyThenCommandsHaveCorrectEventOffsets, MatchAny) {
-    using GfxFamily = typename NEO::GfxFamilyMapper<gfxCoreFamily>::GfxFamily;
+HWTEST_F(CommandListCreateTests, givenCopyCommandListWhenProfilingBeforeCommandForCopyOnlyThenCommandsHaveCorrectEventOffsets) {
+    using GfxFamily = typename NEO::GfxFamilyMapper<FamilyType::gfxCoreFamily>::GfxFamily;
     using MI_STORE_REGISTER_MEM = typename GfxFamily::MI_STORE_REGISTER_MEM;
-    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::copy, 0u);
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.count = 1;
@@ -2826,10 +3051,10 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingBeforeCommand
     EXPECT_EQ(cmd->getMemoryAddress(), ptrOffset(baseAddr, contextOffset));
 }
 
-HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandForCopyOnlyThenCommandsHaveCorrectEventOffsets, MatchAny) {
-    using GfxFamily = typename NEO::GfxFamilyMapper<gfxCoreFamily>::GfxFamily;
+HWTEST_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandForCopyOnlyThenCommandsHaveCorrectEventOffsets) {
+    using GfxFamily = typename NEO::GfxFamilyMapper<FamilyType::gfxCoreFamily>::GfxFamily;
     using MI_STORE_REGISTER_MEM = typename GfxFamily::MI_STORE_REGISTER_MEM;
-    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::copy, 0u);
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.count = 1;
@@ -2861,8 +3086,8 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandF
     EXPECT_EQ(cmd->getMemoryAddress(), ptrOffset(baseAddr, contextOffset));
 }
 
-HWTEST2_F(CommandListCreateTests, givenNullEventWhenAppendEventAfterWalkerThenNothingAddedToStream, MatchAny) {
-    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+HWTEST_F(CommandListCreateTests, givenNullEventWhenAppendEventAfterWalkerThenNothingAddedToStream) {
+    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::copy, 0u);
 
     auto usedBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
@@ -2952,11 +3177,11 @@ TEST(BuiltinTypeHelperTest, givenHeaplessWhenAdjustBuiltinTypeIsCalledThenCorrec
     EXPECT_EQ(Builtin::fillBufferMiddleStatelessHeapless, BuiltinTypeHelper::adjustBuiltinType<Builtin::fillBufferMiddle>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::fillBufferRightLeftoverStatelessHeapless, BuiltinTypeHelper::adjustBuiltinType<Builtin::fillBufferRightLeftover>(isStateless, isHeapless));
 }
-HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithPostSyncThenDummyBlitIsProgrammedPriorToMiFlushAndDummyAllocationIsAddedToResidencyContainer, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithPostSyncThenDummyBlitIsProgrammedPriorToMiFlushAndDummyAllocationIsAddedToResidencyContainer, IsAtLeastXeCore) {
     using MI_FLUSH_DW = typename FamilyType::MI_FLUSH_DW;
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceDummyBlitWa.set(1);
-    MockCommandListCoreFamily<gfxCoreFamily> cmdlist;
+    MockCommandListCoreFamily<FamilyType::gfxCoreFamily> cmdlist;
     cmdlist.initialize(device, NEO::EngineGroupType::copy, 0u);
 
     auto &commandContainer = cmdlist.getCmdContainer();
@@ -2980,11 +3205,11 @@ HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithPos
     EXPECT_EQ(commandContainer.getResidencyContainer()[0], rootDeviceEnvironment.getDummyAllocation());
 }
 
-HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithoutPostSyncThenDummyBlitIsNotProgrammedAndDummyAllocationIsNotAddedToResidencyContainer, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithoutPostSyncThenDummyBlitIsNotProgrammedAndDummyAllocationIsNotAddedToResidencyContainer, IsAtLeastXeCore) {
     using MI_FLUSH_DW = typename FamilyType::MI_FLUSH_DW;
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceDummyBlitWa.set(1);
-    MockCommandListCoreFamily<gfxCoreFamily> cmdlist;
+    MockCommandListCoreFamily<FamilyType::gfxCoreFamily> cmdlist;
     cmdlist.initialize(device, NEO::EngineGroupType::copy, 0u);
 
     auto &commandContainer = cmdlist.getCmdContainer();
@@ -3005,11 +3230,11 @@ HWTEST2_F(CommandListCreateTests, givenDummyBlitRequiredWhenEncodeMiFlushWithout
     EXPECT_EQ(commandContainer.getResidencyContainer().size(), 0u);
 }
 
-HWTEST2_F(CommandListCreateTests, givenDummyBlitNotRequiredWhenEncodeMiFlushThenDummyBlitIsNotProgrammedAndDummyAllocationIsNotAddedToResidencyContainer, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListCreateTests, givenDummyBlitNotRequiredWhenEncodeMiFlushThenDummyBlitIsNotProgrammedAndDummyAllocationIsNotAddedToResidencyContainer, IsAtLeastXeCore) {
     using MI_FLUSH_DW = typename FamilyType::MI_FLUSH_DW;
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceDummyBlitWa.set(0);
-    MockCommandListCoreFamily<gfxCoreFamily> cmdlist;
+    MockCommandListCoreFamily<FamilyType::gfxCoreFamily> cmdlist;
     cmdlist.initialize(device, NEO::EngineGroupType::copy, 0u);
 
     auto &commandContainer = cmdlist.getCmdContainer();
@@ -3027,6 +3252,202 @@ HWTEST2_F(CommandListCreateTests, givenDummyBlitNotRequiredWhenEncodeMiFlushThen
     EXPECT_EQ(programmedCommands.begin(), itor);
     EXPECT_NE(programmedCommands.end(), itor);
     EXPECT_EQ(commandContainer.getResidencyContainer().size(), 0u);
+}
+
+HWTEST_F(CommandListCreateTests, givenEmptySvmManagerWhenIsAllocationImportedThenFalseIsReturned) {
+    auto commandListCore = std::make_unique<WhiteBox<L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
+    commandListCore->initialize(device, NEO::EngineGroupType::compute, 0u);
+
+    NEO::SVMAllocsManager *svmManager = nullptr;
+
+    EXPECT_FALSE(commandListCore->isAllocationImported(nullptr, svmManager));
+}
+
+using CommandListAppendLaunchKernelWithArgumentsTests = Test<CommandListCreateFixture>;
+TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenNullptrInputWhenAppendLaunchKernelWithArgumentsThenErrorIsReturned) {
+
+    const ze_group_count_t groupCounts{1, 2, 3};
+    const ze_group_size_t groupSizes{4, 5, 6};
+    auto retVal = zeCommandListAppendLaunchKernelWithArguments(nullptr, nullptr, groupCounts, groupSizes, nullptr, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_NULL_HANDLE, retVal);
+
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, retVal, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), nullptr, groupCounts, groupSizes, nullptr, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_NULL_HANDLE, retVal);
+
+    NEO::KernelInfo kernelInfo{};
+    uint8_t kernelHeap[10]{};
+    kernelInfo.heapInfo.pKernelHeap = kernelHeap;
+    kernelInfo.heapInfo.kernelHeapSize = sizeof(kernelHeap);
+    kernelInfo.kernelDescriptor.kernelMetadata.kernelName = "kernel";
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs.resize(1);
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].type = NEO::ArgDescriptor::argTPointer; // arg buffer
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].as<NEO::ArgDescPointer>().bindful = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].as<NEO::ArgDescPointer>().bindless = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+
+    auto kernelImmutableData = std::make_unique<KernelImmutableData>(device);
+    auto mockIsaAllocation = std::make_unique<MockGraphicsAllocation>(reinterpret_cast<void *>(0x543000), 10);
+    mockIsaAllocation->setAllocationType(NEO::AllocationType::kernelIsa);
+    kernelImmutableData->setIsaPerKernelAllocation(mockIsaAllocation.release());
+    kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
+
+    std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
+    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+
+    Mock<::L0::KernelImp> kernel;
+    kernel.module = mockModule.get();
+    ze_kernel_desc_t desc = {ZE_STRUCTURE_TYPE_KERNEL_DESC};
+    desc.pKernelName = kernelInfo.kernelDescriptor.kernelMetadata.kernelName.c_str();
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel.initialize(&desc));
+    retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, nullptr, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_NULL_POINTER, retVal);
+}
+
+TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenIncorrectGroupSizeWhenAppendLaunchKernelWithArgumentsThenErrorIsReturned) {
+
+    const ze_group_count_t groupCounts{1, 2, 3};
+    const ze_group_size_t groupSizes{std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max()};
+
+    auto retVal = ZE_RESULT_ERROR_UNINITIALIZED;
+
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, retVal, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
+    Mock<::L0::KernelImp> kernel;
+    kernel.module = mockModule.get();
+
+    void *arguments = nullptr;
+    retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, &arguments, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION, retVal);
+}
+
+TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, whenAppendLaunchKernelWithArgumentsThenProperKernelArgumentsAreSet) {
+
+    const ze_group_count_t groupCounts{1, 2, 3};
+    const ze_group_size_t groupSizes{4, 5, 6};
+
+    auto retVal = ZE_RESULT_ERROR_UNINITIALIZED;
+
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, retVal, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    NEO::KernelInfo kernelInfo{};
+    uint8_t kernelHeap[10]{};
+    kernelInfo.heapInfo.pKernelHeap = kernelHeap;
+    kernelInfo.heapInfo.kernelHeapSize = sizeof(kernelHeap);
+    kernelInfo.kernelDescriptor.kernelMetadata.kernelName = "kernel";
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs.resize(5);
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].type = NEO::ArgDescriptor::argTPointer; // arg buffer
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].as<NEO::ArgDescPointer>().bindful = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[0].as<NEO::ArgDescPointer>().bindless = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[1].type = NEO::ArgDescriptor::argTImage;   // arg image
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[2].type = NEO::ArgDescriptor::argTSampler; // arg sampler
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].type = NEO::ArgDescriptor::argTValue;   // arg immediate
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements.resize(3);
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[0].size = 4;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[0].sourceOffset = 0;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[1].size = 8;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[1].sourceOffset = 4;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[2].size = 4;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[3].as<NEO::ArgDescValue>().elements[2].sourceOffset = 12;
+
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[4].type = NEO::ArgDescriptor::argTPointer; // arg slm
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[4].getTraits().addressQualifier = NEO::KernelArgMetadata::AddrLocal;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[4].as<NEO::ArgDescPointer>().bindful = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[4].as<NEO::ArgDescPointer>().bindless = NEO::undefined<NEO::SurfaceStateHeapOffset>;
+
+    auto kernelImmutableData = std::make_unique<KernelImmutableData>(device);
+    auto mockIsaAllocation = std::make_unique<MockGraphicsAllocation>(reinterpret_cast<void *>(0x543000), 10);
+    mockIsaAllocation->setAllocationType(NEO::AllocationType::kernelIsa);
+    kernelImmutableData->setIsaPerKernelAllocation(mockIsaAllocation.release());
+    kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
+
+    std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
+    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+
+    Mock<::L0::KernelImp> kernel;
+    kernel.module = mockModule.get();
+    ze_kernel_desc_t desc = {ZE_STRUCTURE_TYPE_KERNEL_DESC};
+    desc.pKernelName = kernelInfo.kernelDescriptor.kernelMetadata.kernelName.c_str();
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel.initialize(&desc));
+    kernel.checkPassedArgumentValues = true;
+    kernel.useExplicitArgs = true;
+    kernel.passedArgumentValues.resize(5);
+
+    void *argBuffer = reinterpret_cast<void *>(0xDEADF00);
+    ze_image_handle_t argImage = reinterpret_cast<ze_image_handle_t>(0x1234F000);
+    ze_sampler_handle_t argSampler = reinterpret_cast<ze_sampler_handle_t>(0x1235F000);
+    uint8_t argImmediate[16]{};
+    size_t argSlm = 0x60;
+
+    void *arguments[] = {&argBuffer, &argImage, &argSampler, &argImmediate, &argSlm};
+    retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, arguments, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    EXPECT_EQ(sizeof(argBuffer), kernel.passedArgumentValues[0].size());
+    EXPECT_EQ(0, memcmp(&argBuffer, kernel.passedArgumentValues[0].data(), sizeof(argBuffer)));
+
+    EXPECT_EQ(sizeof(argImage), kernel.passedArgumentValues[1].size());
+    EXPECT_EQ(0, memcmp(&argImage, kernel.passedArgumentValues[1].data(), sizeof(argImage)));
+
+    EXPECT_EQ(sizeof(argSampler), kernel.passedArgumentValues[2].size());
+    EXPECT_EQ(0, memcmp(&argSampler, kernel.passedArgumentValues[2].data(), sizeof(argSampler)));
+
+    EXPECT_EQ(sizeof(argImmediate), kernel.passedArgumentValues[3].size()); // manually reduced by mock
+    EXPECT_EQ(0, memcmp(&argImmediate, kernel.passedArgumentValues[3].data(), sizeof(argImmediate)));
+
+    EXPECT_EQ(argSlm, kernel.passedArgumentValues[4].size());
+
+    EXPECT_EQ(groupSizes.groupSizeX, kernel.getGroupSize()[0]);
+    EXPECT_EQ(groupSizes.groupSizeY, kernel.getGroupSize()[1]);
+    EXPECT_EQ(groupSizes.groupSizeZ, kernel.getGroupSize()[2]);
+}
+
+TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenKernelWithoutArgumentsAndNullptrArgumentsPointerWhenAppendLaunchKernelWithArgumentsThenKernelIsAppendedWithoutError) {
+
+    const ze_group_count_t groupCounts{1, 2, 3};
+    const ze_group_size_t groupSizes{4, 5, 6};
+
+    auto retVal = ZE_RESULT_ERROR_UNINITIALIZED;
+
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, retVal, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    NEO::KernelInfo kernelInfo{};
+    uint8_t kernelHeap[10]{};
+    kernelInfo.heapInfo.pKernelHeap = kernelHeap;
+    kernelInfo.heapInfo.kernelHeapSize = sizeof(kernelHeap);
+    kernelInfo.kernelDescriptor.kernelMetadata.kernelName = "kernel";
+    kernelInfo.kernelDescriptor.payloadMappings.explicitArgs.resize(0);
+
+    auto kernelImmutableData = std::make_unique<KernelImmutableData>(device);
+    auto mockIsaAllocation = std::make_unique<MockGraphicsAllocation>(reinterpret_cast<void *>(0x543000), 10);
+    mockIsaAllocation->setAllocationType(NEO::AllocationType::kernelIsa);
+    kernelImmutableData->setIsaPerKernelAllocation(mockIsaAllocation.release());
+    kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
+
+    std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
+    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+
+    Mock<::L0::KernelImp> kernel;
+    kernel.module = mockModule.get();
+    ze_kernel_desc_t desc = {ZE_STRUCTURE_TYPE_KERNEL_DESC};
+    desc.pKernelName = kernelInfo.kernelDescriptor.kernelMetadata.kernelName.c_str();
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel.initialize(&desc));
+
+    retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, nullptr, nullptr, nullptr, 0, nullptr);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
+
+    EXPECT_EQ(groupSizes.groupSizeX, kernel.getGroupSize()[0]);
+    EXPECT_EQ(groupSizes.groupSizeY, kernel.getGroupSize()[1]);
+    EXPECT_EQ(groupSizes.groupSizeZ, kernel.getGroupSize()[2]);
 }
 
 } // namespace ult

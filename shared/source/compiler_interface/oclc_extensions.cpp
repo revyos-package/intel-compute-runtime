@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -88,13 +88,6 @@ void getOpenclCFeaturesList(const HardwareInfo &hwInfo, OpenClCFeaturesContainer
         }
     }
 
-    auto forcePipeSupport = debugManager.flags.ForcePipeSupport.get();
-    if ((hwInfo.capabilityTable.supportsPipes && (forcePipeSupport == -1)) ||
-        (forcePipeSupport == 1)) {
-        strcpy_s(openClCFeature.name, CL_NAME_VERSION_MAX_NAME_SIZE, "__opencl_c_pipes");
-        openclCFeatures.push_back(openClCFeature);
-    }
-
     auto forceFp64Support = debugManager.flags.OverrideDefaultFP64Settings.get();
     if ((hwInfo.capabilityTable.ftrSupportsFP64 && (forceFp64Support == -1)) ||
         (forceFp64Support == 1)) {
@@ -162,6 +155,8 @@ std::string getOclVersionCompilerInternalOption(unsigned int oclVersion) {
 cl_version getOclCExtensionVersion(std::string name, cl_version defaultVer) {
     if (name.compare("cl_khr_integer_dot_product") == 0) {
         return CL_MAKE_VERSION(2u, 0, 0);
+    } else if (name.compare("cl_intel_unified_shared_memory") == 0) {
+        return CL_MAKE_VERSION(1u, 1u, 0);
     } else if (name.compare("cl_khr_external_memory") == 0) {
         return CL_MAKE_VERSION(0, 9u, 1u);
     } else {

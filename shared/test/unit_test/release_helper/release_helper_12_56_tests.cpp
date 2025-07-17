@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -38,10 +38,8 @@ TEST_F(ReleaseHelper1256Tests, whenGettingCapabilitiesThenCorrectPropertiesAreRe
         EXPECT_FALSE(releaseHelper->isBindlessAddressingDisabled());
         EXPECT_TRUE(releaseHelper->isGlobalBindlessAllocatorEnabled());
         EXPECT_EQ(8u, releaseHelper->getNumThreadsPerEu());
-        EXPECT_EQ(0u, releaseHelper->getStackSizePerRay());
+        EXPECT_EQ(0u, releaseHelper->getAsyncStackSizePerRay());
         EXPECT_TRUE(releaseHelper->isRayTracingSupported());
-        EXPECT_FALSE(releaseHelper->isDisablingMsaaRequired());
-        EXPECT_TRUE(releaseHelper->isNumRtStacksPerDssFixedValue());
         EXPECT_FALSE(releaseHelper->getFtrXe2Compression());
     }
 }
@@ -72,6 +70,27 @@ TEST_F(ReleaseHelper1256Tests, whenIsLocalOnlyAllowedCalledThenTrueReturned) {
 
 TEST_F(ReleaseHelper1256Tests, whenIsDummyBlitWaRequiredCalledThenFalseReturned) {
     whenIsDummyBlitWaRequiredCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper1256Tests, whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned) {
+    whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned();
+}
+
+TEST_F(ReleaseHelper1256Tests, whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned) {
+    whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper1256Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey) {
+    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey();
+}
+
+TEST_F(ReleaseHelper1256Tests, whenIsPostImageWriteFlushRequiredCalledThenTrueReturned) {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        EXPECT_TRUE(releaseHelper->isPostImageWriteFlushRequired());
+    }
 }
 
 TEST_F(ReleaseHelper1256Tests, whenGettingPreferredSlmSizeThenAllEntriesHaveCorrectValues) {

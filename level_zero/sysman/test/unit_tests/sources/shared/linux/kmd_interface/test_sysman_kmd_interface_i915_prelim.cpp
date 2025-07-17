@@ -19,6 +19,8 @@
 
 #include "gtest/gtest.h"
 
+#include <unordered_set>
+
 namespace L0 {
 namespace Sysman {
 namespace ult {
@@ -54,16 +56,23 @@ static ssize_t mockReadFailure(int fd, void *buf, size_t count, off_t offset) {
 class SysmanFixtureDeviceI915Prelim : public SysmanDeviceFixture {
   protected:
     L0::Sysman::SysmanDevice *device = nullptr;
+    std::unique_ptr<MockPmuInterfaceImp> pPmuInterface;
 
     void SetUp() override {
+        VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
         SysmanDeviceFixture::SetUp();
         device = pSysmanDevice;
         pLinuxSysmanImp->pSysmanKmdInterface.reset(new SysmanKmdInterfaceI915Prelim(pLinuxSysmanImp->getSysmanProductHelper()));
         mockInitFsAccess();
+        pPmuInterface = std::make_unique<MockPmuInterfaceImp>(pLinuxSysmanImp);
+        pPmuInterface->pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+        VariableBackup<L0::Sysman::PmuInterface *> pmuBackup(&pLinuxSysmanImp->pPmuInterface);
+        pLinuxSysmanImp->pPmuInterface = pPmuInterface.get();
+        bool isIntegratedDevice = false;
+        pLinuxSysmanImp->pSysmanKmdInterface->setSysmanDeviceDirName(isIntegratedDevice);
     }
 
     void mockInitFsAccess() {
-        VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
         pLinuxSysmanImp->pSysmanKmdInterface->initFsAccessInterface(*pLinuxSysmanImp->getDrm());
     }
 
@@ -86,6 +95,29 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCalling
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCallingGetEngineBasePathThenCorrectPathIsReturned) {
     auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
     EXPECT_STREQ("engine", pSysmanKmdInterface->getEngineBasePath(0).c_str());
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceWhenCallingGetSysmanDeviceDirNameForDiscreteDeviceThenCorrectNameIsReturned) {
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    EXPECT_STREQ("i915_0000_03_00.0", pSysmanKmdInterface->getSysmanDeviceDirName().c_str());
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceAndReadSymLinkFailsWhenCallingGetSysmanDeviceDirNameForDiscreteDeviceThenEmptyStringIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkFailure);
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    bool isIntegratedDevice = false;
+    pSysmanKmdInterface->setSysmanDeviceDirName(isIntegratedDevice);
+    EXPECT_STREQ("", pSysmanKmdInterface->getSysmanDeviceDirName().c_str());
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceWhenCallingGetSysmanDeviceDirNameForIntegratedDeviceThenCorrectNameIsReturned) {
+
+    VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
+    auto pSysmanKmdInterface = std::make_unique<SysmanKmdInterfaceI915Prelim>(pLinuxSysmanImp->getSysmanProductHelper());
+    mockInitFsAccess();
+    bool isIntegratedDevice = true;
+    pSysmanKmdInterface->setSysmanDeviceDirName(isIntegratedDevice);
+    EXPECT_STREQ("i915", pSysmanKmdInterface->getSysmanDeviceDirName().c_str());
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceWhenGettingSysfsFileNamesThenProperPathsAreReturned) {
@@ -118,8 +150,20 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCalling
     EXPECT_EQ(SysfsValueUnit::milli, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNameSchedulerTimeout));
     EXPECT_EQ(SysfsValueUnit::milli, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNameSchedulerTimeslice));
     EXPECT_EQ(SysfsValueUnit::milli, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNameSchedulerWatchDogTimeout));
-    EXPECT_EQ(SysfsValueUnit::micro, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNameSustainedPowerLimit));
-    EXPECT_EQ(SysfsValueUnit::micro, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNameDefaultPowerLimit));
+    EXPECT_EQ(SysfsValueUnit::micro, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNamePackageSustainedPowerLimit));
+    EXPECT_EQ(SysfsValueUnit::micro, pSysmanKmdInterface->getNativeUnit(SysfsName::sysfsNamePackageDefaultPowerLimit));
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCallingGetPowerDomainsThenValidPowerDomainsAreReturned) {
+    auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
+
+    std::vector<zes_power_domain_t> validPowerDomains = {ZES_POWER_DOMAIN_PACKAGE};
+    auto powerDomains = pSysmanKmdInterface->getPowerDomains();
+
+    std::unordered_set<zes_power_domain_t> outputPowerDomainList(powerDomains.begin(), powerDomains.end());
+    std::unordered_set<zes_power_domain_t> validPowerDomainList(validPowerDomains.begin(), validPowerDomains.end());
+
+    EXPECT_EQ(validPowerDomainList, outputPowerDomainList);
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCheckingSupportForI915DriverThenProperStatusIsReturned) {
@@ -137,9 +181,11 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsIntegr
 
     VariableBackup<decltype(NEO::SysCalls::sysCallsPread)> mockPread(&NEO::SysCalls::sysCallsPread, &mockReadSuccess);
 
-    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
     bool isIntegratedDevice = true;
-    EXPECT_EQ(mockReadVal, pSysmanKmdInterface->getEventType(isIntegratedDevice));
+    pLinuxSysmanImp->pSysmanKmdInterface->setSysmanDeviceDirName(isIntegratedDevice);
+
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    EXPECT_EQ(mockReadVal, pSysmanKmdInterface->getEventType());
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotIntegratedDeviceWhenGetEventsIsCalledThenValidEventTypeIsReturned) {
@@ -148,8 +194,7 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotInt
     VariableBackup<decltype(NEO::SysCalls::sysCallsPread)> mockPread(&NEO::SysCalls::sysCallsPread, &mockReadSuccess);
 
     auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
-    bool isIntegratedDevice = false;
-    EXPECT_EQ(mockReadVal, pSysmanKmdInterface->getEventType(isIntegratedDevice));
+    EXPECT_EQ(mockReadVal, pSysmanKmdInterface->getEventType());
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotIntegratedDeviceAndReadSymLinkFailsWhenGetEventsIsCalledThenFailureIsReturned) {
@@ -157,8 +202,7 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotInt
     VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkFailure);
 
     auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
-    bool isIntegratedDevice = false;
-    EXPECT_EQ(0u, pSysmanKmdInterface->getEventType(isIntegratedDevice));
+    EXPECT_EQ(0u, pSysmanKmdInterface->getEventType());
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotIntegratedDeviceAndFsReadFailsWhenGetEventsIsCalledThenFailureIsReturned) {
@@ -166,8 +210,7 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndIsNotInt
     VariableBackup<decltype(NEO::SysCalls::sysCallsPread)> mockPread(&NEO::SysCalls::sysCallsPread, &mockReadFailure);
 
     auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
-    bool isIntegratedDevice = false;
-    EXPECT_EQ(0u, pSysmanKmdInterface->getEventType(isIntegratedDevice));
+    EXPECT_EQ(0u, pSysmanKmdInterface->getEventType());
 }
 
 TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCheckingAvailabilityOfFrequencyFilesThenTrueValueIsReturned) {
@@ -240,6 +283,38 @@ TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceWhenCalling
     auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
     EXPECT_STREQ("/sys/bus/pci/drivers/i915/bind", pSysmanKmdInterface->getGpuBindEntry().c_str());
     EXPECT_STREQ("/sys/bus/pci/drivers/i915/unbind", pSysmanKmdInterface->getGpuUnBindEntry().c_str());
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceWhenGetEnergyCounterNodeFileIsCalledForDifferentPowerDomainsThenProperPathIsReturned) {
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    std::string expectedFilePath = "energy1_input";
+    EXPECT_EQ(expectedFilePath, pSysmanKmdInterface->getEnergyCounterNodeFile(ZES_POWER_DOMAIN_PACKAGE));
+    expectedFilePath = "";
+    EXPECT_EQ(expectedFilePath, pSysmanKmdInterface->getEnergyCounterNodeFile(ZES_POWER_DOMAIN_CARD));
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndPmuFailsDueToTooManyFilesOpenWhenGetEngineActivityFdListIsCalledThenErrorIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
+    VariableBackup<decltype(NEO::SysCalls::sysCallsPread)> mockPread(&NEO::SysCalls::sysCallsPread, &mockReadSuccess);
+
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    std::vector<std::pair<int64_t, int64_t>> fdList = {};
+    std::pair<uint64_t, uint64_t> configPair = {};
+    pPmuInterface->mockErrorNumber = EMFILE;
+    pPmuInterface->mockPerfEventOpenReadFail = true;
+    EXPECT_EQ(pSysmanKmdInterface->getEngineActivityFdListAndConfigPair(ZES_ENGINE_GROUP_ALL, 0, 0, pPmuInterface.get(), fdList, configPair), ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE);
+}
+
+TEST_F(SysmanFixtureDeviceI915Prelim, GivenSysmanKmdInterfaceInstanceAndPmuOpenFailsDueToFileTableOverFlowWhenGetEngineActivityFdListIsCalledThenErrorIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
+    VariableBackup<decltype(NEO::SysCalls::sysCallsPread)> mockPread(&NEO::SysCalls::sysCallsPread, &mockReadSuccess);
+
+    auto pSysmanKmdInterface = pLinuxSysmanImp->pSysmanKmdInterface.get();
+    std::vector<std::pair<int64_t, int64_t>> fdList = {};
+    std::pair<uint64_t, uint64_t> configPair = {};
+    pPmuInterface->mockErrorNumber = ENFILE;
+    pPmuInterface->mockPerfEventOpenReadFail = true;
+    EXPECT_EQ(pSysmanKmdInterface->getEngineActivityFdListAndConfigPair(ZES_ENGINE_GROUP_ALL, 0, 0, pPmuInterface.get(), fdList, configPair), ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE);
 }
 
 } // namespace ult

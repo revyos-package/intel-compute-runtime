@@ -1,12 +1,12 @@
 /*
- * Copyright (C) 2018-2023 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #pragma once
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +15,7 @@ namespace NEO {
 class GraphicsAllocation;
 class ProductHelper;
 
-bool isL3Capable(void *ptr, size_t size);
+bool isL3Capable(const void *ptr, size_t size);
 bool isL3Capable(const GraphicsAllocation &graphicsAllocation);
 
 template <PRODUCT_FAMILY gfxProduct>

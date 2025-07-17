@@ -73,6 +73,9 @@ const char *getBuiltinAsString(EBuiltInOps::Type builtin) {
         return "fill_image3d.builtin_kernel";
     case EBuiltInOps::queryKernelTimestamps:
         return "copy_kernel_timestamps.builtin_kernel";
+    case EBuiltInOps::fillImage1dBuffer:
+    case EBuiltInOps::fillImage1dBufferHeapless:
+        return "fill_image1d_buffer.builtin_kernel";
     };
 }
 
@@ -103,11 +106,13 @@ StackVec<std::string, 3> getBuiltinResourceNames(EBuiltInOps::Type builtin, Buil
 
     std::string_view addressingModePrefix = "";
     if (type == BuiltinCode::ECodeType::binary) {
+        const bool heaplessEnabled = EBuiltInOps::isHeapless(builtin);
         const bool requiresStatelessAddressing = (false == productHelper.isStatefulAddressingModeSupported());
         const bool builtInUsesStatelessAddressing = EBuiltInOps::isStateless(builtin);
-        const bool heaplessEnabled = EBuiltInOps::isHeapless(builtin);
-        if (builtInUsesStatelessAddressing || requiresStatelessAddressing) {
-            addressingModePrefix = heaplessEnabled ? "stateless_heapless_" : "stateless_";
+        if (heaplessEnabled) {
+            addressingModePrefix = "heapless_";
+        } else if (builtInUsesStatelessAddressing || requiresStatelessAddressing) {
+            addressingModePrefix = "stateless_";
         } else if (ApiSpecificConfig::getBindlessMode(device)) {
             addressingModePrefix = "bindless_";
         } else {

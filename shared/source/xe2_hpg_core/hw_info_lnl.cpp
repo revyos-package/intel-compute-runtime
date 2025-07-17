@@ -45,9 +45,9 @@ const RuntimeCapabilityTable LNL::capabilityTable{
     aub_stream::ENGINE_CCS,                                    // defaultEngineType
     0,                                                         // maxRenderFrequency
     30,                                                        // clVersionSupport
-    CmdServicesMemTraceVersion::DeviceValues::Lnl,             // aubDeviceId
+    AubMemDump::CmdServicesMemTraceVersion::DeviceValues::Lnl, // aubDeviceId
     0,                                                         // extraQuantityThreadsPerEU
-    128,                                                       // slmSize
+    128,                                                       // maxProgrammableSlmSize
     sizeof(LNL::GRF),                                          // grfSize
     64,                                                        // timestampValidBits
     64,                                                        // kernelTimestampValidBits
@@ -56,23 +56,15 @@ const RuntimeCapabilityTable LNL::capabilityTable{
     true,                                                      // ftrSupportsFP64
     false,                                                     // ftrSupportsFP64Emulation
     true,                                                      // ftrSupports64BitMath
-    true,                                                      // ftrSvm
     false,                                                     // ftrSupportsCoherency
-    false,                                                     // ftrSupportsVmeAvcTextureSampler
-    false,                                                     // ftrSupportsVmeAvcPreemption
     false,                                                     // ftrRenderCompressedBuffers
     false,                                                     // ftrRenderCompressedImages
-    true,                                                      // ftr64KBpages
     true,                                                      // instrumentationEnabled
-    false,                                                     // supportsVme
     false,                                                     // supportCacheFlushAfterWalker
     true,                                                      // supportsImages
-    false,                                                     // supportsDeviceEnqueue
-    false,                                                     // supportsPipes
     true,                                                      // supportsOcl21Features
     true,                                                      // supportsOnDemandPageFaults
     true,                                                      // supportsIndependentForwardProgress
-    false,                                                     // hostPtrTrackingEnabled
     true,                                                      // isIntegratedDevice
     false,                                                     // supportsMediaBlock
     false,                                                     // p2pAccessSupported
@@ -95,6 +87,8 @@ void LNL::setupFeatureAndWorkaroundTable(HardwareInfo *hwInfo, const ReleaseHelp
     featureTable->flags.ftrPml5Support = true;
 
     featureTable->ftrBcsInfo = 1;
+    hwInfo->workaroundTable.flags.wa_14018976079 = true;
+    hwInfo->workaroundTable.flags.wa_14018984349 = true;
 }
 
 FeatureTable LNL::featureTable{};

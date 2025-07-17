@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,6 +8,7 @@
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/string.h"
 #include "shared/source/program/print_formatter.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
 #include "shared/test/common/mocks/mock_kernel_info.h"
 
@@ -489,8 +490,13 @@ class PrintfNoArgumentsTest : public PrintFormatterTest,
 // automatic code would have to do the same thing it is testing and therefore would be prone to mistakes
 // this is needed because compiler doesn't escape the format strings and provides them exactly as they were typed in kernel source
 std::pair<std::string, std::string> stringValues[] = {
-    {R"(test)", "test"},
-    {R"(test\n)", "test\n"},
+    {R"(test)", R"(test)"},
+    {R"(test\n)", R"(test\n)"},
+    {R"(test\\n)", R"(test\\n)"},
+    {R"(test\\\n)", R"(test\\\n)"},
+    {R"(test\t)", R"(test\t)"},
+    {R"(test\\t)", R"(test\\t)"},
+    {R"(test\\\t)", R"(test\\\t)"},
 };
 
 TEST_P(PrintfNoArgumentsTest, GivenNoArgumentsWhenPrintingThenCharsAreEscaped) {
@@ -502,7 +508,6 @@ TEST_P(PrintfNoArgumentsTest, GivenNoArgumentsWhenPrintingThenCharsAreEscaped) {
     char actualOutput[maxPrintfOutputLength];
 
     printFormatter->printKernelOutput([&actualOutput](char *str) { strncpy_s(actualOutput, maxPrintfOutputLength, str, maxPrintfOutputLength - 1); });
-
     EXPECT_STREQ(input.second.c_str(), actualOutput);
 }
 
@@ -1005,9 +1010,10 @@ TEST_F(PrintFormatterTest, GivenTypeSmallerThan4BThenItIsReadAs4BValue) {
 }
 
 TEST(printToStdoutTest, GivenStringWhenPrintingToStdoutThenOutputOccurs) {
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     printToStdout("test");
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     EXPECT_STREQ("test", output.c_str());
 }
 

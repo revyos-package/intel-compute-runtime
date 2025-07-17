@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,7 +8,6 @@
 #include "shared/source/gen_common/reg_configs_common.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
-#include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_gmm_resource_info.h"
 #include "shared/test/common/test_macros/test.h"
 
@@ -22,6 +21,7 @@
 using namespace NEO;
 
 class EnqueueFillImageTest : public EnqueueFillImageTestFixture,
+                             public SurfaceStateAccessor,
                              public ::testing::Test {
   public:
     void SetUp(void) override {
@@ -41,7 +41,13 @@ HWTEST_F(EnqueueFillImageTest, WhenFillingImageThenTaskCountIsAlignedWithCsr) {
 
     EnqueueFillImageHelper<>::enqueueFillImage(pCmdQ, image);
     EXPECT_EQ(csr.peekTaskCount(), pCmdQ->taskCount);
-    EXPECT_EQ(csr.peekTaskLevel(), pCmdQ->taskLevel + 1);
+
+    auto cmdQTaskLevel = pCmdQ->taskLevel;
+    if (!csr.isUpdateTagFromWaitEnabled()) {
+        cmdQTaskLevel++;
+    }
+
+    EXPECT_EQ(csr.peekTaskLevel(), cmdQTaskLevel);
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueFillImageTest, WhenFillingImageThenGpgpuWalkerIsCorrect) {
@@ -194,12 +200,11 @@ HWTEST_F(EnqueueFillImageTest, WhenFillingImageThenSurfaceStateIsCorrect) {
     auto mockCmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, pClDevice, nullptr);
     VariableBackup<CommandQueue *> cmdQBackup(&pCmdQ, mockCmdQ.get());
     mockCmdQ->storeMultiDispatchInfo = true;
+
     enqueueFillImage<FamilyType>();
 
-    const auto &kernelInfo = mockCmdQ->storedMultiDispatchInfo.begin()->getKernel()->getKernelInfo();
-    uint32_t index = static_cast<uint32_t>(kernelInfo.getArgDescriptorAt(0).template as<ArgDescImage>().bindful) / sizeof(RENDER_SURFACE_STATE);
+    const auto surfaceState = SurfaceStateAccessor::getSurfaceState<FamilyType>(mockCmdQ, 0);
 
-    const auto surfaceState = getSurfaceState<FamilyType>(&pCmdQ->getIndirectHeap(IndirectHeap::Type::surfaceState, 0), index);
     const auto &imageDesc = image->getImageDesc();
     EXPECT_EQ(imageDesc.image_width, surfaceState->getWidth());
     EXPECT_EQ(imageDesc.image_height, surfaceState->getHeight());
@@ -210,7 +215,43 @@ HWTEST_F(EnqueueFillImageTest, WhenFillingImageThenSurfaceStateIsCorrect) {
     EXPECT_EQ(image->getGraphicsAllocation(pClDevice->getRootDeviceIndex())->getGpuAddress(), surfaceState->getSurfaceBaseAddress());
 }
 
-HWTEST2_F(EnqueueFillImageTest, WhenFillingImageThenNumberOfPipelineSelectsIsOne, IsAtMostXeHpcCore) {
+HWTEST_F(EnqueueFillImageTest, WhenFillingImage1dBufferThenCorrectBuitInIsSelected) {
+    auto mockCmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, pClDevice, nullptr);
+    VariableBackup<CommandQueue *> cmdQBackup(&pCmdQ, mockCmdQ.get());
+
+    std::unique_ptr<Image> image1dBuffer;
+    image1dBuffer.reset(Image1dBufferHelperUlt<>::create(context));
+    VariableBackup<Image *> imageBackup(&image, image1dBuffer.get());
+
+    mockCmdQ->storeMultiDispatchInfo = true;
+    enqueueFillImage<FamilyType>();
+
+    const auto &kernelInfo = mockCmdQ->storedMultiDispatchInfo.begin()->getKernel()->getKernelInfo();
+    EXPECT_TRUE(kernelInfo.kernelDescriptor.kernelMetadata.kernelName == "FillImage1dBuffer");
+}
+
+HWTEST_F(EnqueueFillImageTest, givenHeaplessWhenFillingImage1dBufferThenCorrectBuitInIsSelected) {
+    bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
+    if (!heaplessAllowed) {
+        GTEST_SKIP();
+    }
+
+    auto mockCmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, pClDevice, nullptr);
+    VariableBackup<CommandQueue *> cmdQBackup(&pCmdQ, mockCmdQ.get());
+
+    std::unique_ptr<Image> image1dBuffer;
+    image1dBuffer.reset(Image1dBufferHelperUlt<>::create(context));
+    VariableBackup<Image *> imageBackup(&image, image1dBuffer.get());
+
+    mockCmdQ->storeMultiDispatchInfo = true;
+    mockCmdQ->heaplessModeEnabled = true;
+    enqueueFillImage<FamilyType>();
+
+    const auto &kernelInfo = mockCmdQ->storedMultiDispatchInfo.begin()->getKernel()->getKernelInfo();
+    EXPECT_TRUE(kernelInfo.kernelDescriptor.kernelMetadata.kernelName == "FillImage1dBuffer");
+}
+
+HWTEST2_F(EnqueueFillImageTest, WhenFillingImageThenNumberOfPipelineSelectsIsOne, IsAtMostXeCore) {
     enqueueFillImage<FamilyType>();
     int numCommands = getNumberOfPipelineSelectsThatEnablePipelineSelect<FamilyType>();
     EXPECT_EQ(1, numCommands);

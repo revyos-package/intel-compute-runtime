@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,7 +14,7 @@
 
 namespace NEO {
 class GmmClientContext;
-class GmmResourceInfo : NonCopyableOrMovableClass {
+class GmmResourceInfo : NonCopyableAndNonMovableClass {
   public:
     static GmmResourceInfo *create(GmmClientContext *clientContext, GMM_RESCREATE_PARAMS *resourceCreateParams);
 
@@ -36,7 +36,7 @@ class GmmResourceInfo : NonCopyableOrMovableClass {
 
     MOCKABLE_VIRTUAL size_t getRenderPitch() { return static_cast<size_t>(resourceInfo->GetRenderPitch()); }
 
-    MOCKABLE_VIRTUAL uint64_t getDriverProtectionBits();
+    MOCKABLE_VIRTUAL uint64_t getDriverProtectionBits(uint32_t overrideUsage);
 
     MOCKABLE_VIRTUAL uint32_t getNumSamples() { return resourceInfo->GetNumSamples(); }
 

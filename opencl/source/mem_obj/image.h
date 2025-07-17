@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -87,7 +87,7 @@ class Image : public MemObj {
 
     static Image *createSharedImage(Context *context, SharingHandler *sharingHandler, const McsSurfaceInfo &mcsSurfaceInfo,
                                     MultiGraphicsAllocation multiGraphicsAllocation, GraphicsAllocation *mcsAllocation,
-                                    cl_mem_flags flags, cl_mem_flags_intel flagsIntel, const ClSurfaceFormatInfo *surfaceFormat, ImageInfo &imgInfo, uint32_t cubeFaceIndex, uint32_t baseMipLevel, uint32_t mipCount);
+                                    cl_mem_flags flags, cl_mem_flags_intel flagsIntel, const ClSurfaceFormatInfo *surfaceFormat, ImageInfo &imgInfo, uint32_t cubeFaceIndex, uint32_t baseMipLevel, uint32_t mipCount, bool hasUnifiedMcsSurface);
 
     static cl_int validate(Context *context,
                            const MemoryProperties &memoryProperties,
@@ -209,6 +209,7 @@ class Image : public MemObj {
 
     static bool validateHandleType(MemoryProperties &memoryProperties, UnifiedSharingMemoryDescription &extMem);
     void setAs3DUavOrRtvImage(bool isUavOrRtv);
+    void setIsPackedFormat(bool isPackedFormat) { this->isPackedFormat = isPackedFormat; }
 
   protected:
     Image(Context *context,
@@ -249,6 +250,7 @@ class Image : public MemObj {
     uint32_t mipCount = 1;
     GMM_YUV_PLANE_ENUM plane = GMM_NO_PLANE;
     bool is3DUAVOrRTV = false;
+    bool isPackedFormat = false;
 
     static bool isValidSingleChannelFormat(const cl_image_format *imageFormat);
     static bool isValidIntensityFormat(const cl_image_format *imageFormat);

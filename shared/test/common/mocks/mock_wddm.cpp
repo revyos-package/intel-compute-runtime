@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -226,10 +226,10 @@ void *WddmMock::lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResident
     return ptr;
 }
 
-void WddmMock::unlockResource(const D3DKMT_HANDLE &handle) {
+void WddmMock::unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock) {
     unlockResult.called++;
     unlockResult.success = true;
-    Wddm::unlockResource(handle);
+    Wddm::unlockResource(handle, applyMakeResidentPriorToLock);
 }
 
 void WddmMock::kmDafLock(D3DKMT_HANDLE handle) {
@@ -330,6 +330,7 @@ volatile uint64_t *WddmMock::getPagingFenceAddress() {
 
 void WddmMock::waitOnPagingFenceFromCpu(bool isKmdWaitNeeded) {
     waitOnPagingFenceFromCpuResult.called++;
+    waitOnPagingFenceFromCpuResult.isKmdWaitNeededPassed = isKmdWaitNeeded;
     Wddm::waitOnPagingFenceFromCpu(isKmdWaitNeeded);
 }
 

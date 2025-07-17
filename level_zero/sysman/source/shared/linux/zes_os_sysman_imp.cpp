@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -61,6 +61,7 @@ ze_result_t LinuxSysmanImp::init() {
     if (result != ZE_RESULT_SUCCESS) {
         return result;
     }
+    pSysmanKmdInterface->setSysmanDeviceDirName(getSysmanDeviceImp()->getRootDeviceEnvironment().getHardwareInfo()->capabilityTable.isIntegratedDevice);
     pFsAccess = pSysmanKmdInterface->getFsAccess();
     pProcfsAccess = pSysmanKmdInterface->getProcFsAccess();
     pSysfsAccess = pSysmanKmdInterface->getSysFsAccess();
@@ -341,50 +342,6 @@ void LinuxSysmanImp::clearHPIE(int fd) {
     NEO::sleep(std::chrono::seconds(10)); // Sleep for 10seconds just to make sure the change is propagated.
 }
 
-// Function to adjust VF BAR size i.e Modify VF BAR Control register.
-// size param is an encoded value described as follows:
-// 0  - 1 MB (2^20 bytes)
-// 1  - 2 MB (2^21 bytes)
-// 2  - 4 MB (2^22 bytes)
-// 3  - 8 MB (2^23 bytes)
-// .
-// .
-// .
-// b  - 2 GB (2^31 bytes)
-// 43 - 8 EB (2^63 bytes)
-ze_result_t LinuxSysmanImp::resizeVfBar(uint8_t size) {
-    std::string pciConfigNode;
-    pciConfigNode = gtDevicePath + "/config";
-
-    auto fdConfig = NEO::FileDescriptor(pciConfigNode.c_str(), O_RDWR);
-    if (fdConfig < 0) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                              "Config node open failed\n");
-        return ZE_RESULT_ERROR_UNKNOWN;
-    }
-    std::unique_ptr<uint8_t[]> configMemory = std::make_unique<uint8_t[]>(PCI_CFG_SPACE_EXP_SIZE);
-    memset(configMemory.get(), 0, PCI_CFG_SPACE_EXP_SIZE);
-    if (this->preadFunction(fdConfig, configMemory.get(), PCI_CFG_SPACE_EXP_SIZE, 0) < 0) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                              "Read to get config space failed\n");
-        return ZE_RESULT_ERROR_UNKNOWN;
-    }
-    auto reBarCapPos = L0::Sysman::LinuxPciImp::getRebarCapabilityPos(configMemory.get(), true);
-    if (!reBarCapPos) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                              "VF BAR capability not found\n");
-        return ZE_RESULT_ERROR_UNKNOWN;
-    }
-
-    auto barSizePos = reBarCapPos + PCI_REBAR_CTRL + 1; // position of VF(0) BAR SIZE.
-    if (this->pwriteFunction(fdConfig, &size, 0x01, barSizePos) < 0) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                              "Write to change VF bar size failed\n");
-        return ZE_RESULT_ERROR_UNKNOWN;
-    }
-    return ZE_RESULT_SUCCESS;
-}
-
 // A 'warm reset' is a conventional reset that is triggered across a PCI express link.
 // A warm reset is triggered either when a link is forced into electrical idle or
 // by sending TS1 and TS2 ordered sets with the hot reset bit set.
@@ -443,33 +400,6 @@ ze_result_t LinuxSysmanImp::osWarmReset() {
     }
     NEO::sleep(std::chrono::seconds(10)); // Sleep for 10seconds, allows the rescan to complete on all devices attached to the root port.
 
-    // PCIe port driver uses the BIOS allocated VF bars on bootup. A known bug exists in pcie port driver
-    // and is causing VF bar allocation failure in PCIe port driver after an SBR - https://bugzilla.kernel.org/show_bug.cgi?id=216795
-
-    // WA to adjust VF bar size to 2GB. The default VF bar size is 8GB and for 63VFs, 504GB need to be allocated which is failing on SBR.
-    // When configured VF bar size to 2GB, an allocation of 126GB is successful. This WA resizes VF0 bar to 2GB. Once pcie port driver
-    // issue is resolved, this WA may not be necessary. Description for 0xb is explained at function definition - resizeVfVar.
-    if (NEO::debugManager.flags.VfBarResourceAllocationWa.get()) {
-        if (ZE_RESULT_SUCCESS != (result = resizeVfBar(0xb))) {
-            return result;
-        }
-
-        result = pFsAccess->write(devicePath + '/' + "remove", "1");
-        if (ZE_RESULT_SUCCESS != result) {
-            NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                                  "Card Bus remove after resizing VF bar failed\n");
-            return result;
-        }
-        NEO::sleep(std::chrono::seconds(10)); // Sleep for 10seconds to make sure that the config spaces of all devices are saved correctly.
-
-        result = pFsAccess->write(rootPortPath + '/' + "rescan", "1");
-        if (ZE_RESULT_SUCCESS != result) {
-            NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stdout,
-                                  "Rescanning root port failed after resizing VF bar failed\n");
-            return result;
-        }
-        NEO::sleep(std::chrono::seconds(10)); // Sleep for 10seconds, allows the rescan to complete on all devices attached to the root port.
-    }
     return result;
 }
 
@@ -564,6 +494,100 @@ bool LinuxSysmanImp::getTelemData(uint32_t subDeviceId, std::string &telemDir, s
     pTelemData->guid = guid;
     mapOfSubDeviceIdToTelemData[subDeviceId] = std::move(pTelemData);
     return true;
+}
+
+void LinuxSysmanImp::getDeviceUuids(std::vector<std::string> &deviceUuids) {
+    constexpr uint32_t rootDeviceCount = 1;
+    uint32_t totalUuidCountForDevice = this->getSubDeviceCount() + rootDeviceCount;
+    deviceUuids.clear();
+    for (uint32_t index = 0; index < totalUuidCountForDevice; index++) {
+        std::array<uint8_t, NEO::ProductHelper::uuidSize> deviceUuid{};
+        bool uuidValid = this->getUuidFromSubDeviceInfo(index, deviceUuid);
+        if (uuidValid) {
+            uint8_t uuid[ZE_MAX_DEVICE_UUID_SIZE] = {};
+            std::copy_n(std::begin(deviceUuid), ZE_MAX_DEVICE_UUID_SIZE, std::begin(uuid));
+            std::string uuidString(reinterpret_cast<char const *>(uuid));
+            deviceUuids.push_back(uuidString);
+        }
+    }
+}
+
+bool LinuxSysmanImp::generateUuidFromPciAndSubDeviceInfo(uint32_t subDeviceID, const NEO::PhysicalDevicePciBusInfo &pciBusInfo, std::array<uint8_t, NEO::ProductHelper::uuidSize> &uuid) {
+    if (pciBusInfo.pciDomain != NEO::PhysicalDevicePciBusInfo::invalidValue) {
+        uuid.fill(0);
+
+        // Device UUID uniquely identifies a device within a system.
+        // We generate it based on device information along with PCI information
+        // This guarantees uniqueness of UUIDs on a system even when multiple
+        // identical Intel GPUs are present.
+
+        // We want to have UUID matching between different GPU APIs (including outside
+        // of compute_runtime project - i.e. other than L0 or OCL). This structure definition
+        // has been agreed upon by various Intel driver teams.
+        //
+        // Consult other driver teams before changing this.
+        //
+
+        struct DeviceUUID {
+            uint16_t vendorID;
+            uint16_t deviceID;
+            uint16_t revisionID;
+            uint16_t pciDomain;
+            uint8_t pciBus;
+            uint8_t pciDev;
+            uint8_t pciFunc;
+            uint8_t reserved[4];
+            uint8_t subDeviceID;
+        };
+
+        auto &hwInfo = getParentSysmanDeviceImp()->getHardwareInfo();
+        DeviceUUID deviceUUID = {};
+        deviceUUID.vendorID = 0x8086; // Intel
+        deviceUUID.deviceID = hwInfo.platform.usDeviceID;
+        deviceUUID.revisionID = hwInfo.platform.usRevId;
+        deviceUUID.pciDomain = static_cast<uint16_t>(pciBusInfo.pciDomain);
+        deviceUUID.pciBus = static_cast<uint8_t>(pciBusInfo.pciBus);
+        deviceUUID.pciDev = static_cast<uint8_t>(pciBusInfo.pciDevice);
+        deviceUUID.pciFunc = static_cast<uint8_t>(pciBusInfo.pciFunction);
+        deviceUUID.subDeviceID = subDeviceID;
+
+        static_assert(sizeof(DeviceUUID) == NEO::ProductHelper::uuidSize);
+
+        memcpy_s(uuid.data(), NEO::ProductHelper::uuidSize, &deviceUUID, sizeof(DeviceUUID));
+
+        return true;
+    }
+    return false;
+}
+
+bool LinuxSysmanImp::getUuidFromSubDeviceInfo(uint32_t subDeviceID, std::array<uint8_t, NEO::ProductHelper::uuidSize> &uuid) {
+    auto subDeviceCount = getSubDeviceCount();
+    if (uuidVec.size() == 0) {
+        constexpr uint32_t rootDeviceCount = 1;
+        uuidVec.resize(subDeviceCount + rootDeviceCount);
+    }
+    if (getParentSysmanDeviceImp()->getRootDeviceEnvironment().osInterface != nullptr) {
+        auto driverModel = getParentSysmanDeviceImp()->getRootDeviceEnvironment().osInterface->getDriverModel();
+        auto &gfxCoreHelper = getParentSysmanDeviceImp()->getRootDeviceEnvironment().getHelper<NEO::GfxCoreHelper>();
+        auto &productHelper = getParentSysmanDeviceImp()->getRootDeviceEnvironment().getHelper<NEO::ProductHelper>();
+        if (NEO::debugManager.flags.EnableChipsetUniqueUUID.get() != 0) {
+            if (gfxCoreHelper.isChipsetUniqueUUIDSupported()) {
+                auto hwDeviceId = getSysmanHwDeviceIdInstance();
+                this->uuidVec[subDeviceID].isValid = productHelper.getUuid(driverModel, subDeviceCount, subDeviceID, this->uuidVec[subDeviceID].id);
+            }
+        }
+
+        if (!this->uuidVec[subDeviceID].isValid) {
+            NEO::PhysicalDevicePciBusInfo pciBusInfo = driverModel->getPciBusInfo();
+            this->uuidVec[subDeviceID].isValid = generateUuidFromPciAndSubDeviceInfo(subDeviceID, pciBusInfo, this->uuidVec[subDeviceID].id);
+        }
+
+        if (this->uuidVec[subDeviceID].isValid) {
+            uuid = this->uuidVec[subDeviceID].id;
+        }
+    }
+
+    return this->uuidVec[subDeviceID].isValid;
 }
 
 OsSysman *OsSysman::create(SysmanDeviceImp *pParentSysmanDeviceImp) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -45,7 +45,7 @@ GEN12LPTEST_F(Gen12LpDeviceCaps, givenHwInfoWhenRequestedComputeUnitsUsedForScra
 }
 
 GEN12LPTEST_F(Gen12LpDeviceCaps, givenHwInfoWhenSlmSizeIsRequiredThenReturnCorrectValue) {
-    EXPECT_EQ(64u, pDevice->getHardwareInfo().capabilityTable.slmSize);
+    EXPECT_EQ(64u, pDevice->getHardwareInfo().capabilityTable.maxProgrammableSlmSize);
 }
 
 GEN12LPTEST_F(Gen12LpDeviceCaps, givenGen12LpWhenCheckBlitterOperationsSupportThenReturnFalse) {
@@ -66,18 +66,6 @@ GEN12LPTEST_F(Gen12LpDeviceCaps, givenGen12LpWhenCheckingCoherencySupportThenRet
 
 HWTEST2_F(Gen12LpDeviceCaps, givenTglLpWhenCheckSupportCacheFlushAfterWalkerThenFalse, IsTGLLP) {
     EXPECT_FALSE(pDevice->getHardwareInfo().capabilityTable.supportCacheFlushAfterWalker);
-}
-
-GEN12LPTEST_F(Gen12LpDeviceCaps, givenGen12LpDeviceWhenCheckingDeviceEnqueueSupportThenFalseIsReturned) {
-    EXPECT_FALSE(pDevice->getHardwareInfo().capabilityTable.supportsDeviceEnqueue);
-}
-
-GEN12LPTEST_F(Gen12LpDeviceCaps, givenGen12LpDeviceWhenCheckingPipesSupportThenFalseIsReturned) {
-    EXPECT_FALSE(pDevice->getHardwareInfo().capabilityTable.supportsPipes);
-}
-
-HWTEST2_F(Gen12LpDeviceCaps, GivenTGLLPWhenCheckftr64KBpagesThenTrue, IsTGLLP) {
-    EXPECT_TRUE(pDevice->getHardwareInfo().capabilityTable.ftr64KBpages);
 }
 
 HWTEST2_F(Gen12LpDeviceCaps, givenGen12lpWhenCheckFtrSupportsInteger64BitAtomicsThenReturnTrue, IsTGLLP) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -18,7 +18,6 @@ void HardwareParse::findHardwareCommands(IndirectHeap *dsh) {
     using STATE_BASE_ADDRESS = typename FamilyType::STATE_BASE_ADDRESS;
     using MEDIA_INTERFACE_DESCRIPTOR_LOAD = typename FamilyType::MEDIA_INTERFACE_DESCRIPTOR_LOAD;
     using MEDIA_VFE_STATE = typename FamilyType::MEDIA_VFE_STATE;
-    using INTERFACE_DESCRIPTOR_DATA = typename FamilyType::INTERFACE_DESCRIPTOR_DATA;
     using MI_BATCH_BUFFER_START = typename FamilyType::MI_BATCH_BUFFER_START;
     using MI_LOAD_REGISTER_IMM = typename FamilyType::MI_LOAD_REGISTER_IMM;
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
@@ -80,13 +79,16 @@ void HardwareParse::findHardwareCommands(IndirectHeap *dsh) {
     }
 
     // interfaceDescriptorData should be located within dynamicStateHeap
-    if (cmdMIDL && cmdSBA) {
-        auto iddStart = cmdMIDL->getInterfaceDescriptorDataStartAddress();
-        auto iddEnd = iddStart + cmdMIDL->getInterfaceDescriptorTotalLength();
-        ASSERT_LE(iddEnd, cmdSBA->getDynamicStateBufferSize() * MemoryConstants::pageSize);
+    if constexpr (!FamilyType::isHeaplessRequired()) {
+        using INTERFACE_DESCRIPTOR_DATA = typename FamilyType::INTERFACE_DESCRIPTOR_DATA;
+        if (cmdMIDL && cmdSBA) {
+            auto iddStart = cmdMIDL->getInterfaceDescriptorDataStartAddress();
+            auto iddEnd = iddStart + cmdMIDL->getInterfaceDescriptorTotalLength();
+            ASSERT_LE(iddEnd, cmdSBA->getDynamicStateBufferSize() * MemoryConstants::pageSize);
 
-        // Extract the interfaceDescriptorData
-        cmdInterfaceDescriptorData = (INTERFACE_DESCRIPTOR_DATA *)(dynamicStateHeap + iddStart);
+            // Extract the interfaceDescriptorData
+            cmdInterfaceDescriptorData = (INTERFACE_DESCRIPTOR_DATA *)(dynamicStateHeap + iddStart);
+        }
     }
 }
 
@@ -126,26 +128,49 @@ const void *HardwareParse::getStatelessArgumentPointer(const KernelInfo &kernelI
 
 template <typename FamilyType>
 const typename FamilyType::RENDER_SURFACE_STATE *HardwareParse::getSurfaceState(IndirectHeap *ssh, uint32_t index) {
-    typedef typename FamilyType::BINDING_TABLE_STATE BINDING_TABLE_STATE;
-    typedef typename FamilyType::INTERFACE_DESCRIPTOR_DATA INTERFACE_DESCRIPTOR_DATA;
-    typedef typename FamilyType::RENDER_SURFACE_STATE RENDER_SURFACE_STATE;
-    typedef typename FamilyType::STATE_BASE_ADDRESS STATE_BASE_ADDRESS;
+    if constexpr (!FamilyType::isHeaplessRequired()) {
+        typedef typename FamilyType::BINDING_TABLE_STATE BINDING_TABLE_STATE;
+        typedef typename FamilyType::INTERFACE_DESCRIPTOR_DATA INTERFACE_DESCRIPTOR_DATA;
+        typedef typename FamilyType::RENDER_SURFACE_STATE RENDER_SURFACE_STATE;
+        typedef typename FamilyType::STATE_BASE_ADDRESS STATE_BASE_ADDRESS;
 
-    const auto &interfaceDescriptorData = *(INTERFACE_DESCRIPTOR_DATA *)cmdInterfaceDescriptorData;
+        const auto &interfaceDescriptorData = *(INTERFACE_DESCRIPTOR_DATA *)cmdInterfaceDescriptorData;
 
-    auto cmdSBA = (STATE_BASE_ADDRESS *)cmdStateBaseAddress;
-    auto surfaceStateHeap = cmdSBA->getSurfaceStateBaseAddress();
-    if (ssh && (ssh->getHeapGpuBase() == surfaceStateHeap)) {
-        surfaceStateHeap = reinterpret_cast<uint64_t>(ssh->getCpuBase());
+        auto cmdSBA = (STATE_BASE_ADDRESS *)cmdStateBaseAddress;
+        auto surfaceStateHeap = cmdSBA->getSurfaceStateBaseAddress();
+        if (ssh && (ssh->getHeapGpuBase() == surfaceStateHeap)) {
+            surfaceStateHeap = reinterpret_cast<uint64_t>(ssh->getCpuBase());
+        }
+        EXPECT_NE(0u, surfaceStateHeap);
+
+        auto bindingTablePointer = interfaceDescriptorData.getBindingTablePointer();
+
+        const auto &bindingTableState = reinterpret_cast<BINDING_TABLE_STATE *>(surfaceStateHeap + bindingTablePointer)[index];
+        auto surfaceStatePointer = bindingTableState.getSurfaceStatePointer();
+
+        return (RENDER_SURFACE_STATE *)(surfaceStateHeap + surfaceStatePointer);
+    } else {
+        UNRECOVERABLE_IF(true);
+        return nullptr;
     }
-    EXPECT_NE(0u, surfaceStateHeap);
+}
 
-    auto bindingTablePointer = interfaceDescriptorData.getBindingTablePointer();
-
-    const auto &bindingTableState = reinterpret_cast<BINDING_TABLE_STATE *>(surfaceStateHeap + bindingTablePointer)[index];
-    auto surfaceStatePointer = bindingTableState.getSurfaceStatePointer();
-
-    return (RENDER_SURFACE_STATE *)(surfaceStateHeap + surfaceStatePointer);
+template <typename FamilyType>
+bool HardwareParse::isStallingBarrier(GenCmdList::iterator &iter) {
+    PIPE_CONTROL *pipeControlCmd = genCmdCast<PIPE_CONTROL *>(*iter);
+    if (pipeControlCmd == nullptr) {
+        return false;
+    }
+    EXPECT_EQ(pipeControlCmd->getCommandStreamerStallEnable(), true);
+    EXPECT_EQ(pipeControlCmd->getDcFlushEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getRenderTargetCacheFlushEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getInstructionCacheInvalidateEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getTextureCacheInvalidationEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getPipeControlFlushEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getVfCacheInvalidationEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getConstantCacheInvalidationEnable(), false);
+    EXPECT_EQ(pipeControlCmd->getStateCacheInvalidationEnable(), false);
+    return true;
 }
 
 } // namespace NEO

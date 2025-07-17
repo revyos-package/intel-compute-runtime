@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,12 +8,10 @@
 #include "shared/source/helpers/bcs_ccs_dependency_pair_container.h"
 #include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
-#include "shared/test/common/mocks/mock_csr.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
 #include "opencl/source/event/user_event.h"
 #include "opencl/source/helpers/task_information.h"
-#include "opencl/test/unit_test/fixtures/cl_device_fixture.h"
 #include "opencl/test/unit_test/fixtures/dispatch_flags_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_buffer.h"
 #include "opencl/test/unit_test/mocks/mock_command_queue.h"
@@ -21,6 +19,12 @@
 
 #include <array>
 #include <memory>
+
+namespace NEO {
+class Device;
+class ExecutionEnvironment;
+class Kernel;
+} // namespace NEO
 
 using namespace NEO;
 
@@ -228,13 +232,23 @@ class MockCsr1 : public CommandStreamReceiverHw<GfxFamily> {
     CompletionStamp flushTask(LinearStream &commandStream, size_t commandStreamStart,
                               const IndirectHeap *dsh, const IndirectHeap *ioh,
                               const IndirectHeap *ssh, TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override {
+        if (this->getHeaplessStateInitEnabled()) {
+            return flushTaskHeapless(commandStream, commandStreamStart, dsh, ioh, ssh, taskLevel, dispatchFlags, device);
+        } else {
+            return flushTaskHeapful(commandStream, commandStreamStart, dsh, ioh, ssh, taskLevel, dispatchFlags, device);
+        }
+    }
+
+    CompletionStamp flushTaskHeapless(LinearStream &commandStream, size_t commandStreamStart,
+                                      const IndirectHeap *dsh, const IndirectHeap *ioh,
+                                      const IndirectHeap *ssh, TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override {
         passedDispatchFlags = dispatchFlags;
         return CompletionStamp();
     }
 
-    CompletionStamp flushTaskStateless(LinearStream &commandStream, size_t commandStreamStart,
-                                       const IndirectHeap *dsh, const IndirectHeap *ioh,
-                                       const IndirectHeap *ssh, TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override {
+    CompletionStamp flushTaskHeapful(LinearStream &commandStream, size_t commandStreamStart,
+                                     const IndirectHeap *dsh, const IndirectHeap *ioh,
+                                     const IndirectHeap *ssh, TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override {
         passedDispatchFlags = dispatchFlags;
         return CompletionStamp();
     }
@@ -270,7 +284,11 @@ HWTEST_F(DispatchFlagsTests, givenCommandMapUnmapWhenSubmitThenPassCorrectDispat
     EXPECT_TRUE(mockCsr->passedDispatchFlags.blocking);
     EXPECT_TRUE(mockCsr->passedDispatchFlags.dcFlush);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.useSLM);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_FALSE(mockCsr->passedDispatchFlags.gsba32BitRequired);
     EXPECT_EQ(mockCmdQ->getPriority() == QueuePriority::low, mockCsr->passedDispatchFlags.lowPriority);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.implicitFlush);
@@ -313,7 +331,11 @@ HWTEST_F(DispatchFlagsTests, givenCommandComputeKernelWhenSubmitThenPassCorrectD
     EXPECT_TRUE(mockCsr->passedDispatchFlags.blocking);
     EXPECT_EQ(flushDC, mockCsr->passedDispatchFlags.dcFlush);
     EXPECT_EQ(slmUsed, mockCsr->passedDispatchFlags.useSLM);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_EQ(ndRangeKernel, mockCsr->passedDispatchFlags.gsba32BitRequired);
     EXPECT_EQ(mockCmdQ->getPriority() == QueuePriority::low, mockCsr->passedDispatchFlags.lowPriority);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.implicitFlush);
@@ -357,7 +379,12 @@ HWTEST_F(DispatchFlagsTests, givenClCommandCopyImageWhenSubmitThenFlushTextureCa
     EXPECT_EQ(flushDC, mockCsr->passedDispatchFlags.dcFlush);
     EXPECT_EQ(mockCmdQ->isTextureCacheFlushNeeded(commandType), mockCsr->passedDispatchFlags.textureCacheFlush);
     EXPECT_EQ(slmUsed, mockCsr->passedDispatchFlags.useSLM);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_FALSE(mockCsr->passedDispatchFlags.gsba32BitRequired);
     EXPECT_EQ(mockCmdQ->getPriority() == QueuePriority::low, mockCsr->passedDispatchFlags.lowPriority);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.implicitFlush);
@@ -396,7 +423,11 @@ HWTEST_F(DispatchFlagsTests, givenCommandWithoutKernelWhenSubmitThenPassCorrectD
     EXPECT_TRUE(mockCsr->passedDispatchFlags.blocking);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.dcFlush);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.useSLM);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_FALSE(mockCsr->passedDispatchFlags.gsba32BitRequired);
     EXPECT_EQ(mockCmdQ->getPriority() == QueuePriority::low, mockCsr->passedDispatchFlags.lowPriority);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.implicitFlush);

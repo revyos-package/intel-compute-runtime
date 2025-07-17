@@ -7,6 +7,7 @@
 
 #include "shared/test/common/fixtures/command_stream_receiver_fixture.h"
 
+#include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/command_stream/preemption.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
@@ -37,6 +38,7 @@ void CommandStreamReceiverFixture::setUp() {
     requiredStreamProperties.initSupport(pDevice->getRootDeviceEnvironment());
     immediateFlushTaskFlags.requiredState = &requiredStreamProperties;
     immediateFlushTaskFlags.sshCpuBase = sshBuffer;
+    immediateFlushTaskFlags.dispatchOperation = NEO::AppendOperations::kernel;
 
     if (pDevice->getPreemptionMode() == NEO::PreemptionMode::MidThread) {
         auto &commandStreamReceiver = pDevice->getGpgpuCommandStreamReceiver();

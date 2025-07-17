@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -68,6 +68,7 @@ class DrmMemoryManager : public MemoryManager {
         return validateHostPtrMemory;
     }
 
+    static bool isGemCloseWorkerSupported();
     DrmGemCloseWorker *peekGemCloseWorker() const { return this->gemCloseWorker.get(); }
     bool copyMemoryToAllocation(GraphicsAllocation *graphicsAllocation, size_t destinationOffset, const void *memoryToCopy, size_t sizeToCopy) override;
     bool copyMemoryToAllocationBanks(GraphicsAllocation *graphicsAllocation, size_t destinationOffset, const void *memoryToCopy, size_t sizeToCopy, DeviceBitfield handleMask) override;
@@ -86,8 +87,11 @@ class DrmMemoryManager : public MemoryManager {
     bool isKmdMigrationAvailable(uint32_t rootDeviceIndex) override;
 
     bool setMemAdvise(GraphicsAllocation *gfxAllocation, MemAdviseFlags flags, uint32_t rootDeviceIndex) override;
+    bool setSharedSystemMemAdvise(const void *ptr, const size_t size, MemAdvise memAdviseOp, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override;
     bool setMemPrefetch(GraphicsAllocation *gfxAllocation, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override;
+    bool prefetchSharedSystemAlloc(const void *ptr, const size_t size, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override;
     bool setAtomicAccess(GraphicsAllocation *gfxAllocation, size_t size, AtomicAccessMode mode, uint32_t rootDeviceIndex) override;
+    bool setSharedSystemAtomicAccess(const void *ptr, const size_t size, AtomicAccessMode mode, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override;
     [[nodiscard]] std::unique_lock<std::mutex> acquireAllocLock();
     std::vector<GraphicsAllocation *> &getSysMemAllocs();
     std::vector<GraphicsAllocation *> &getLocalMemAllocs(uint32_t rootDeviceIndex);
@@ -119,7 +123,6 @@ class DrmMemoryManager : public MemoryManager {
     uint32_t getNumMediaEncoders(uint32_t rootDeviceIndex) const override;
 
     bool isCompressionSupportedForShareable(bool isShareable) override;
-    bool usmCompressionSupported(Device *device) override;
     MOCKABLE_VIRTUAL SubmissionStatus emitPinningRequestForBoContainer(BufferObject **bo, uint32_t boCount, uint32_t rootDeviceIndex) const;
 
     void getExtraDeviceProperties(uint32_t rootDeviceIndex, uint32_t *moduleId, uint16_t *serverType) override;
@@ -127,8 +130,11 @@ class DrmMemoryManager : public MemoryManager {
     MOCKABLE_VIRTUAL uint64_t acquireGpuRange(size_t &size, uint32_t rootDeviceIndex, HeapIndex heapIndex);
     MOCKABLE_VIRTUAL void releaseGpuRange(void *address, size_t size, uint32_t rootDeviceIndex);
 
-    BufferObject *allocUserptr(uintptr_t address, size_t size, uint32_t rootDeviceIndex);
+    BufferObject *allocUserptr(uintptr_t address, size_t size, const AllocationType allocationType, uint32_t rootDeviceIndex);
     size_t getUserptrAlignment();
+
+    void drainGemCloseWorker() const override;
+    void disableForcePin();
 
     decltype(&mmap) mmapFunction = mmap;
     decltype(&munmap) munmapFunction = munmap;
@@ -179,7 +185,7 @@ class DrmMemoryManager : public MemoryManager {
     void cleanupBeforeReturn(const AllocationData &allocationData, GfxPartition *gfxPartition, DrmAllocation *drmAllocation, GraphicsAllocation *graphicsAllocation, uint64_t &gpuAddress, size_t &sizeAllocated);
     GraphicsAllocation *allocateGraphicsMemoryInDevicePool(const AllocationData &allocationData, AllocationStatus &status) override;
     bool createDrmChunkedAllocation(Drm *drm, DrmAllocation *allocation, uint64_t boAddress, size_t boSize, size_t maxOsContextCount);
-    bool createDrmAllocation(Drm *drm, DrmAllocation *allocation, uint64_t gpuAddress, size_t maxOsContextCount);
+    bool createDrmAllocation(Drm *drm, DrmAllocation *allocation, uint64_t gpuAddress, size_t maxOsContextCount, size_t preferredAlignment);
     void registerAllocationInOs(GraphicsAllocation *allocation) override;
     void waitOnCompletionFence(GraphicsAllocation *allocation);
     bool allocationTypeForCompletionFence(AllocationType allocationType);
@@ -193,6 +199,7 @@ class DrmMemoryManager : public MemoryManager {
     bool retrieveMmapOffsetForBufferObject(uint32_t rootDeviceIndex, BufferObject &bo, uint64_t flags, uint64_t &offset);
     BufferObject::BOType getBOTypeFromPatIndex(uint64_t patIndex, bool isPatIndexSupported) const;
     void setLocalMemBanksCount(uint32_t rootDeviceIndex);
+    bool getLocalOnlyRequired(AllocationType allocationType, const ProductHelper &productHelper, const ReleaseHelper *releaseHelper, bool preferCompressed) const override;
 
     std::vector<BufferObject *> pinBBs;
     std::vector<void *> memoryForPinBBs;

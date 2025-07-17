@@ -10,6 +10,7 @@
 
 #include "level_zero/core/source/cmdlist/cmdlist_hw.h"
 #include "level_zero/core/source/cmdlist/cmdlist_hw_immediate.h"
+#include "level_zero/core/source/cmdlist/cmdlist_launch_params.h"
 #include "level_zero/core/source/kernel/kernel.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_device.h"
 #include "level_zero/core/test/unit_tests/white_box.h"
@@ -22,8 +23,11 @@ class GraphicsAllocation;
 
 namespace L0 {
 struct Device;
+enum class Builtin : uint32_t;
+struct Event;
 
 namespace ult {
+struct Device;
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
@@ -31,7 +35,6 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using GfxFamily = typename NEO::GfxFamilyMapper<gfxCoreFamily>::GfxFamily;
     using BaseClass = ::L0::CommandListCoreFamily<gfxCoreFamily>;
     using BaseClass::addCmdForPatching;
-    using BaseClass::addFlushRequiredCommand;
     using BaseClass::addPatchScratchAddressInImplicitArgs;
     using BaseClass::allocateOrReuseKernelPrivateMemoryIfNeeded;
     using BaseClass::allowCbWaitEventsNoopDispatch;
@@ -48,6 +51,7 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using BaseClass::appendWriteKernelTimestamp;
     using BaseClass::applyMemoryRangesBarrier;
     using BaseClass::clearCommandsToPatch;
+    using BaseClass::closedCmdList;
     using BaseClass::cmdListHeapAddressModel;
     using BaseClass::cmdListType;
     using BaseClass::cmdQImmediate;
@@ -60,8 +64,8 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using BaseClass::compactL3FlushEventPacket;
     using BaseClass::containsAnyKernel;
     using BaseClass::containsCooperativeKernelsFlag;
+    using BaseClass::copyOffloadMode;
     using BaseClass::copyOperationFenceSupported;
-    using BaseClass::copyOperationOffloadEnabled;
     using BaseClass::currentBindingTablePoolBaseAddress;
     using BaseClass::currentDynamicStateBaseAddress;
     using BaseClass::currentIndirectObjectBaseAddress;
@@ -71,6 +75,7 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using BaseClass::disablePatching;
     using BaseClass::dispatchCmdListBatchBufferAsPrimary;
     using BaseClass::doubleSbaWa;
+    using BaseClass::duplicatedInOrderCounterStorageEnabled;
     using BaseClass::enablePatching;
     using BaseClass::engineGroupType;
     using BaseClass::estimateBufferSizeMultiTileBarrier;
@@ -92,24 +97,28 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using BaseClass::inOrderAtomicSignalingEnabled;
     using BaseClass::inOrderExecInfo;
     using BaseClass::inOrderPatchCmds;
+    using BaseClass::internalUsage;
     using BaseClass::interruptEvents;
-    using BaseClass::isFlushTaskSubmissionEnabled;
+    using BaseClass::isAllocationImported;
     using BaseClass::isInOrderNonWalkerSignalingRequired;
     using BaseClass::isQwordInOrderCounter;
     using BaseClass::isRelaxedOrderingDispatchAllowed;
     using BaseClass::isSyncModeQueue;
     using BaseClass::isTbxMode;
     using BaseClass::isTimestampEventForMultiTile;
+    using BaseClass::l3FlushAfterPostSyncRequired;
     using BaseClass::latestOperationRequiredNonWalkerInOrderCmdsChaining;
+    using BaseClass::maxFillPaternSizeForCopyEngine;
     using BaseClass::obtainKernelPreemptionMode;
     using BaseClass::partitionCount;
     using BaseClass::patternAllocations;
+    using BaseClass::patternTags;
     using BaseClass::pipeControlMultiKernelEventSync;
     using BaseClass::pipelineSelectStateTracking;
     using BaseClass::requiredStreamState;
-    using BaseClass::requiresDcFlushForDcMitigation;
     using BaseClass::requiresQueueUncachedMocs;
     using BaseClass::scratchAddressPatchingEnabled;
+    using BaseClass::setAdditionalBlitProperties;
     using BaseClass::setupTimestampEventForMultiTile;
     using BaseClass::signalAllEventPackets;
     using BaseClass::stateBaseAddressTracking;
@@ -119,8 +128,7 @@ struct WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>
     using BaseClass::unifiedMemoryControls;
     using BaseClass::updateInOrderExecInfo;
     using BaseClass::updateStreamProperties;
-    using BaseClass::updateStreamPropertiesForFlushTaskDispatchFlags;
-    using BaseClass::updateStreamPropertiesForRegularCommandLists;
+    using BaseClass::useAdditionalBlitProperties;
 
     WhiteBox() : ::L0::CommandListCoreFamily<gfxCoreFamily>(BaseClass::defaultNumIddsPerBlock) {}
 
@@ -184,8 +192,10 @@ struct WhiteBox<L0::CommandListCoreFamilyImmediate<gfxCoreFamily>>
     using BaseClass::allowCbWaitEventsNoopDispatch;
     using BaseClass::appendBlitFill;
     using BaseClass::appendLaunchKernelWithParams;
+    using BaseClass::appendMemoryCopyBlit;
     using BaseClass::appendMemoryCopyBlitRegion;
     using BaseClass::clearCommandsToPatch;
+    using BaseClass::closedCmdList;
     using BaseClass::cmdListHeapAddressModel;
     using BaseClass::cmdListType;
     using BaseClass::cmdQImmediate;
@@ -194,8 +204,8 @@ struct WhiteBox<L0::CommandListCoreFamilyImmediate<gfxCoreFamily>>
     using BaseClass::commandsToPatch;
     using BaseClass::compactL3FlushEvent;
     using BaseClass::compactL3FlushEventPacket;
+    using BaseClass::copyOffloadMode;
     using BaseClass::copyOperationFenceSupported;
-    using BaseClass::copyOperationOffloadEnabled;
     using BaseClass::dcFlushSupport;
     using BaseClass::device;
     using BaseClass::disablePatching;
@@ -216,14 +226,16 @@ struct WhiteBox<L0::CommandListCoreFamilyImmediate<gfxCoreFamily>>
     using BaseClass::inOrderAtomicSignalingEnabled;
     using BaseClass::inOrderExecInfo;
     using BaseClass::inOrderPatchCmds;
+    using BaseClass::internalUsage;
     using BaseClass::interruptEvents;
     using BaseClass::isBcsSplitNeeded;
-    using BaseClass::isFlushTaskSubmissionEnabled;
     using BaseClass::isInOrderNonWalkerSignalingRequired;
     using BaseClass::isQwordInOrderCounter;
     using BaseClass::isSyncModeQueue;
     using BaseClass::isTbxMode;
+    using BaseClass::latestFlushIsDualCopyOffload;
     using BaseClass::latestFlushIsHostVisible;
+    using BaseClass::latestOperationHasOptimizedCbEvent;
     using BaseClass::latestOperationRequiredNonWalkerInOrderCmdsChaining;
     using BaseClass::partitionCount;
     using BaseClass::pipeControlMultiKernelEventSync;
@@ -239,6 +251,7 @@ struct WhiteBox<L0::CommandListCoreFamilyImmediate<gfxCoreFamily>>
     using BaseClass::synchronizedDispatchMode;
     using BaseClass::synchronizeInOrderExecution;
     using BaseClass::updateInOrderExecInfo;
+    using BaseClass::useAdditionalBlitProperties;
 
     WhiteBox() : BaseClass(BaseClass::defaultNumIddsPerBlock) {}
 
@@ -262,7 +275,7 @@ struct MockCommandListImmediate : public CommandListCoreFamilyImmediate<gfxCoreF
     using BaseClass::finalStreamState;
     using BaseClass::immediateCmdListHeapSharing;
     using BaseClass::indirectAllocationsAllowed;
-    using BaseClass::isFlushTaskSubmissionEnabled;
+    using BaseClass::internalUsage;
     using BaseClass::isSyncModeQueue;
     using BaseClass::isTbxMode;
     using BaseClass::partitionCount;
@@ -275,6 +288,7 @@ template <>
 struct WhiteBox<::L0::CommandListImp> : public ::L0::CommandListImp {
     using BaseClass = ::L0::CommandListImp;
     using BaseClass::BaseClass;
+    using BaseClass::closedCmdList;
     using BaseClass::cmdListHeapAddressModel;
     using BaseClass::cmdListType;
     using BaseClass::cmdQImmediate;
@@ -282,12 +296,14 @@ struct WhiteBox<::L0::CommandListImp> : public ::L0::CommandListImp {
     using BaseClass::commandContainer;
     using BaseClass::commandListPreemptionMode;
     using BaseClass::commandsToPatch;
-    using BaseClass::copyOperationOffloadEnabled;
+    using BaseClass::compactL3FlushEventPacket;
+    using BaseClass::copyOffloadMode;
     using BaseClass::copyThroughLockedPtrEnabled;
     using BaseClass::currentBindingTablePoolBaseAddress;
     using BaseClass::currentDynamicStateBaseAddress;
     using BaseClass::currentIndirectObjectBaseAddress;
     using BaseClass::currentSurfaceStateBaseAddress;
+    using BaseClass::dcFlushSupport;
     using BaseClass::device;
     using BaseClass::dispatchCmdListBatchBufferAsPrimary;
     using BaseClass::doubleSbaWa;
@@ -300,9 +316,9 @@ struct WhiteBox<::L0::CommandListImp> : public ::L0::CommandListImp {
     using BaseClass::initialize;
     using BaseClass::inOrderExecInfo;
     using BaseClass::interruptEvents;
-    using BaseClass::isFlushTaskSubmissionEnabled;
     using BaseClass::isSyncModeQueue;
     using BaseClass::isTbxMode;
+    using BaseClass::l3FlushAfterPostSyncRequired;
     using BaseClass::minimalSizeForBcsSplit;
     using BaseClass::partitionCount;
     using BaseClass::pipelineSelectStateTracking;
@@ -337,12 +353,14 @@ struct MockCommandList : public CommandList {
     ADDMETHOD_NOBASE(destroy, ze_result_t, ZE_RESULT_SUCCESS, ());
     ADDMETHOD_NOBASE_VOIDRETURN(patchInOrderCmds, (void));
 
+    ADDMETHOD_CONST_NOBASE(kernelMemoryPrefetchEnabled, bool, false, (void));
+
     ADDMETHOD_NOBASE(appendLaunchKernel, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_kernel_handle_t kernelHandle,
                       const ze_group_count_t &threadGroupDimensions,
                       ze_event_handle_t hEvent, uint32_t numWaitEvents,
                       ze_event_handle_t *phWaitEvents,
-                      CmdListKernelLaunchParams &launchParams, bool relaxedOrderingDispatch));
+                      CmdListKernelLaunchParams &launchParams));
 
     ADDMETHOD_NOBASE(appendLaunchKernelIndirect, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_kernel_handle_t kernelHandle,
@@ -359,6 +377,16 @@ struct MockCommandList : public CommandList {
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
                       ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+
+    ADDMETHOD_NOBASE(appendLaunchKernelWithArguments, ze_result_t, ZE_RESULT_SUCCESS,
+                     (ze_kernel_handle_t hKernel,
+                      const ze_group_count_t groupCounts,
+                      const ze_group_size_t groupSizes,
+                      void **pArguments,
+                      void *pNext,
+                      ze_event_handle_t hSignalEvent,
+                      uint32_t numWaitEvents,
+                      ze_event_handle_t *phWaitEvents));
 
     ADDMETHOD_NOBASE(appendSoftwareTag, ze_result_t, ZE_RESULT_SUCCESS,
                      (const char *data));
@@ -385,7 +413,7 @@ struct MockCommandList : public CommandList {
                       const ze_image_region_t *pDstRegion,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendImageCopyToMemory, ze_result_t, ZE_RESULT_SUCCESS,
                      (void *dstptr,
@@ -393,7 +421,7 @@ struct MockCommandList : public CommandList {
                       const ze_image_region_t *pSrcRegion,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendImageCopyFromMemoryExt, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_image_handle_t hDstImage,
@@ -402,7 +430,7 @@ struct MockCommandList : public CommandList {
                       uint32_t srcRowPitch, uint32_t srcSlicePitch,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendImageCopyToMemoryExt, ze_result_t, ZE_RESULT_SUCCESS,
                      (void *dstptr,
@@ -411,7 +439,7 @@ struct MockCommandList : public CommandList {
                       uint32_t destRowPitch, uint32_t destSlicePitch,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendImageCopyRegion, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_image_handle_t hDstImage,
@@ -420,16 +448,22 @@ struct MockCommandList : public CommandList {
                       const ze_image_region_t *pSrcRegion,
                       ze_event_handle_t hSignalEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendImageCopy, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_image_handle_t hDstImage,
                       ze_image_handle_t hSrcImage,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendMemAdvise, ze_result_t, ZE_RESULT_SUCCESS,
+                     (ze_device_handle_t hDevice,
+                      const void *ptr,
+                      size_t size,
+                      ze_memory_advice_t advice));
+
+    ADDMETHOD_NOBASE(executeMemAdvise, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_device_handle_t hDevice,
                       const void *ptr,
                       size_t size,
@@ -473,7 +507,7 @@ struct MockCommandList : public CommandList {
                       size_t size,
                       ze_event_handle_t hEvent,
                       uint32_t numWaitEvents,
-                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch));
+                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams));
 
     ADDMETHOD_NOBASE(appendSignalEvent, ze_result_t, ZE_RESULT_SUCCESS,
                      (ze_event_handle_t hEvent, bool relaxedOrderingDispatch));
@@ -565,20 +599,17 @@ struct MockCommandList : public CommandList {
                      (void *desc, void *ptr, uint64_t data, ze_event_handle_t signalEventHandle, bool useQwordData));
 
     ADDMETHOD_NOBASE(appendWaitExternalSemaphores, ze_result_t, ZE_RESULT_SUCCESS,
-                     (uint32_t numExternalSemaphores, const ze_intel_external_semaphore_exp_handle_t *hSemaphores,
-                      const ze_intel_external_semaphore_wait_params_exp_t *params, ze_event_handle_t hSignalEvent,
+                     (uint32_t numExternalSemaphores, const ze_external_semaphore_ext_handle_t *hSemaphores,
+                      const ze_external_semaphore_wait_params_ext_t *params, ze_event_handle_t hSignalEvent,
                       uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents));
     ADDMETHOD_NOBASE(appendSignalExternalSemaphores, ze_result_t, ZE_RESULT_SUCCESS,
-                     (size_t numExternalSemaphores, const ze_intel_external_semaphore_exp_handle_t *hSemaphores,
-                      const ze_intel_external_semaphore_signal_params_exp_t *params, ze_event_handle_t hSignalEvent,
+                     (size_t numExternalSemaphores, const ze_external_semaphore_ext_handle_t *hSemaphores,
+                      const ze_external_semaphore_signal_params_ext_t *params, ze_event_handle_t hSignalEvent,
                       uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents));
 
     ADDMETHOD_NOBASE(appendWriteToMemory, ze_result_t, ZE_RESULT_SUCCESS,
                      (void *desc, void *ptr,
                       uint64_t data));
-
-    ADDMETHOD_NOBASE(executeCommandListImmediate, ze_result_t, ZE_RESULT_SUCCESS,
-                     (bool perforMigration));
 
     ADDMETHOD_NOBASE(initialize, ze_result_t, ZE_RESULT_SUCCESS,
                      (L0::Device * device,
@@ -608,8 +639,18 @@ class MockCommandListCoreFamily : public CommandListCoreFamily<gfxCoreFamily> {
     using BaseClass::dummyBlitWa;
     using BaseClass::enableInOrderExecution;
     using BaseClass::encodeMiFlush;
+    using BaseClass::getDeviceCounterAllocForResidency;
+    using BaseClass::isKernelUncachedMocsRequired;
     using BaseClass::ownedPrivateAllocations;
+    using BaseClass::setAdditionalBlitProperties;
     using BaseClass::taskCountUpdateFenceRequired;
+
+    ze_result_t executeMemAdvise(ze_device_handle_t hDevice,
+                                 const void *ptr, size_t size,
+                                 ze_memory_advice_t advice) override {
+        executeMemAdviseCallCount++;
+        return ZE_RESULT_SUCCESS;
+    }
 
     ADDMETHOD(appendMemoryCopyKernelWithGA, ze_result_t, false, ZE_RESULT_SUCCESS,
               (void *dstPtr, NEO::GraphicsAllocation *dstPtrAlloc,
@@ -628,7 +669,7 @@ class MockCommandListCoreFamily : public CommandListCoreFamily<gfxCoreFamily> {
                       uint64_t dstOffset, uintptr_t srcPtr,
                       NEO::GraphicsAllocation *srcPtrAlloc,
                       uint64_t srcOffset,
-                      uint64_t size));
+                      uint64_t size, Event *signalEvent));
 
     ADDMETHOD_VOIDRETURN(allocateOrReuseKernelPrivateMemory,
                          false,
@@ -643,8 +684,8 @@ class MockCommandListCoreFamily : public CommandListCoreFamily<gfxCoreFamily> {
                           uint32_t sizePerHwThread),
                          (kernel, sizePerHwThread));
 
-    AlignedAllocationData getAlignedAllocationData(L0::Device *device, const void *buffer, uint64_t bufferSize, bool allowHostCopy, bool copyOffload) override {
-        return L0::CommandListCoreFamily<gfxCoreFamily>::getAlignedAllocationData(device, buffer, bufferSize, allowHostCopy, copyOffload);
+    AlignedAllocationData getAlignedAllocationData(L0::Device *device, bool sharedSystemEnabled, const void *buffer, uint64_t bufferSize, bool allowHostCopy, bool copyOffload) override {
+        return L0::CommandListCoreFamily<gfxCoreFamily>::getAlignedAllocationData(device, sharedSystemEnabled, buffer, bufferSize, allowHostCopy, copyOffload);
     }
 
     ze_result_t appendMemoryCopyKernel2d(AlignedAllocationData *dstAlignedAllocation, AlignedAllocationData *srcAlignedAllocation,
@@ -678,15 +719,17 @@ class MockCommandListCoreFamily : public CommandListCoreFamily<gfxCoreFamily> {
                                            size_t dstRowPitch, size_t dstSlicePitch,
                                            const Vec3<size_t> &srcSize, const Vec3<size_t> &dstSize,
                                            L0::Event *signalEvent,
-                                           uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override {
+                                           uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch, bool doubleStreamCopyOffload) override {
         srcBlitCopyRegionOffset = srcAllocationData->offset;
         dstBlitCopyRegionOffset = dstAllocationData->offset;
-        return L0::CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(srcAllocationData, dstAllocationData, srcRegion, dstRegion, copySize, srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch, srcSize, dstSize, signalEvent, numWaitEvents, phWaitEvents, relaxedOrderingDispatch);
+        return L0::CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(srcAllocationData, dstAllocationData, srcRegion, dstRegion, copySize, srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch,
+                                                                                    srcSize, dstSize, signalEvent, numWaitEvents, phWaitEvents, relaxedOrderingDispatch, doubleStreamCopyOffload);
     }
     uintptr_t srcAlignedPtr;
     uintptr_t dstAlignedPtr;
     size_t srcBlitCopyRegionOffset = 0;
     size_t dstBlitCopyRegionOffset = 0;
+    uint32_t executeMemAdviseCallCount = 0;
 };
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -704,25 +747,30 @@ class MockCommandListImmediateHw : public WhiteBox<::L0::CommandListCoreFamilyIm
     using BaseClass::dcFlushSupport;
     using BaseClass::dependenciesPresent;
     using BaseClass::dummyBlitWa;
-    using BaseClass::isFlushTaskSubmissionEnabled;
+    using BaseClass::internalUsage;
     using BaseClass::isSyncModeQueue;
     using BaseClass::isTbxMode;
     using BaseClass::setupFillKernelArguments;
 
-    ze_result_t executeCommandListImmediate(bool performMigration) override {
-        ++executeCommandListImmediateCalledCount;
-        if (callBaseExecute) {
-            return BaseClass::executeCommandListImmediate(performMigration);
-        }
-        return executeCommandListImmediateReturnValue;
-    }
-
-    ze_result_t executeCommandListImmediateWithFlushTask(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool copyOffloadSubmission, bool requireTaskCountUpdate) override {
+    ze_result_t executeCommandListImmediateWithFlushTask(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation,
+                                                         bool copyOffloadSubmission, bool requireTaskCountUpdate,
+                                                         MutexLock *outerLock,
+                                                         std::unique_lock<std::mutex> *outerLockForIndirect) override {
         ++executeCommandListImmediateWithFlushTaskCalledCount;
         if (callBaseExecute) {
-            return BaseClass::executeCommandListImmediateWithFlushTask(performMigration, hasStallingCmds, hasRelaxedOrderingDependencies, kernelOperation, copyOffloadSubmission, requireTaskCountUpdate);
+            return BaseClass::executeCommandListImmediateWithFlushTask(performMigration, hasStallingCmds, hasRelaxedOrderingDependencies, appendOperation, copyOffloadSubmission, requireTaskCountUpdate,
+                                                                       outerLock, outerLockForIndirect);
         }
         return executeCommandListImmediateWithFlushTaskReturnValue;
+    }
+
+    ze_result_t appendWriteToMemory(void *desc, void *ptr,
+                                    uint64_t data) override {
+        ++appendWriteToMemoryCalledCount;
+        if (callAppendWriteToMemoryBase) {
+            return BaseClass::appendWriteToMemory(desc, ptr, data);
+        }
+        return appendWriteToMemoryCalledCountReturnValue;
     }
 
     void checkAssert() override {
@@ -745,11 +793,12 @@ class MockCommandListImmediateHw : public WhiteBox<::L0::CommandListCoreFamilyIm
     uint32_t checkAssertCalled = 0;
     bool callBaseExecute = false;
 
-    ze_result_t executeCommandListImmediateReturnValue = ZE_RESULT_SUCCESS;
-    uint32_t executeCommandListImmediateCalledCount = 0;
-
     ze_result_t executeCommandListImmediateWithFlushTaskReturnValue = ZE_RESULT_SUCCESS;
     uint32_t executeCommandListImmediateWithFlushTaskCalledCount = 0;
+
+    bool callAppendWriteToMemoryBase = true;
+    ze_result_t appendWriteToMemoryCalledCountReturnValue = ZE_RESULT_SUCCESS;
+    uint32_t appendWriteToMemoryCalledCount = 0;
 };
 
 struct CmdListHelper {
@@ -772,7 +821,7 @@ class MockCommandListForAppendLaunchKernel : public WhiteBox<::L0::CommandListCo
                                    ze_event_handle_t hEvent,
                                    uint32_t numWaitEvents,
                                    ze_event_handle_t *phWaitEvents,
-                                   CmdListKernelLaunchParams &launchParams, bool relaxedOrderingDispatch) override {
+                                   CmdListKernelLaunchParams &launchParams) override {
 
         const auto kernel = Kernel::fromHandle(kernelHandle);
         cmdListHelper.isaAllocation = kernel->getIsaAllocation();
@@ -798,6 +847,26 @@ class MockCommandListForAppendLaunchKernel : public WhiteBox<::L0::CommandListCo
 
         return ZE_RESULT_SUCCESS;
     }
+};
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+class MockCommandListForExecuteMemAdvise : public WhiteBox<::L0::CommandListCoreFamilyImmediate<gfxCoreFamily>> {
+  public:
+    using BaseClass = WhiteBox<::L0::CommandListCoreFamilyImmediate<gfxCoreFamily>>;
+
+    using BaseClass::cmdQImmediate;
+    using BaseClass::indirectAllocationsAllowed;
+
+    using BaseClass::executeCommandListImmediateWithFlushTaskImpl;
+
+    ze_result_t executeMemAdvise(ze_device_handle_t hDevice,
+                                 const void *ptr, size_t size,
+                                 ze_memory_advice_t advice) override {
+        executeMemAdviseCallCount++;
+        return ZE_RESULT_SUCCESS;
+    }
+
+    uint32_t executeMemAdviseCallCount = 0;
 };
 
 } // namespace ult

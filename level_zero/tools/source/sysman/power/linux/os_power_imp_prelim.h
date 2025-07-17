@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,7 +11,7 @@
 #include "level_zero/tools/source/sysman/linux/fs_access.h"
 #include "level_zero/tools/source/sysman/power/os_power.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <memory>
 #include <string>
@@ -20,7 +20,7 @@ namespace L0 {
 
 class SysfsAccess;
 class PlatformMonitoringTech;
-class LinuxPowerImp : public OsPower, NEO::NonCopyableOrMovableClass {
+class LinuxPowerImp : public OsPower, NEO::NonCopyableAndNonMovableClass {
   public:
     ze_result_t getProperties(zes_power_properties_t *pProperties) override;
     ze_result_t getEnergyCounter(zes_power_energy_counter_t *pEnergy) override;

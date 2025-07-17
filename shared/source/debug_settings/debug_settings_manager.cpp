@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -26,6 +26,9 @@
 
 namespace NEO {
 
+#define DECLARE_DEBUG_SCOPED_V(dataType, variableName, defaultValue, description, ...) \
+    DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
+
 template <typename T>
 static std::string toString(const T &arg) {
     if constexpr (std::is_convertible_v<std::string, T>) {
@@ -39,6 +42,9 @@ template <DebugFunctionalityLevel debugLevel>
 DebugSettingsManager<debugLevel>::DebugSettingsManager(const char *registryPath) {
     readerImpl = SettingsReaderCreator::create(std::string(registryPath));
     ApiSpecificConfig::initPrefixes();
+    for (auto prefixType : ApiSpecificConfig::getPrefixTypes()) {
+        this->scope |= getDebugVarScopeMaskFor(prefixType);
+    }
     injectSettingsFromReader();
     dumpFlags();
     translateDebugSettings(flags);
@@ -70,6 +76,8 @@ static const char *convPrefixToString(DebugVarPrefix prefix) {
         return "NEO_L0_";
     } else if (prefix == DebugVarPrefix::neoOcl) {
         return "NEO_OCL_";
+    } else if (prefix == DebugVarPrefix::neoOcloc) {
+        return "NEO_OCLOC_";
     } else {
         return "";
     }
@@ -95,7 +103,8 @@ void DebugSettingsManager<debugLevel>::getStringWithFlags(std::string &allFlags,
 #define DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)                                 \
     {                                                                                                             \
         std::string neoKey = convPrefixToString(flags.variableName.getPrefixType());                              \
-        neoKey += getNonReleaseKeyName(#variableName);                                                            \
+        constexpr auto keyName = getNonReleaseKeyName(#variableName);                                             \
+        neoKey += keyName;                                                                                        \
         allFlagsStream << neoKey.c_str() << " = " << flags.variableName.get() << '\n';                            \
         dumpNonDefaultFlag<dataType>(neoKey.c_str(), flags.variableName.get(), defaultValue, changedFlagsStream); \
     }
@@ -139,12 +148,15 @@ void DebugSettingsManager<debugLevel>::dumpFlags() const {
 template <DebugFunctionalityLevel debugLevel>
 void DebugSettingsManager<debugLevel>::injectSettingsFromReader() {
 #undef DECLARE_DEBUG_VARIABLE
-#define DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)                                        \
-    {                                                                                                                    \
-        DebugVarPrefix type;                                                                                             \
-        dataType tempData = readerImpl->getSetting(getNonReleaseKeyName(#variableName), flags.variableName.get(), type); \
-        flags.variableName.setPrefixType(type);                                                                          \
-        flags.variableName.set(tempData);                                                                                \
+#define DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)            \
+    {                                                                                        \
+        DebugVarPrefix type;                                                                 \
+        constexpr auto keyName = getNonReleaseKeyName(#variableName);                        \
+        dataType tempData = readerImpl->getSetting(keyName, flags.variableName.get(), type); \
+        if (0 != (this->scope & flags.variableName.getScopeMask())) {                        \
+            flags.variableName.setPrefixType(type);                                          \
+            flags.variableName.set(tempData);                                                \
+        }                                                                                    \
     }
 
     if (registryReadAvailable() || isDebugKeysReadEnabled()) {
@@ -156,12 +168,14 @@ void DebugSettingsManager<debugLevel>::injectSettingsFromReader() {
     {                                                                                              \
         DebugVarPrefix type;                                                                       \
         dataType tempData = readerImpl->getSetting(#variableName, flags.variableName.get(), type); \
-        flags.variableName.setPrefixType(type);                                                    \
-        flags.variableName.set(tempData);                                                          \
+        if (0 != (this->scope & flags.variableName.getScopeMask())) {                              \
+            flags.variableName.setPrefixType(type);                                                \
+            flags.variableName.set(tempData);                                                      \
+        }                                                                                          \
     }
 #include "release_variables.inl"
 #undef DECLARE_DEBUG_VARIABLE
-}
+} // namespace NEO
 
 void logDebugString(std::string_view debugString) {
     NEO::fileLoggerInstance().logDebugString(true, debugString);

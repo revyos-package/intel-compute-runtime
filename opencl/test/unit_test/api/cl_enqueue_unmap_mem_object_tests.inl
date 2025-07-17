@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -82,7 +82,7 @@ TEST_F(ClEnqueueUnmapMemObjTests, givenInvalidAddressWhenUnmappingOnCpuThenRetur
 TEST_F(ClEnqueueUnmapMemObjTests, givenZeroCopyWithoutCoherencyAllowedWhenMapAndUnmapThenFlushCachelines) {
     DebugManagerStateRestore restorer;
     debugManager.flags.AllowZeroCopyWithoutCoherency.set(1);
-    VariableBackup<bool> backupWaitpkgUse(&WaitUtils::waitpkgUse, false);
+    VariableBackup<WaitUtils::WaitpkgUse> backupWaitpkgUse(&WaitUtils::waitpkgUse, WaitUtils::WaitpkgUse::noUse);
     VariableBackup<uint32_t> backupWaitCount(&WaitUtils::waitCount, 1);
 
     auto buffer = std::unique_ptr<Buffer>(BufferHelper<BufferAllocHostPtr<>>::create(pContext));
@@ -169,17 +169,17 @@ struct ClEnqueueUnmapImageTests : ClEnqueueUnmapMemObjTests,
     Image *createImage(cl_mem_object_type type) {
         switch (type) {
         case CL_MEM_OBJECT_IMAGE1D:
-            return Image1dHelper<>::create(pContext);
+            return Image1dHelperUlt<>::create(pContext);
         case CL_MEM_OBJECT_IMAGE1D_BUFFER:
-            return Image1dBufferHelper<>::create(pContext);
+            return Image1dBufferHelperUlt<>::create(pContext);
         case CL_MEM_OBJECT_IMAGE1D_ARRAY:
-            return Image1dArrayHelper<>::create(pContext);
+            return Image1dArrayHelperUlt<>::create(pContext);
         case CL_MEM_OBJECT_IMAGE2D:
-            return Image2dHelper<>::create(pContext);
+            return Image2dHelperUlt<>::create(pContext);
         case CL_MEM_OBJECT_IMAGE2D_ARRAY:
-            return Image2dArrayHelper<>::create(pContext);
+            return Image2dArrayHelperUlt<>::create(pContext);
         case CL_MEM_OBJECT_IMAGE3D:
-            return Image3dHelper<>::create(pContext);
+            return Image3dHelperUlt<>::create(pContext);
         default:
             return nullptr;
         }

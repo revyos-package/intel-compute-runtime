@@ -157,7 +157,7 @@ XE_HPC_CORETEST_F(BlitXeHpcCoreTests, givenTransferLargerThenHalfOfL3WhenItIsPro
     ASSERT_NE(hwParser.cmdList.end(), itorBltCmd);
     MEM_COPY *bltCmd = (MEM_COPY *)*itorBltCmd;
 
-    auto mocsL3disabled = clDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED);
+    auto mocsL3disabled = clDevice->getGmmHelper()->getUncachedMOCS();
     EXPECT_EQ(mocsL3disabled, bltCmd->getDestinationMOCS());
     EXPECT_EQ(mocsL3disabled, bltCmd->getSourceMOCS());
 }
@@ -270,33 +270,4 @@ XE_HPC_CORETEST_F(BlitXeHpcCoreTests, given2dBlitCommandWhenDispatchingThenSetVa
 
         EXPECT_EQ(MEM_COPY::COPY_TYPE::COPY_TYPE_MATRIX_COPY, bltCmd->getCopyType());
     }
-}
-
-HWTEST_EXCLUDE_PRODUCT(CommandQueueHwTest, givenCommandQueueWhenAskingForCacheFlushOnBcsThenReturnTrue, IGFX_XE_HPC_CORE);
-
-using XeHpcCoreCopyEngineTests = ::testing::Test;
-XE_HPC_CORETEST_F(XeHpcCoreCopyEngineTests, givenCommandQueueWhenAskingForCacheFlushOnBcsThenReturnFalse) {
-    auto clDevice = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(defaultHwInfo.get()));
-    MockContext context(clDevice.get());
-
-    cl_int retVal = CL_SUCCESS;
-    auto commandQueue = std::unique_ptr<CommandQueue>(CommandQueue::create(&context, clDevice.get(), nullptr, false, retVal));
-    auto commandQueueHw = static_cast<CommandQueueHw<FamilyType> *>(commandQueue.get());
-
-    EXPECT_FALSE(commandQueueHw->isCacheFlushForBcsRequired());
-}
-XE_HPC_CORETEST_F(XeHpcCoreCopyEngineTests, givenDebugFlagSetWhenCheckingBcsCacheFlushRequirementThenReturnCorrectValueForGen12p8) {
-    DebugManagerStateRestore restorer;
-    auto clDevice = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(defaultHwInfo.get()));
-    MockContext context(clDevice.get());
-
-    cl_int retVal = CL_SUCCESS;
-    auto commandQueue = std::unique_ptr<CommandQueue>(CommandQueue::create(&context, clDevice.get(), nullptr, false, retVal));
-    auto commandQueueHw = static_cast<CommandQueueHw<FamilyType> *>(commandQueue.get());
-
-    debugManager.flags.ForceCacheFlushForBcs.set(0);
-    EXPECT_FALSE(commandQueueHw->isCacheFlushForBcsRequired());
-
-    debugManager.flags.ForceCacheFlushForBcs.set(1);
-    EXPECT_TRUE(commandQueueHw->isCacheFlushForBcsRequired());
 }

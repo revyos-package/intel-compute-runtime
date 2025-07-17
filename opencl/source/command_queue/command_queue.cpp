@@ -28,7 +28,9 @@
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/os_interface/os_context.h"
 #include "shared/source/os_interface/product_helper.h"
+#include "shared/source/release_helper/release_helper.h"
 #include "shared/source/utilities/api_intercept.h"
+#include "shared/source/utilities/staging_buffer_manager.h"
 #include "shared/source/utilities/tag_allocator.h"
 
 #include "opencl/source/built_ins/builtins_dispatch_builder.h"
@@ -106,7 +108,8 @@ CommandQueue::CommandQueue(Context *context, ClDevice *device, const cl_queue_pr
         auto &compilerProductHelper = device->getCompilerProductHelper();
         auto &rootDeviceEnvironment = device->getRootDeviceEnvironment();
 
-        bcsAllowed = productHelper.isBlitterFullySupported(hwInfo) &&
+        bcsAllowed = !device->getDevice().isAnyDirectSubmissionLightEnabled() &&
+                     productHelper.isBlitterFullySupported(hwInfo) &&
                      gfxCoreHelper.isSubDeviceEngineSupported(rootDeviceEnvironment, device->getDeviceBitfield(), aub_stream::EngineType::ENGINE_BCS);
 
         if (bcsAllowed || device->getDefaultEngine().commandStreamReceiver->peekTimestampPacketWriteEnabled()) {
@@ -130,10 +133,10 @@ CommandQueue::CommandQueue(Context *context, ClDevice *device, const cl_queue_pr
             device->getDevice().getL0Debugger()->notifyCommandQueueCreated(&device->getDevice());
         }
 
-        this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled();
+        this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled(hwInfo);
         this->heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(this->heaplessModeEnabled);
-
         this->isForceStateless = compilerProductHelper.isForceToStatelessRequired();
+        this->l3FlushAfterPostSyncEnabled = productHelper.isL3FlushAfterPostSyncRequired(this->heaplessModeEnabled);
     }
 }
 
@@ -174,7 +177,7 @@ CommandQueue::~CommandQueue() {
 }
 
 void tryAssignSecondaryEngine(Device &device, EngineControl *&engineControl, EngineTypeUsage engineTypeUsage) {
-    auto newEngine = device.getSecondaryEngineCsr(engineTypeUsage, false);
+    auto newEngine = device.getSecondaryEngineCsr(engineTypeUsage, 0, false);
     if (newEngine) {
         engineControl = newEngine;
     }
@@ -185,35 +188,17 @@ void CommandQueue::initializeGpgpu() const {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (gpgpuEngine == nullptr) {
-            auto &productHelper = device->getProductHelper();
-            auto engineRoundRobinAvailable = productHelper.isAssignEngineRoundRobinSupported() &&
-                                             this->isAssignEngineRoundRobinEnabled();
-
-            if (debugManager.flags.EnableCmdQRoundRobindEngineAssign.get() != -1) {
-                engineRoundRobinAvailable = debugManager.flags.EnableCmdQRoundRobindEngineAssign.get();
-            }
-
-            auto assignEngineRoundRobin =
-                !this->isSpecialCommandQueue &&
-                !this->queueFamilySelected &&
-                !(getCmdQueueProperties<cl_queue_priority_khr>(propertiesVector.data(), CL_QUEUE_PRIORITY_KHR) & static_cast<cl_queue_priority_khr>(CL_QUEUE_PRIORITY_LOW_KHR)) &&
-                engineRoundRobinAvailable;
-
             auto defaultEngineType = device->getDefaultEngine().getEngineType();
 
             const GfxCoreHelper &gfxCoreHelper = getDevice().getGfxCoreHelper();
             bool secondaryContextsEnabled = gfxCoreHelper.areSecondaryContextsSupported();
 
-            if (assignEngineRoundRobin) {
-                this->gpgpuEngine = &device->getDevice().getNextEngineForCommandQueue();
-            } else {
-                if (secondaryContextsEnabled && EngineHelpers::isCcs(defaultEngineType)) {
-                    tryAssignSecondaryEngine(device->getDevice(), gpgpuEngine, {defaultEngineType, EngineUsage::regular});
-                }
+            if (secondaryContextsEnabled && EngineHelpers::isCcs(defaultEngineType)) {
+                tryAssignSecondaryEngine(device->getDevice(), gpgpuEngine, {defaultEngineType, EngineUsage::regular});
+            }
 
-                if (gpgpuEngine == nullptr) {
-                    this->gpgpuEngine = &device->getDefaultEngine();
-                }
+            if (gpgpuEngine == nullptr) {
+                this->gpgpuEngine = &device->getDefaultEngine();
             }
 
             this->initializeGpgpuInternals();
@@ -285,7 +270,6 @@ CommandStreamReceiver &CommandQueue::selectCsrForBuiltinOperation(const CsrSelec
     if (!blitEnqueueAllowed(args)) {
         return getGpgpuCommandStreamReceiver();
     }
-
     bool preferBcs = true;
     aub_stream::EngineType preferredBcsEngineType = aub_stream::EngineType::NUM_ENGINES;
     switch (args.direction) {
@@ -548,7 +532,9 @@ WaitStatus CommandQueue::waitUntilComplete(TaskCountType gpgpuTaskCountToWait, R
                      : getGpgpuCommandStreamReceiver().waitForTaskCount(gpgpuTaskCountToWait);
 
     WAIT_LEAVE()
-
+    if (this->context->getStagingBufferManager()) {
+        this->context->getStagingBufferManager()->resetDetectedPtrs();
+    }
     return waitStatus;
 }
 
@@ -598,7 +584,7 @@ TaskCountType CommandQueue::getTaskLevelFromWaitList(TaskCountType taskLevel,
                                                      cl_uint numEventsInWaitList,
                                                      const cl_event *eventWaitList) {
     for (auto iEvent = 0u; iEvent < numEventsInWaitList; ++iEvent) {
-        auto pEvent = (Event *)(eventWaitList[iEvent]);
+        auto pEvent = static_cast<const Event *>(eventWaitList[iEvent]);
         TaskCountType eventTaskLevel = pEvent->peekTaskLevel();
         taskLevel = std::max(taskLevel, eventTaskLevel);
     }
@@ -668,8 +654,7 @@ cl_int CommandQueue::enqueueReleaseSharedObjects(cl_uint numObjects, const cl_me
     }
 
     if (this->getGpgpuCommandStreamReceiver().isDirectSubmissionEnabled()) {
-        if (this->getDevice().getProductHelper().isDcFlushMitigated() || isDisplayableReleased) {
-            this->getGpgpuCommandStreamReceiver().registerDcFlushForDcMitigation();
+        if (isDisplayableReleased) {
             this->getGpgpuCommandStreamReceiver().sendRenderStateCacheFlush();
             {
                 TakeOwnershipWrapper<CommandQueue> queueOwnership(*this);
@@ -990,7 +975,17 @@ TaskCountType CommandQueue::peekBcsTaskCount(aub_stream::EngineType bcsEngineTyp
 }
 
 bool CommandQueue::isTextureCacheFlushNeeded(uint32_t commandType) const {
-    return (commandType == CL_COMMAND_COPY_IMAGE || commandType == CL_COMMAND_WRITE_IMAGE) && getGpgpuCommandStreamReceiver().isDirectSubmissionEnabled();
+    auto isDirectSubmissionEnabled = getGpgpuCommandStreamReceiver().isDirectSubmissionEnabled();
+    if (this->isImageWriteOperation(commandType)) {
+        return isDirectSubmissionEnabled;
+    }
+    switch (commandType) {
+    case CL_COMMAND_READ_IMAGE:
+    case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
+        return isDirectSubmissionEnabled && getDevice().getGfxCoreHelper().isCacheFlushPriorImageReadRequired();
+    default:
+        return false;
+    }
 }
 
 IndirectHeap &CommandQueue::getIndirectHeap(IndirectHeapType heapType, size_t minRequiredSize) {
@@ -1146,10 +1141,14 @@ bool CommandQueue::blitEnqueueAllowed(const CsrSelectionArgs &args) const {
 bool CommandQueue::blitEnqueueImageAllowed(const size_t *origin, const size_t *region, const Image &image) const {
     const auto &hwInfo = device->getHardwareInfo();
     auto &productHelper = device->getProductHelper();
+    auto releaseHelper = device->getDevice().getReleaseHelper();
     auto blitEnqueueImageAllowed = productHelper.isBlitterForImagesSupported();
 
     if (debugManager.flags.EnableBlitterForEnqueueImageOperations.get() != -1) {
         blitEnqueueImageAllowed = debugManager.flags.EnableBlitterForEnqueueImageOperations.get();
+    }
+    if (releaseHelper) {
+        blitEnqueueImageAllowed &= !(Image::isDepthFormat(image.getImageFormat()) && !releaseHelper->isBlitImageAllowedForDepthFormat());
     }
 
     blitEnqueueImageAllowed &= !isMipMapped(image.getImageDesc());
@@ -1327,11 +1326,17 @@ void CommandQueue::assignDataToOverwrittenBcsNode(TagNodeBase *node) {
 }
 
 bool CommandQueue::isWaitForTimestampsEnabled() const {
-    const auto &gfxCoreHelper = getDevice().getGfxCoreHelper();
     auto &productHelper = getDevice().getProductHelper();
+
     auto enabled = CommandQueue::isTimestampWaitEnabled();
-    enabled &= gfxCoreHelper.isTimestampWaitSupportedForQueues();
-    enabled &= !productHelper.isDcFlushAllowed();
+    enabled &= productHelper.isTimestampWaitSupportedForQueues(this->heaplessModeEnabled);
+
+    if (productHelper.isL3FlushAfterPostSyncRequired(this->heaplessModeEnabled)) {
+        enabled &= true;
+    } else {
+        enabled &= !productHelper.isDcFlushAllowed();
+    }
+
     enabled &= !getDevice().getRootDeviceEnvironment().isWddmOnLinux();
     enabled &= !this->isOOQEnabled(); // TSP for OOQ dispatch is optional. We need to wait for task count.
 
@@ -1553,6 +1558,14 @@ void CommandQueue::unregisterGpgpuAndBcsCsrClients() {
             unregisterBcsCsrClient(*engine->commandStreamReceiver);
         }
     }
+}
+
+size_t CommandQueue::calculateHostPtrSizeForImage(const size_t *region, size_t rowPitch, size_t slicePitch, Image *image) const {
+    auto bytesPerPixel = image->getSurfaceFormatInfo().surfaceFormat.imageElementSizeInBytes;
+    auto dstRowPitch = rowPitch ? rowPitch : region[0] * bytesPerPixel;
+    auto dstSlicePitch = slicePitch ? slicePitch : ((image->getImageDesc().image_type == CL_MEM_OBJECT_IMAGE1D_ARRAY ? 1 : region[1]) * dstRowPitch);
+
+    return Image::calculateHostPtrSize(region, dstRowPitch, dstSlicePitch, bytesPerPixel, image->getImageDesc().image_type);
 }
 
 } // namespace NEO

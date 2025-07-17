@@ -9,7 +9,6 @@
 #include "shared/source/os_interface/os_context.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
-#include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_allocation_properties.h"
 #include "shared/test/common/test_macros/test.h"
 #include "shared/test/common/test_macros/test_checks_shared.h"
@@ -23,6 +22,10 @@
 #include "opencl/test/unit_test/fixtures/image_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_context.h"
 #include "opencl/test/unit_test/mocks/mock_kernel.h"
+
+namespace NEO {
+class GraphicsAllocation;
+} // namespace NEO
 
 using namespace NEO;
 
@@ -40,7 +43,7 @@ struct EnqueueMapImageTest : public ClDeviceFixture,
         ClDeviceFixture::setUp();
         CommandQueueFixture::setUp(pClDevice, 0);
         context = new MockContext(pClDevice);
-        image = ImageHelper<ImageUseHostPtr<Image2dDefaults>>::create(context);
+        image = ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context);
     }
 
     void TearDown() override {
@@ -93,10 +96,7 @@ TEST_F(EnqueueMapImageTest, GivenTiledImageWhenMappingImageThenPointerIsReused) 
 }
 
 HWTEST_F(EnqueueMapImageTest, givenAllocatedMapPtrAndMapWithDifferentOriginIsCalledThenReturnDifferentPointers) {
-    if (!defaultHwInfo->capabilityTable.supportsImages) {
-        GTEST_SKIP();
-    }
-    std::unique_ptr<Image> img(Image2dHelper<Image2dDefaults>::create(context));
+    std::unique_ptr<Image> img(Image2dHelperUlt<Image2dDefaults>::create(context));
     auto mapFlags = CL_MAP_READ;
     const size_t origin1[3] = {0, 0, 0};
     const size_t origin2[3] = {2, 2, 0};
@@ -138,25 +138,25 @@ TEST_P(MipMapMapImageParamsTest, givenAllocatedMapPtrWhenMapsWithDifferentMipMap
     switch (imageType) {
     case CL_MEM_OBJECT_IMAGE1D:
         origin2[1] = 1;
-        image = std::unique_ptr<Image>(ImageHelper<Image1dDefaults>::create(context, &imageDesc));
+        image = std::unique_ptr<Image>(ImageHelperUlt<Image1dDefaults>::create(context, &imageDesc));
         break;
     case CL_MEM_OBJECT_IMAGE1D_ARRAY:
         origin2[2] = 1;
         imageDesc.image_array_size = 2;
-        image = std::unique_ptr<Image>(ImageHelper<Image1dArrayDefaults>::create(context, &imageDesc));
+        image = std::unique_ptr<Image>(ImageHelperUlt<Image1dArrayDefaults>::create(context, &imageDesc));
         break;
     case CL_MEM_OBJECT_IMAGE2D:
         origin2[2] = 1;
-        image = std::unique_ptr<Image>(ImageHelper<Image2dDefaults>::create(context, &imageDesc));
+        image = std::unique_ptr<Image>(ImageHelperUlt<Image2dDefaults>::create(context, &imageDesc));
         break;
     case CL_MEM_OBJECT_IMAGE2D_ARRAY:
         origin2[3] = 1;
         imageDesc.image_array_size = 2;
-        image = std::unique_ptr<Image>(ImageHelper<Image2dArrayDefaults>::create(context, &imageDesc));
+        image = std::unique_ptr<Image>(ImageHelperUlt<Image2dArrayDefaults>::create(context, &imageDesc));
         break;
     case CL_MEM_OBJECT_IMAGE3D:
         origin2[3] = 1;
-        image = std::unique_ptr<Image>(ImageHelper<Image3dDefaults>::create(context, &imageDesc));
+        image = std::unique_ptr<Image>(ImageHelperUlt<Image3dDefaults>::create(context, &imageDesc));
         break;
     }
     EXPECT_NE(nullptr, image.get());
@@ -196,9 +196,6 @@ struct MockedImage : public ImageHw<GfxFamily> {
 };
 
 HWTEST_F(EnqueueMapImageTest, givenTiledImageWhenMapImageIsCalledThenStorageIsSetWithImageMutexTaken) {
-    if (!defaultHwInfo->capabilityTable.supportsImages) {
-        GTEST_SKIP();
-    }
     auto imageFormat = image->getImageFormat();
     auto imageDesc = image->getImageDesc();
     auto graphicsAllocation = image->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
@@ -315,9 +312,6 @@ TEST_F(EnqueueMapImageTest, GivenCmdqAndValidArgsWhenMappingImageThenSuccessIsRe
 }
 
 HWTEST_F(EnqueueMapImageTest, givenNonReadOnlyMapWithOutEventWhenMappedThenSetEventAndIncraseTaskCountFromWriteImage) {
-    if (!defaultHwInfo->capabilityTable.supportsImages) {
-        GTEST_SKIP();
-    }
     DebugManagerStateRestore dbgRestore;
     debugManager.flags.EnableAsyncEventsHandler.set(false);
     cl_event mapEventReturned = nullptr;
@@ -339,18 +333,21 @@ HWTEST_F(EnqueueMapImageTest, givenNonReadOnlyMapWithOutEventWhenMappedThenSetEv
     struct E2Clb {
         static void CL_CALLBACK signalEv2(cl_event e, cl_int status, void *data) {
             uint32_t *pTagMem = static_cast<uint32_t *>(data);
-            *pTagMem = 4;
+            *pTagMem = 5;
         }
     };
 
+    size_t expectedTaskCount = pCmdQ->getHeaplessStateInitEnabled() ? 2u : 1u;
+
     TaskCountType taskCount = commandStreamReceiver.peekTaskCount();
-    EXPECT_EQ(1u, taskCount);
+    EXPECT_EQ(expectedTaskCount, taskCount);
 
     // enqueue something that can be finished...
     retVal = clEnqueueNDRangeKernel(pCmdQ, kernel.mockMultiDeviceKernel, 1, 0, &gws, nullptr, 0, nullptr, nullptr);
     EXPECT_EQ(retVal, CL_SUCCESS);
 
-    *pTagMemory = tagHW += 3;
+    expectedTaskCount += 2;
+    *pTagMemory = tagHW += static_cast<uint32_t>(expectedTaskCount);
     auto ptr = pCmdQ->enqueueMapImage(
         image,
         false,
@@ -370,16 +367,17 @@ HWTEST_F(EnqueueMapImageTest, givenNonReadOnlyMapWithOutEventWhenMappedThenSetEv
     EXPECT_TRUE(CL_COMMAND_MAP_IMAGE == mapEvent->getCommandType());
 
     taskCount = commandStreamReceiver.peekTaskCount();
-    EXPECT_EQ(3u, taskCount);
+    EXPECT_EQ(expectedTaskCount, taskCount);
 
     clSetEventCallback(mapEventReturned, CL_COMPLETE, E2Clb::signalEv2, (void *)pTagMemory);
 
     retVal = clWaitForEvents(1, &mapEventReturned);
     EXPECT_EQ(CL_SUCCESS, retVal);
-    EXPECT_EQ(4u, *pTagMemory);
+    EXPECT_EQ(5u, *pTagMemory);
     taskCount = commandStreamReceiver.peekTaskCount();
-    EXPECT_EQ(3u, taskCount);
+    EXPECT_EQ(expectedTaskCount, taskCount);
 
+    expectedTaskCount++;
     auto newTag = *pTagMemory + 1;
     (*pTagMemory) = newTag;
     retVal = clEnqueueUnmapMemObject(
@@ -396,16 +394,17 @@ HWTEST_F(EnqueueMapImageTest, givenNonReadOnlyMapWithOutEventWhenMappedThenSetEv
     retVal = clWaitForEvents(1, &unmapEventReturned);
 
     taskCount = commandStreamReceiver.peekTaskCount();
-    EXPECT_EQ(4u, taskCount);
+    if (commandStreamReceiver.isUpdateTagFromWaitEnabled()) {
+        EXPECT_EQ(expectedTaskCount + 1, taskCount);
+    } else {
+        EXPECT_EQ(expectedTaskCount, taskCount);
+    }
 
     clReleaseEvent(mapEventReturned);
     clReleaseEvent(unmapEventReturned);
 }
 
 HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEventAndDontIncraseTaskCountFromWriteImage) {
-    if (!defaultHwInfo->capabilityTable.supportsImages) {
-        GTEST_SKIP();
-    }
     DebugManagerStateRestore dbgRestore;
     debugManager.flags.EnableAsyncEventsHandler.set(false);
     cl_event mapEventReturned = nullptr;
@@ -416,15 +415,15 @@ HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEvent
     *pTagMemory = 5;
 
     auto &commandStreamReceiver = pCmdQ->getGpgpuCommandStreamReceiver();
+    const auto commandStreamReceiverTaskCountBefore = commandStreamReceiver.peekTaskCount();
 
-    EXPECT_EQ(1u, commandStreamReceiver.peekTaskCount());
-
+    EXPECT_EQ(pCmdQ->getHeaplessStateInitEnabled() ? 2u : 1u, commandStreamReceiver.peekTaskCount());
     auto ptr = pCmdQ->enqueueMapImage(image, false, mapFlags, origin, region, nullptr, nullptr, 0,
                                       nullptr, &mapEventReturned, retVal);
 
     EXPECT_NE(nullptr, ptr);
     EXPECT_EQ(CL_SUCCESS, retVal);
-    EXPECT_EQ(2u, commandStreamReceiver.peekTaskCount());
+    EXPECT_EQ(commandStreamReceiverTaskCountBefore + 1, commandStreamReceiver.peekTaskCount());
 
     auto mapEvent = castToObject<Event>(mapEventReturned);
     EXPECT_TRUE(CL_COMMAND_MAP_IMAGE == mapEvent->getCommandType());
@@ -435,7 +434,7 @@ HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEvent
     retVal = clEnqueueUnmapMemObject(pCmdQ, image, ptr, 0, nullptr, &unmapEventReturned);
     EXPECT_EQ(CL_SUCCESS, retVal);
 
-    EXPECT_EQ(2u, commandStreamReceiver.peekTaskCount());
+    EXPECT_EQ(commandStreamReceiverTaskCountBefore + 1, commandStreamReceiver.peekTaskCount());
 
     auto unmapEvent = castToObject<Event>(unmapEventReturned);
     EXPECT_TRUE(CL_COMMAND_UNMAP_MEM_OBJECT == unmapEvent->getCommandType());
@@ -448,9 +447,6 @@ HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEvent
 }
 
 HWTEST_F(EnqueueMapImageTest, GivenPtrToReturnEventWhenMappingImageThenEventIsNotNull) {
-    if (!defaultHwInfo->capabilityTable.supportsImages) {
-        GTEST_SKIP();
-    }
     cl_event eventReturned = nullptr;
     auto mapFlags = CL_MAP_READ;
     const size_t origin[3] = {0, 0, 0};
@@ -508,7 +504,7 @@ HWTEST_F(EnqueueMapImageTest, givenZeroCopyImageWhenItIsMappedAndReturnsEventThe
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     commandStreamReceiver.taskCount = forceTaskCount;
 
-    std::unique_ptr<Image> zeroCopyImage(ImageHelper<ImageWriteOnly<Image1dDefaults>>::create(context));
+    std::unique_ptr<Image> zeroCopyImage(ImageHelperUlt<ImageWriteOnly<Image1dDefaults>>::create(context));
 
     ASSERT_TRUE(zeroCopyImage->isMemObjZeroCopy());
     pCmdQ->taskCount = 40u;
@@ -556,7 +552,7 @@ TEST_F(EnqueueMapImageTest, GivenNonZeroCopyImageWhenMappedWithOffsetThenCorrect
     size_t imageRowPitch = 0;
     size_t imageSlicePitch = 0;
 
-    Image *nonZeroCopyImage = ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context);
+    Image *nonZeroCopyImage = ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context);
 
     EXPECT_FALSE(nonZeroCopyImage->isMemObjZeroCopy());
 
@@ -598,7 +594,7 @@ TEST_F(EnqueueMapImageTest, GivenNonZeroCopyImageWhenMappedWithOffsetThenCorrect
 }
 
 HWTEST_F(EnqueueMapImageTest, givenSharingHandlerWhenNonReadOnlyMapAndUnmapOnNonTiledImageIsCalledThenMakeGpuCopy) {
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context));
     ASSERT_NE(nullptr, image);
     image->setSharingHandler(new SharingHandler());
     EXPECT_FALSE(image->isTiledAllocation());
@@ -623,7 +619,7 @@ HWTEST_F(EnqueueMapImageTest, givenSharingHandlerWhenNonReadOnlyMapAndUnmapOnNon
 }
 
 HWTEST_F(EnqueueMapImageTest, givenSharingHandlerWhenReadOnlyMapAndUnmapOnNonTiledImageIsCalledThenMakeGpuCopy) {
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context));
     ASSERT_NE(nullptr, image);
     image->setSharingHandler(new SharingHandler());
     EXPECT_FALSE(image->isTiledAllocation());
@@ -648,7 +644,7 @@ HWTEST_F(EnqueueMapImageTest, givenSharingHandlerWhenReadOnlyMapAndUnmapOnNonTil
 }
 
 HWTEST_F(EnqueueMapImageTest, givenImageWithouUsetHostPtrFlagWhenMappedOnCpuThenSetAllMapProperties) {
-    std::unique_ptr<Image> image(ImageHelper<Image1dDefaults>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<Image1dDefaults>::create(context));
     ASSERT_NE(nullptr, image);
     EXPECT_TRUE(image->mappingOnCpuAllowed());
 
@@ -676,7 +672,7 @@ HWTEST_F(EnqueueMapImageTest, givenImageWithouUsetHostPtrFlagWhenMappedOnCpuThen
 }
 
 HWTEST_F(EnqueueMapImageTest, givenImageWithUseHostPtrFlagWhenMappedOnCpuThenSetAllMapProperties) {
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context));
     ASSERT_NE(nullptr, image);
     EXPECT_TRUE(image->mappingOnCpuAllowed());
 
@@ -749,7 +745,7 @@ TEST_F(EnqueueMapImageTest, givenBlockedCommandQueueWhenBlockingMapWith1DImageIs
     size_t imageRowPitch = 0;
     size_t imageSlicePitch = 0;
 
-    Image *image1D = ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context);
+    Image *image1D = ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context);
 
     ASSERT_NE(nullptr, image1D);
     class MockEventWithSetCompleteOnUpdate : public Event {
@@ -799,7 +795,7 @@ TEST_F(EnqueueMapImageTest, givenBlockedCommandQueueWhenBlockingCpuMapIsCalledTh
         }
     };
 
-    std::unique_ptr<Image> image(ImageHelper<Image1dArrayDefaults>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<Image1dArrayDefaults>::create(context));
     EXPECT_TRUE(image->mappingOnCpuAllowed());
 
     MyMockUserEvent blockingEvent;
@@ -813,7 +809,7 @@ TEST_F(EnqueueMapImageTest, givenBlockedCommandQueueWhenBlockingCpuMapIsCalledTh
     EXPECT_NE(0u, retImageRowPitch);
     EXPECT_NE(0u, retImageSlicePitch);
 
-    image.reset(ImageHelper<Image1dDefaults>::create(context));
+    image.reset(ImageHelperUlt<Image1dDefaults>::create(context));
     pCmdQ->enqueueMapImage(image.get(), true, CL_MAP_READ, origin, region,
                            &retImageRowPitch, &retImageSlicePitch,
                            1, &blockingClEvent, nullptr, retVal);
@@ -829,7 +825,7 @@ TEST_F(EnqueueMapImageTest, givenZeroCopyImageWhenMappedOnCpuThenReturnImageRowA
     size_t retImageRowPitch = 0;
     size_t retImageSlicePitch = 0;
 
-    std::unique_ptr<Image> image(ImageHelper<Image1dArrayDefaults>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<Image1dArrayDefaults>::create(context));
     EXPECT_TRUE(image->mappingOnCpuAllowed());
     EXPECT_TRUE(image->isMemObjZeroCopy());
 
@@ -848,7 +844,7 @@ TEST_F(EnqueueMapImageTest, givenNonZeroCopyImageWhenMappedOnCpuThenReturnHostRo
     size_t retImageRowPitch = 0;
     size_t retImageSlicePitch = 0;
 
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image1dArrayDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image1dArrayDefaults>>::create(context));
     EXPECT_TRUE(image->mappingOnCpuAllowed());
     EXPECT_FALSE(image->isMemObjZeroCopy());
 
@@ -867,7 +863,7 @@ TEST_F(EnqueueMapImageTest, givenZeroCopyImageWhenMappedOnGpuThenReturnHostRowAn
     size_t retImageRowPitch = 0;
     size_t retImageSlicePitch = 0;
 
-    std::unique_ptr<Image> image(ImageHelper<Image1dArrayDefaults>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<Image1dArrayDefaults>::create(context));
     image->setSharingHandler(new SharingHandler());
     EXPECT_FALSE(image->mappingOnCpuAllowed());
     EXPECT_TRUE(image->isMemObjZeroCopy());
@@ -887,7 +883,7 @@ TEST_F(EnqueueMapImageTest, givenNonZeroCopyImageWhenMappedOnGpuThenReturnHostRo
     size_t retImageRowPitch = 0;
     size_t retImageSlicePitch = 0;
 
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image1dArrayDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image1dArrayDefaults>>::create(context));
     image->setSharingHandler(new SharingHandler());
     EXPECT_FALSE(image->mappingOnCpuAllowed());
     EXPECT_FALSE(image->isMemObjZeroCopy());
@@ -914,7 +910,7 @@ TEST_F(EnqueueMapImageTest, givenMipMapImageWhenMappedThenReturnHostRowAndSliceP
     imageDesc.image_height = 4;
     imageDesc.image_depth = 4;
 
-    std::unique_ptr<Image> image(ImageHelper<Image3dDefaults>::create(context, &imageDesc));
+    std::unique_ptr<Image> image(ImageHelperUlt<Image3dDefaults>::create(context, &imageDesc));
     image->setSharingHandler(new SharingHandler());
     EXPECT_FALSE(image->mappingOnCpuAllowed());
 
@@ -998,7 +994,7 @@ struct EnqueueMapImageTypeTest : public CommandEnqueueFixture,
 
     void SetUp() override {
         CommandEnqueueFixture::setUp();
-        image = ImageHelper<ImageUseHostPtr<Image2dDefaults>>::create(&context);
+        image = ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(&context);
     }
 
     void TearDown() override {

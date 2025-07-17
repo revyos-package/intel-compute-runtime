@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -10,6 +10,7 @@
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/helpers/variable_backup.h"
 
+#include "level_zero/core/source/cmdlist/cmdlist_memory_copy_params.h"
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/fixtures/module_fixture.h"
 
@@ -217,6 +218,7 @@ class AppendFillFixture : public DeviceFixture {
                                         NEO::SvmAllocationData *&allocData) override;
 
         const uint32_t rootDeviceIndex = 0u;
+        bool forceFalseFromfindAllocationDataForRange = false;
         std::unique_ptr<NEO::GraphicsAllocation> mockAllocation;
         NEO::SvmAllocationData data{rootDeviceIndex};
     };
@@ -404,6 +406,9 @@ struct CommandListScratchPatchFixtureInit : public ModuleMutableCommandListFixtu
 
     template <typename FamilyType>
     void testExternalScratchPatching();
+
+    template <typename FamilyType>
+    void testScratchUndefinedPatching();
 
     int32_t fixtureGlobalStatelessMode = 0;
     uint32_t scratchInlineOffset = 8;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -73,7 +73,7 @@ class Wddm : public DriverModel {
     MOCKABLE_VIRTUAL void applyAdditionalMapGPUVAFields(D3DDDI_MAPGPUVIRTUALADDRESS &mapGPUVA, Gmm *gmm, AllocationType type);
     MOCKABLE_VIRTUAL uint64_t freeGmmGpuVirtualAddress(Gmm *gmm, D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size);
     MOCKABLE_VIRTUAL bool freeGpuVirtualAddress(D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size);
-    MOCKABLE_VIRTUAL NTSTATUS createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle);
+    MOCKABLE_VIRTUAL NTSTATUS createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle);
     MOCKABLE_VIRTUAL bool createAllocation(const Gmm *gmm, D3DKMT_HANDLE &outHandle);
     MOCKABLE_VIRTUAL NTSTATUS createAllocationsAndMapGpuVa(OsHandleStorage &osHandles);
     MOCKABLE_VIRTUAL bool destroyAllocations(const D3DKMT_HANDLE *handles, uint32_t allocationCount, D3DKMT_HANDLE resourceHandle);
@@ -82,7 +82,7 @@ class Wddm : public DriverModel {
     MOCKABLE_VIRTUAL bool verifyNTHandle(HANDLE handle);
     bool openNTHandle(const MemoryManager::OsHandleData &osHandleData, WddmAllocation *alloc);
     MOCKABLE_VIRTUAL void *lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock, size_t size);
-    MOCKABLE_VIRTUAL void unlockResource(const D3DKMT_HANDLE &handle);
+    MOCKABLE_VIRTUAL void unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock);
     MOCKABLE_VIRTUAL void kmDafLock(D3DKMT_HANDLE handle);
     MOCKABLE_VIRTUAL bool isKmDafEnabled() const;
 
@@ -106,6 +106,7 @@ class Wddm : public DriverModel {
 
     MOCKABLE_VIRTUAL bool isShutdownInProgress();
     MOCKABLE_VIRTUAL bool isDebugAttachAvailable();
+    MOCKABLE_VIRTUAL bool isNativeFenceAvailable();
 
     bool isGpuHangDetected(OsContext &osContext) override;
 
@@ -257,7 +258,9 @@ class Wddm : public DriverModel {
     void setNewResourceBoundToPageTable();
     void setProcessPowerThrottling();
     void setThreadPriority();
-    bool isReadOnlyMemory(const void *ptr);
+    bool getReadOnlyFlagValue(const void *cpuPtr) const;
+    bool isReadOnlyFlagFallbackSupported() const;
+    bool isReadOnlyFlagFallbackAvailable(const D3DKMT_CREATEALLOCATION &createAllocation) const;
 
     GMM_GFX_PARTITIONING gfxPartition{};
     ADAPTER_BDF adapterBDF{};
@@ -268,6 +271,7 @@ class Wddm : public DriverModel {
 
     uint64_t systemSharedMemory = 0;
     uint64_t dedicatedVideoMemory = 0;
+    uint64_t lmemBarSize = 0;
 
     // Adapter information
     std::unique_ptr<PLATFORM_KMD> gfxPlatform;
@@ -305,6 +309,8 @@ class Wddm : public DriverModel {
     uint32_t timestampFrequency = 0u;
     uint32_t additionalAdapterInfoOptions = 0u;
     int32_t forceEvictOnlyIfNecessary = -1;
+
+    uint8_t segmentId[3]{};
 
     unsigned int enablePreemptionRegValue = 1;
 

@@ -10,11 +10,14 @@
 #include "shared/source/direct_submission/dispatchers/blitter_dispatcher.h"
 #include "shared/source/direct_submission/dispatchers/render_dispatcher.h"
 #include "shared/source/direct_submission/linux/drm_direct_submission.h"
+#include "shared/source/direct_submission/relaxed_ordering_helper.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/flush_stamp.h"
 #include "shared/source/os_interface/linux/drm_gem_close_worker.h"
+#include "shared/source/os_interface/linux/drm_memory_operations_handler.h"
 #include "shared/source/os_interface/linux/os_context_linux.h"
 #include "shared/source/os_interface/linux/sys_calls.h"
+#include "shared/source/release_helper/release_helper.h"
 #include "shared/source/utilities/wait_util.h"
 #include "shared/test/common/cmd_parse/hw_parse.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
@@ -51,6 +54,7 @@ struct DrmDirectSubmissionTest : public DrmMemoryManagerBasic {
                                                                                 true,
                                                                                 executionEnvironment);
         device.reset(MockDevice::create<MockDevice>(&executionEnvironment, 0u));
+        executionEnvironment.rootDeviceEnvironments[0]->initReleaseHelper();
         osContext = std::make_unique<OsContextLinux>(*executionEnvironment.rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Drm>(), device->getRootDeviceIndex(), 0u,
                                                      EngineDescriptorHelper::getDefaultDescriptor({aub_stream::ENGINE_RCS, EngineUsage::regular},
                                                                                                   PreemptionMode::ThreadGroup, device->getDeviceBitfield()));
@@ -79,7 +83,12 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::dispatchMonitorFenceRequired;
     using BaseClass::dispatchSwitchRingBufferSection;
     using BaseClass::DrmDirectSubmission;
+    using BaseClass::getSizeDisablePrefetcher;
+    using BaseClass::getSizeDispatchRelaxedOrderingQueueStall;
+    using BaseClass::getSizeEnd;
     using BaseClass::getSizeNewResourceHandler;
+    using BaseClass::getSizePrefetchMitigation;
+    using BaseClass::getSizeSemaphoreSection;
     using BaseClass::getSizeSwitchRingBufferSection;
     using BaseClass::getTagAddressValue;
     using BaseClass::gpuHangCheckPeriod;
@@ -89,13 +98,18 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::immWritePostSyncOffset;
     using BaseClass::inputMonitorFenceDispatchRequirement;
     using BaseClass::isCompleted;
+    using BaseClass::isDisablePrefetcherRequired;
     using BaseClass::isNewResourceHandleNeeded;
+    using BaseClass::lastUllsLightExecTimestamp;
     using BaseClass::miMemFenceRequired;
+    using BaseClass::osContext;
     using BaseClass::partitionConfigSet;
     using BaseClass::partitionedMode;
     using BaseClass::pciBarrierPtr;
+    using BaseClass::relaxedOrderingEnabled;
     using BaseClass::ringBuffers;
     using BaseClass::ringStart;
+    using BaseClass::rootDeviceEnvironment;
     using BaseClass::sfenceMode;
     using BaseClass::submit;
     using BaseClass::switchRingBuffers;
@@ -103,9 +117,50 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::updateTagValue;
     using BaseClass::wait;
     using BaseClass::workPartitionAllocation;
+
+    MockDrmDirectSubmission(const DirectSubmissionInputParams &inputParams) : BaseClass(inputParams) {
+        this->lastUllsLightExecTimestamp = std::chrono::time_point<std::chrono::steady_clock>::max();
+    }
+
+    std::chrono::steady_clock::time_point getCpuTimePoint() override {
+        return this->callBaseGetCpuTimePoint ? BaseClass::getCpuTimePoint() : cpuTimePointReturnValue;
+    }
+    void getTagAddressValue(TagData &tagData) override {
+        if (setTagAddressValue) {
+            tagData.tagAddress = tagAddressSetValue;
+            tagData.tagValue = tagValueSetValue;
+        } else {
+            BaseClass::getTagAddressValue(tagData);
+        }
+    }
+    std::chrono::steady_clock::time_point cpuTimePointReturnValue{};
+    bool callBaseGetCpuTimePoint = true;
+    uint64_t tagAddressSetValue = MemoryConstants::pageSize;
+    uint64_t tagValueSetValue = 1ull;
+    bool setTagAddressValue = false;
 };
 
 using namespace NEO;
+
+struct MockDrmMemoryManagerForcePin : public DrmMemoryManager {
+    using DrmMemoryManager::forcePinEnabled;
+};
+
+HWTEST_F(DrmDirectSubmissionTest, whenCreateDrmDirectSubmissionLightThenDisableForcePin) {
+    EXPECT_TRUE(static_cast<MockDrmMemoryManagerForcePin *>(executionEnvironment.memoryManager.get())->forcePinEnabled);
+    auto drm = static_cast<DrmMock *>(executionEnvironment.rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Drm>());
+    drm->bindAvailable = false;
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    EXPECT_FALSE(static_cast<MockDrmMemoryManagerForcePin *>(executionEnvironment.memoryManager.get())->forcePinEnabled);
+}
+
+HWTEST_F(DrmDirectSubmissionTest, whenCreateDrmDirectSubmissionThenEnableForcePin) {
+    EXPECT_TRUE(static_cast<MockDrmMemoryManagerForcePin *>(executionEnvironment.memoryManager.get())->forcePinEnabled);
+    auto drm = static_cast<DrmMock *>(executionEnvironment.rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Drm>());
+    drm->bindAvailable = true;
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    EXPECT_TRUE(static_cast<MockDrmMemoryManagerForcePin *>(executionEnvironment.memoryManager.get())->forcePinEnabled);
+}
 
 HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenCallingLinuxImplementationThenExpectInitialImplementationValues) {
     MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
@@ -117,7 +172,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenCallingLinuxImplem
 
     uint64_t gpuAddress = 0x1000;
     size_t size = 0x1000;
-    EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size));
+    EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
 
     EXPECT_TRUE(drmDirectSubmission.handleResidency());
 
@@ -131,6 +186,27 @@ HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenCallingLinuxImplem
     EXPECT_EQ(drmDirectSubmission.currentTagData.tagValue + 1, tagData.tagValue);
 
     *drmDirectSubmission.tagAddress = 1u;
+}
+
+HWTEST_F(DrmDirectSubmissionTest, givenUllsLightWhenSwitchRingBufferNeedsToAllocateNewRingBufferThenAddToResidencyVectorAndRingStop) {
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    drmDirectSubmission.osContext.setDirectSubmissionActive();
+    auto drm = static_cast<DrmMock *>(executionEnvironment.rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Drm>());
+    EXPECT_TRUE(drm->isDirectSubmissionActive());
+    EXPECT_TRUE(drmDirectSubmission.allocateResources());
+
+    drmDirectSubmission.ringBuffers[1].completionFence = 1u;
+    drmDirectSubmission.ringStart = true;
+    ResidencyContainer residencyContainer{};
+    static_cast<DrmMemoryOperationsHandler *>(executionEnvironment.rootDeviceEnvironments[device->getRootDeviceIndex()]->memoryOperationsInterface.get())->mergeWithResidencyContainer(&drmDirectSubmission.osContext, residencyContainer);
+    const auto expectedSize = residencyContainer.size() + 1u;
+
+    EXPECT_NE(0ull, drmDirectSubmission.switchRingBuffers(&residencyContainer));
+
+    EXPECT_EQ(residencyContainer.size(), expectedSize);
+    EXPECT_FALSE(drmDirectSubmission.ringStart);
+
+    drmDirectSubmission.ringBuffers[1].completionFence = 0u;
 }
 
 HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenCallingIsCompletedThenProperValueReturned) {
@@ -271,7 +347,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenPciBarrierWhenCreateDirectSubmissionAndMm
 
     EXPECT_EQ(nullptr, directSubmission.pciBarrierPtr);
     EXPECT_NE(DirectSubmissionSfenceMode::disabled, directSubmission.sfenceMode);
-    auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
+    auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isAcquireGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
     EXPECT_EQ(directSubmission.miMemFenceRequired, expectMiMemFence);
 
     SysCalls::munmap(ptr, MemoryConstants::pageSize);
@@ -292,7 +368,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenPciBarrierDisabledWhenCreateDirectSubmiss
 
     EXPECT_EQ(nullptr, directSubmission.pciBarrierPtr);
     EXPECT_NE(DirectSubmissionSfenceMode::disabled, directSubmission.sfenceMode);
-    auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
+    auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isAcquireGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
     EXPECT_EQ(directSubmission.miMemFenceRequired, expectMiMemFence);
 
     SysCalls::munmap(ptr, MemoryConstants::pageSize);
@@ -463,7 +539,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenNoCompletionFenceSupportWhenSubmittingThe
 
     for (auto i = 0; i < 2; i++) {
         mockBO.passedExecParams.clear();
-        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size));
+        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
 
         ASSERT_EQ(1u, mockBO.passedExecParams.size());
         EXPECT_EQ(0u, mockBO.passedExecParams[0].completionGpuAddress);
@@ -489,7 +565,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenNoCompletionFenceSupportAndExecFailureWhe
     ringBuffer->getBufferObjectToModify(0) = &mockBO;
 
     mockBO.execReturnValue = ENXIO;
-    EXPECT_FALSE(drmDirectSubmission.submit(gpuAddress, size));
+    EXPECT_FALSE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
     EXPECT_EQ((uint32_t)ENXIO, drmDirectSubmission.getDispatchErrorCode());
 
     ringBuffer->getBufferObjectToModify(0) = initialBO;
@@ -515,7 +591,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenCompletionFenceSupportAndExecFailureWhenS
 
     mockBO.execReturnValue = 1;
     drmDirectSubmission.completionFenceValue = 1u;
-    EXPECT_FALSE(drmDirectSubmission.submit(gpuAddress, size));
+    EXPECT_FALSE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
     EXPECT_EQ(1u, drmDirectSubmission.completionFenceValue);
 
     ringBuffer->getBufferObjectToModify(0) = initialBO;
@@ -551,7 +627,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenTile0AndCompletionFenceSupportWhenSubmitt
 
     for (auto i = 0u; i < 2; i++) {
         mockBO.passedExecParams.clear();
-        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size));
+        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
 
         ASSERT_EQ(1u, mockBO.passedExecParams.size());
         EXPECT_EQ(completionFenceBaseGpuAddress, mockBO.passedExecParams[0].completionGpuAddress);
@@ -595,7 +671,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenTile1AndCompletionFenceSupportWhenSubmitt
 
     for (auto i = 0u; i < 2; i++) {
         mockBO.passedExecParams.clear();
-        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size));
+        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
 
         ASSERT_EQ(1u, mockBO.passedExecParams.size());
         EXPECT_EQ(completionFenceBaseGpuAddress, mockBO.passedExecParams[0].completionGpuAddress);
@@ -644,7 +720,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenTwoTilesAndCompletionFenceSupportWhenSubm
 
     for (auto i = 0u; i < 2; i++) {
         mockBO.passedExecParams.clear();
-        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size));
+        EXPECT_TRUE(drmDirectSubmission.submit(gpuAddress, size, nullptr));
 
         ASSERT_EQ(2u, mockBO.passedExecParams.size());
         EXPECT_EQ(completionFenceBaseGpuAddress, mockBO.passedExecParams[0].completionGpuAddress);
@@ -740,6 +816,153 @@ HWTEST_F(DrmDirectSubmissionTest, givenDirectSubmissionNewResourceTlbFlushWhenDi
     EXPECT_EQ(directSubmission.getSizeNewResourceHandler(), sizeof(PIPE_CONTROL));
 }
 
+HWTEST_F(DrmDirectSubmissionTest, givenDirectSubmissionLightWhenRegisterResourcesThenRestart) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    EXPECT_TRUE(drmDirectSubmission.initialize(false));
+
+    FlushStampTracker flushStamp(true);
+    BatchBuffer batchBuffer = {};
+    GraphicsAllocation *commandBuffer = nullptr;
+    LinearStream stream;
+
+    const AllocationProperties commandBufferProperties{device->getRootDeviceIndex(), 0x1000,
+                                                       AllocationType::commandBuffer, device->getDeviceBitfield()};
+    commandBuffer = executionEnvironment.memoryManager->allocateGraphicsMemoryWithProperties(commandBufferProperties);
+
+    stream.replaceGraphicsAllocation(commandBuffer);
+    stream.replaceBuffer(commandBuffer->getUnderlyingBuffer(), commandBuffer->getUnderlyingBufferSize());
+    stream.getSpace(0x20);
+
+    memset(stream.getCpuBase(), 0, 0x20);
+
+    batchBuffer.endCmdPtr = ptrOffset(stream.getCpuBase(), 0x20);
+    batchBuffer.commandBufferAllocation = commandBuffer;
+    batchBuffer.usedSize = 0x40;
+    batchBuffer.taskStartAddress = 0x881112340000;
+    batchBuffer.stream = &stream;
+    batchBuffer.hasStallingCmds = true;
+
+    ResidencyContainer residencyContainer{};
+    batchBuffer.allocationsForResidency = &residencyContainer;
+    drmDirectSubmission.ringStart = true;
+
+    EXPECT_TRUE(drmDirectSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
+
+    HardwareParse hwParse;
+    hwParse.parsePipeControl = true;
+    hwParse.parseCommands<FamilyType>(drmDirectSubmission.ringCommandStream, 0);
+    hwParse.findHardwareCommands<FamilyType>();
+    auto *pipeControl = hwParse.getCommand<PIPE_CONTROL>();
+    EXPECT_NE(pipeControl, nullptr);
+    auto *bbe = hwParse.getCommand<BATCH_BUFFER_END>();
+    EXPECT_NE(bbe, nullptr);
+
+    drmDirectSubmission.ringStart = false;
+    executionEnvironment.memoryManager->freeGraphicsMemory(commandBuffer);
+}
+
+HWTEST_F(DrmDirectSubmissionTest, givenDirectSubmissionLightWhenExecTimeoutReachedThenRestart) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    EXPECT_TRUE(drmDirectSubmission.initialize(false));
+
+    FlushStampTracker flushStamp(true);
+    BatchBuffer batchBuffer = {};
+    GraphicsAllocation *commandBuffer = nullptr;
+    LinearStream stream;
+
+    const AllocationProperties commandBufferProperties{device->getRootDeviceIndex(), 0x1000,
+                                                       AllocationType::commandBuffer, device->getDeviceBitfield()};
+    commandBuffer = executionEnvironment.memoryManager->allocateGraphicsMemoryWithProperties(commandBufferProperties);
+
+    stream.replaceGraphicsAllocation(commandBuffer);
+    stream.replaceBuffer(commandBuffer->getUnderlyingBuffer(), commandBuffer->getUnderlyingBufferSize());
+    stream.getSpace(0x20);
+
+    memset(stream.getCpuBase(), 0, 0x20);
+
+    batchBuffer.endCmdPtr = ptrOffset(stream.getCpuBase(), 0x20);
+    batchBuffer.commandBufferAllocation = commandBuffer;
+    batchBuffer.usedSize = 0x40;
+    batchBuffer.taskStartAddress = 0x881112340000;
+    batchBuffer.stream = &stream;
+    batchBuffer.hasStallingCmds = true;
+
+    ResidencyContainer residencyContainer{};
+    batchBuffer.allocationsForResidency = &residencyContainer;
+    drmDirectSubmission.ringStart = true;
+    static_cast<DrmMemoryOperationsHandler *>(executionEnvironment.rootDeviceEnvironments[device->getRootDeviceIndex()]->memoryOperationsInterface.get())->obtainAndResetNewResourcesSinceLastRingSubmit();
+
+    drmDirectSubmission.lastUllsLightExecTimestamp = std::chrono::steady_clock::time_point{};
+    drmDirectSubmission.cpuTimePointReturnValue = std::chrono::time_point<std::chrono::steady_clock>::max();
+    drmDirectSubmission.callBaseGetCpuTimePoint = false;
+
+    EXPECT_TRUE(drmDirectSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
+
+    HardwareParse hwParse;
+    hwParse.parsePipeControl = true;
+    hwParse.parseCommands<FamilyType>(drmDirectSubmission.ringCommandStream, 0);
+    hwParse.findHardwareCommands<FamilyType>();
+    auto *pipeControl = hwParse.getCommand<PIPE_CONTROL>();
+    EXPECT_NE(pipeControl, nullptr);
+    auto *bbe = hwParse.getCommand<BATCH_BUFFER_END>();
+    EXPECT_NE(bbe, nullptr);
+
+    drmDirectSubmission.ringStart = false;
+    executionEnvironment.memoryManager->freeGraphicsMemory(commandBuffer);
+}
+
+HWTEST_F(DrmDirectSubmissionTest, givenDirectSubmissionLightWhenNoRegisteredResourcesThenNoRestart) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
+    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    EXPECT_TRUE(drmDirectSubmission.initialize(false));
+
+    FlushStampTracker flushStamp(true);
+    BatchBuffer batchBuffer = {};
+    GraphicsAllocation *commandBuffer = nullptr;
+    LinearStream stream;
+
+    const AllocationProperties commandBufferProperties{device->getRootDeviceIndex(), 0x1000,
+                                                       AllocationType::commandBuffer, device->getDeviceBitfield()};
+    commandBuffer = executionEnvironment.memoryManager->allocateGraphicsMemoryWithProperties(commandBufferProperties);
+
+    stream.replaceGraphicsAllocation(commandBuffer);
+    stream.replaceBuffer(commandBuffer->getUnderlyingBuffer(), commandBuffer->getUnderlyingBufferSize());
+    stream.getSpace(0x20);
+
+    memset(stream.getCpuBase(), 0, 0x20);
+
+    batchBuffer.endCmdPtr = ptrOffset(stream.getCpuBase(), 0x20);
+    batchBuffer.commandBufferAllocation = commandBuffer;
+    batchBuffer.usedSize = 0x40;
+    batchBuffer.taskStartAddress = 0x881112340000;
+    batchBuffer.stream = &stream;
+    batchBuffer.hasStallingCmds = true;
+
+    ResidencyContainer residencyContainer{};
+    batchBuffer.allocationsForResidency = &residencyContainer;
+    drmDirectSubmission.ringStart = true;
+    static_cast<DrmMemoryOperationsHandler *>(executionEnvironment.rootDeviceEnvironments[device->getRootDeviceIndex()]->memoryOperationsInterface.get())->obtainAndResetNewResourcesSinceLastRingSubmit();
+
+    EXPECT_TRUE(drmDirectSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
+
+    HardwareParse hwParse;
+    hwParse.parsePipeControl = true;
+    hwParse.parseCommands<FamilyType>(drmDirectSubmission.ringCommandStream, 0);
+    hwParse.findHardwareCommands<FamilyType>();
+    auto *pipeControl = hwParse.getCommand<PIPE_CONTROL>();
+    EXPECT_EQ(pipeControl, nullptr);
+    auto *bbe = hwParse.getCommand<BATCH_BUFFER_END>();
+    EXPECT_EQ(bbe, nullptr);
+
+    drmDirectSubmission.ringStart = false;
+    executionEnvironment.memoryManager->freeGraphicsMemory(commandBuffer);
+}
+
 HWTEST_F(DrmDirectSubmissionTest, givenNewResourceBoundWhenDispatchCommandBufferThenTlbIsFlushed) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     using Dispatcher = RenderDispatcher<FamilyType>;
@@ -826,7 +1049,7 @@ HWTEST_F(DrmDirectSubmissionTest, givenDirectSubmissionNewResourceTlbFlushZeroAn
 HWCMDTEST_F(IGFX_XE_HP_CORE, DrmDirectSubmissionTest, givenMultipleActiveTilesWhenWaitingForTagUpdateThenQueryAllActiveTiles) {
     using Dispatcher = RenderDispatcher<FamilyType>;
 
-    VariableBackup<bool> backupWaitpkgUse(&WaitUtils::waitpkgUse, false);
+    VariableBackup<WaitUtils::WaitpkgUse> backupWaitpkgUse(&WaitUtils::waitpkgUse, WaitUtils::WaitpkgUse::noUse);
     VariableBackup<uint32_t> backupWaitCount(&WaitUtils::waitCount, 1);
 
     MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
@@ -1102,7 +1325,7 @@ HWTEST_F(DrmDirectSubmissionTest,
 HWTEST_F(DrmDirectSubmissionTest, givenGpuHangWhenWaitCalledThenGpuHangDetected) {
     using Dispatcher = RenderDispatcher<FamilyType>;
 
-    VariableBackup<bool> backupWaitpkgUse(&WaitUtils::waitpkgUse, false);
+    VariableBackup<WaitUtils::WaitpkgUse> backupWaitpkgUse(&WaitUtils::waitpkgUse, WaitUtils::WaitpkgUse::noUse);
     VariableBackup<uint32_t> backupWaitCount(&WaitUtils::waitCount, 1);
 
     MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
@@ -1122,4 +1345,82 @@ HWTEST_F(DrmDirectSubmissionTest, givenGpuHangWhenWaitCalledThenGpuHangDetected)
     EXPECT_EQ(0, drm->ioctlCount.getResetStats);
     directSubmission.wait(1);
     EXPECT_EQ(1, drm->ioctlCount.getResetStats);
+}
+
+HWTEST_F(DrmDirectSubmissionTest,
+         givenDirectSubmissionDisableMonitorFenceWhenStopRingIsCalledThenExpectStopCommandAndMonitorFenceDispatched) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using MI_BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
+    using Dispatcher = RenderDispatcher<FamilyType>;
+
+    MockDrmDirectSubmission<FamilyType, Dispatcher> regularDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    regularDirectSubmission.disableMonitorFence = false;
+    size_t regularSizeEnd = regularDirectSubmission.getSizeEnd(false);
+
+    MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
+    directSubmission.setTagAddressValue = true;
+    bool ret = directSubmission.allocateResources();
+    directSubmission.ringStart = true;
+
+    EXPECT_TRUE(ret);
+
+    size_t tagUpdateSize = Dispatcher::getSizeMonitorFence(directSubmission.rootDeviceEnvironment);
+
+    size_t disabledSizeEnd = directSubmission.getSizeEnd(false);
+    EXPECT_EQ(disabledSizeEnd, regularSizeEnd + tagUpdateSize);
+
+    directSubmission.tagValueSetValue = 0x4343123ull;
+    directSubmission.tagAddressSetValue = 0xBEEF00000ull;
+    directSubmission.stopRingBuffer(false);
+    size_t expectedDispatchSize = disabledSizeEnd;
+    EXPECT_LE(directSubmission.ringCommandStream.getUsed(), expectedDispatchSize);
+    EXPECT_GE(directSubmission.ringCommandStream.getUsed() + MemoryConstants::cacheLineSize, expectedDispatchSize);
+
+    HardwareParse hwParse;
+    hwParse.parsePipeControl = true;
+    hwParse.parseCommands<FamilyType>(directSubmission.ringCommandStream, 0);
+    hwParse.findHardwareCommands<FamilyType>();
+    MI_BATCH_BUFFER_END *bbEnd = hwParse.getCommand<MI_BATCH_BUFFER_END>();
+    EXPECT_NE(nullptr, bbEnd);
+
+    bool foundFenceUpdate = false;
+    for (auto it = hwParse.pipeControlList.begin(); it != hwParse.pipeControlList.end(); it++) {
+        auto pipeControl = genCmdCast<PIPE_CONTROL *>(*it);
+        uint64_t data = pipeControl->getImmediateData();
+        if ((directSubmission.tagAddressSetValue == NEO::UnitTestHelper<FamilyType>::getPipeControlPostSyncAddress(*pipeControl)) &&
+            (directSubmission.tagValueSetValue == data)) {
+            foundFenceUpdate = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundFenceUpdate);
+}
+
+HWTEST2_F(DrmDirectSubmissionTest, givenRelaxedOrderingSchedulerRequiredWhenAskingForCmdsSizeThenReturnCorrectValue, IsAtLeastXeHpcCore) {
+    using Dispatcher = RenderDispatcher<FamilyType>;
+    MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
+
+    size_t expectedBaseSemaphoreSectionSize = directSubmission.getSizePrefetchMitigation();
+    if (directSubmission.isDisablePrefetcherRequired) {
+        expectedBaseSemaphoreSectionSize += 2 * directSubmission.getSizeDisablePrefetcher();
+    }
+
+    directSubmission.relaxedOrderingEnabled = true;
+    if (directSubmission.miMemFenceRequired) {
+        expectedBaseSemaphoreSectionSize += MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronizationForDirectSubmission(device->getRootDeviceEnvironment());
+    }
+
+    EXPECT_EQ(expectedBaseSemaphoreSectionSize + RelaxedOrderingHelper::DynamicSchedulerSizeAndOffsetSection<FamilyType>::totalSize, directSubmission.getSizeSemaphoreSection(true));
+    EXPECT_EQ(expectedBaseSemaphoreSectionSize + EncodeSemaphore<FamilyType>::getSizeMiSemaphoreWait(), directSubmission.getSizeSemaphoreSection(false));
+
+    size_t expectedBaseEndSize = Dispatcher::getSizeStopCommandBuffer() +
+                                 Dispatcher::getSizeCacheFlush(directSubmission.rootDeviceEnvironment) +
+                                 (Dispatcher::getSizeStartCommandBuffer() - Dispatcher::getSizeStopCommandBuffer()) +
+                                 MemoryConstants::cacheLineSize;
+    if (directSubmission.disableMonitorFence) {
+        expectedBaseEndSize += Dispatcher::getSizeMonitorFence(device->getRootDeviceEnvironment());
+    }
+
+    EXPECT_EQ(expectedBaseEndSize + directSubmission.getSizeDispatchRelaxedOrderingQueueStall(), directSubmission.getSizeEnd(true));
+    EXPECT_EQ(expectedBaseEndSize, directSubmission.getSizeEnd(false));
 }

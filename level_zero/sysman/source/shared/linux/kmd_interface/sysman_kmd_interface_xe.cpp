@@ -35,6 +35,26 @@ std::string SysmanKmdInterfaceXe::getBasePath(uint32_t subDeviceId) const {
     return "device/tile" + std::to_string(subDeviceId) + "/gt" + std::to_string(subDeviceId) + "/";
 }
 
+/*
+ *   Power related Syfs Nodes summary For XE supported platforms
+ *     1. CARD
+ *         BurstPowerLimit              = "power1_cap"
+ *         BurstPowerLimitInterval      = "power1_cap_interval"
+ *         SustainedPowerLimit          = "power1_max";
+ *         SustainedPowerLimitInterval  = "power1_max_interval";
+ *         DefaultPowerLimit            = "power1_rated_max";
+ *         EnergyCounterNode            = "energy1_input";
+ *         CriticalPowerLimit           = "power1_crit"
+ *     2. PACKAGE
+ *         BurstPowerLimit              = "power2_cap"
+ *         BurstPowerLimitInterval      = "power2_cap_interval"
+ *         SustainedPowerLimit          = "power2_max";
+ *         SustainedPowerLimitInterval  = "power2_max_interval";
+ *         DefaultPowerLimit            = "power2_rated_max";
+ *         EnergyCounterNode            = "energy2_input";
+ *         CriticalPowerLimit           = "power2_crit"
+ */
+
 void SysmanKmdInterfaceXe::initSysfsNameToFileMap(SysmanProductHelper *pSysmanProductHelper) {
     sysfsNameToFileMap[SysfsName::sysfsNameMinFrequency] = std::make_pair("freq0/min_freq", "");
     sysfsNameToFileMap[SysfsName::sysfsNameMaxFrequency] = std::make_pair("freq0/max_freq", "");
@@ -48,11 +68,20 @@ void SysmanKmdInterfaceXe::initSysfsNameToFileMap(SysmanProductHelper *pSysmanPr
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonPL2] = std::make_pair("freq0/throttle/reason_pl2", "");
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonPL4] = std::make_pair("freq0/throttle/reason_pl4", "");
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonThermal] = std::make_pair("freq0/throttle/reason_thermal", "");
-    sysfsNameToFileMap[SysfsName::sysfsNameSustainedPowerLimit] = std::make_pair("", "power1_max");
-    sysfsNameToFileMap[SysfsName::sysfsNameSustainedPowerLimitInterval] = std::make_pair("", "power1_max_interval");
-    sysfsNameToFileMap[SysfsName::sysfsNameEnergyCounterNode] = std::make_pair("", "energy1_input");
-    sysfsNameToFileMap[SysfsName::sysfsNameDefaultPowerLimit] = std::make_pair("", "power1_rated_max");
-    sysfsNameToFileMap[SysfsName::sysfsNameCriticalPowerLimit] = std::make_pair("", pSysmanProductHelper->getCardCriticalPowerLimitFile());
+    sysfsNameToFileMap[SysfsName::sysfsNameCardEnergyCounterNode] = std::make_pair("", "energy1_input");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardBurstPowerLimit] = std::make_pair("", "power1_cap");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardBurstPowerLimitInterval] = std::make_pair("", "power1_cap_interval");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardSustainedPowerLimit] = std::make_pair("", "power1_max");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardSustainedPowerLimitInterval] = std::make_pair("", "power1_max_interval");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardDefaultPowerLimit] = std::make_pair("", "power1_rated_max");
+    sysfsNameToFileMap[SysfsName::sysfsNameCardCriticalPowerLimit] = std::make_pair("", "power1_crit");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageEnergyCounterNode] = std::make_pair("", "energy2_input");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageBurstPowerLimit] = std::make_pair("", "power2_cap");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageBurstPowerLimitInterval] = std::make_pair("", "power2_cap_interval");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageSustainedPowerLimit] = std::make_pair("", "power2_max");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageSustainedPowerLimitInterval] = std::make_pair("", "power2_max_interval");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageDefaultPowerLimit] = std::make_pair("", "power2_rated_max");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageCriticalPowerLimit] = std::make_pair("", "power2_crit");
     sysfsNameToFileMap[SysfsName::sysfsNameMemoryAddressRange] = std::make_pair("physical_vram_size_bytes", "");
     sysfsNameToFileMap[SysfsName::sysfsNameMaxMemoryFrequency] = std::make_pair("freq_vram_rp0", "");
     sysfsNameToFileMap[SysfsName::sysfsNameMinMemoryFrequency] = std::make_pair("freq_vram_rpn", "");
@@ -72,9 +101,10 @@ void SysmanKmdInterfaceXe::initSysfsNameToNativeUnitMap(SysmanProductHelper *pSy
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerTimeslice] = SysfsValueUnit::micro;
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerWatchDogTimeout] = SysfsValueUnit::milli;
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerWatchDogTimeoutMaximum] = SysfsValueUnit::milli;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameSustainedPowerLimit] = SysfsValueUnit::micro;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameDefaultPowerLimit] = SysfsValueUnit::micro;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameCriticalPowerLimit] = pSysmanProductHelper->getCardCriticalPowerLimitNativeUnit();
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageSustainedPowerLimit] = SysfsValueUnit::micro;
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageDefaultPowerLimit] = SysfsValueUnit::micro;
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageBurstPowerLimit] = SysfsValueUnit::micro;
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageCriticalPowerLimit] = pSysmanProductHelper->getPackageCriticalPowerLimitNativeUnit();
 }
 
 std::string SysmanKmdInterfaceXe::getSysfsFilePath(SysfsName sysfsName, uint32_t subDeviceId, bool prefixBaseDirectory) {
@@ -87,14 +117,90 @@ std::string SysmanKmdInterfaceXe::getSysfsFilePath(SysfsName sysfsName, uint32_t
     return {};
 }
 
+std::vector<zes_power_domain_t> SysmanKmdInterfaceXe::getPowerDomains() const {
+    return {ZES_POWER_DOMAIN_CARD, ZES_POWER_DOMAIN_PACKAGE, ZES_POWER_DOMAIN_GPU, ZES_POWER_DOMAIN_MEMORY};
+}
+
 std::string SysmanKmdInterfaceXe::getSysfsFilePathForPhysicalMemorySize(uint32_t subDeviceId) {
     std::string filePathPhysicalMemorySize = "device/tile" + std::to_string(subDeviceId) + "/" +
                                              sysfsNameToFileMap[SysfsName::sysfsNameMemoryAddressRange].first;
     return filePathPhysicalMemorySize;
 }
 
-int64_t SysmanKmdInterfaceXe::getEngineActivityFd(zes_engine_group_t engineGroup, uint32_t engineInstance, uint32_t subDeviceId, PmuInterface *const &pPmuInterface) {
-    return -1;
+std::string SysmanKmdInterfaceXe::getEnergyCounterNodeFile(zes_power_domain_t powerDomain) {
+    std::string filePath = {};
+    if (powerDomain == ZES_POWER_DOMAIN_PACKAGE) {
+        filePath = sysfsNameToFileMap[SysfsName::sysfsNamePackageEnergyCounterNode].second;
+    } else if (powerDomain == ZES_POWER_DOMAIN_CARD) {
+        filePath = sysfsNameToFileMap[SysfsName::sysfsNameCardEnergyCounterNode].second;
+    }
+    return filePath;
+}
+
+ze_result_t SysmanKmdInterfaceXe::getEngineActivityFdListAndConfigPair(zes_engine_group_t engineGroup,
+                                                                       uint32_t engineInstance,
+                                                                       uint32_t gtId,
+                                                                       PmuInterface *const &pPmuInterface,
+                                                                       std::vector<std::pair<int64_t, int64_t>> &fdList,
+                                                                       std::pair<uint64_t, uint64_t> &configPair) {
+
+    ze_result_t result = ZE_RESULT_SUCCESS;
+
+    if (isGroupEngineHandle(engineGroup)) {
+        return result;
+    }
+
+    auto engineClass = engineGroupToEngineClass.find(engineGroup);
+    if (engineClass == engineGroupToEngineClass.end()) {
+        result = ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Engine Group not supported and returning error:0x%x\n", __FUNCTION__, result);
+        return result;
+    }
+
+    const std::string sysmanDeviceDir = std::string(sysDevicesDir) + getSysmanDeviceDirName();
+    uint64_t activeTicksConfig = UINT64_MAX;
+    uint64_t totalTicksConfig = UINT64_MAX;
+
+    auto ret = pPmuInterface->getPmuConfigs(sysmanDeviceDir, engineClass->second, engineInstance, gtId, activeTicksConfig, totalTicksConfig);
+    if (ret < 0) {
+        result = ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to get configs and returning error:0x%x\n", __FUNCTION__, result);
+        return result;
+    }
+
+    configPair = std::make_pair(activeTicksConfig, totalTicksConfig);
+
+    int64_t fd[2];
+    fd[0] = pPmuInterface->pmuInterfaceOpen(configPair.first, -1, PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_GROUP);
+    if (fd[0] < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Could not open Busy Ticks Handle \n", __FUNCTION__);
+        return checkErrorNumberAndReturnStatus();
+    }
+
+    fd[1] = pPmuInterface->pmuInterfaceOpen(configPair.second, static_cast<int>(fd[0]), PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_GROUP);
+    if (fd[1] < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Could not open Total Active Ticks Handle \n", __FUNCTION__);
+        close(static_cast<int>(fd[0]));
+        return checkErrorNumberAndReturnStatus();
+    }
+
+    fdList.push_back(std::make_pair(fd[0], fd[1]));
+
+    return result;
+}
+
+ze_result_t SysmanKmdInterfaceXe::readBusynessFromGroupFd(PmuInterface *const &pPmuInterface, std::pair<int64_t, int64_t> &fdPair, zes_engine_stats_t *pStats) {
+    uint64_t data[4] = {};
+
+    auto ret = pPmuInterface->pmuRead(static_cast<int>(fdPair.first), data, sizeof(data));
+    if (ret < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s():pmuRead is returning value:%d and error:0x%x \n", __FUNCTION__, ret, ZE_RESULT_ERROR_UNKNOWN);
+        return ZE_RESULT_ERROR_UNKNOWN;
+    }
+
+    pStats->activeTime = data[2];
+    pStats->timestamp = data[3] ? data[3] : SysmanDevice::getSysmanTimestamp();
+    return ZE_RESULT_SUCCESS;
 }
 
 std::string SysmanKmdInterfaceXe::getHwmonName(uint32_t subDeviceId, bool isSubdevice) const {
@@ -126,11 +232,6 @@ ze_result_t SysmanKmdInterfaceXe::getNumEngineTypeAndInstances(std::map<zes_engi
     return getNumEngineTypeAndInstancesForDevice(getEngineBasePath(subdeviceId), mapOfEngines, pSysfsAccess);
 }
 
-uint32_t SysmanKmdInterfaceXe::getEventType(const bool isIntegratedDevice) {
-    std::string xeDirName = "xe";
-    return getEventTypeImpl(xeDirName, isIntegratedDevice);
-}
-
 void SysmanKmdInterfaceXe::getDriverVersion(char (&driverVersion)[ZES_STRING_PROPERTY_SIZE]) {
 
     auto pFsAccess = getFsAccess();
@@ -146,8 +247,31 @@ void SysmanKmdInterfaceXe::getDriverVersion(char (&driverVersion)[ZES_STRING_PRO
     return;
 }
 
-ze_result_t SysmanKmdInterfaceXe::getBusyAndTotalTicksConfigs(uint64_t fnNumber, uint64_t engineInstance, uint64_t engineClass, std::pair<uint64_t, uint64_t> &configPair) {
-    return ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE;
+ze_result_t SysmanKmdInterfaceXe::getBusyAndTotalTicksConfigsForVf(PmuInterface *const &pPmuInterface,
+                                                                   uint64_t fnNumber,
+                                                                   uint64_t engineInstance,
+                                                                   uint64_t engineClass,
+                                                                   uint64_t gtId,
+                                                                   std::pair<uint64_t, uint64_t> &configPair) {
+
+    ze_result_t result = ZE_RESULT_SUCCESS;
+    const std::string sysmanDeviceDir = std::string(sysDevicesDir) + getSysmanDeviceDirName();
+
+    auto ret = pPmuInterface->getPmuConfigs(sysmanDeviceDir, engineClass, engineInstance, gtId, configPair.first, configPair.second);
+    if (ret < 0) {
+        result = ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to get configs and returning error:0x%x\n", __FUNCTION__, result);
+        return result;
+    }
+
+    ret = pPmuInterface->getPmuConfigsForVf(sysmanDeviceDir, fnNumber, configPair.first, configPair.second);
+    if (ret < 0) {
+        result = ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to get configs for VF and returning error:0x%x\n", __FUNCTION__, result);
+        return result;
+    }
+
+    return result;
 }
 
 std::string SysmanKmdInterfaceXe::getGpuBindEntry() const {
@@ -156,6 +280,11 @@ std::string SysmanKmdInterfaceXe::getGpuBindEntry() const {
 
 std::string SysmanKmdInterfaceXe::getGpuUnBindEntry() const {
     return "/sys/bus/pci/drivers/xe/unbind";
+}
+
+void SysmanKmdInterfaceXe::setSysmanDeviceDirName(const bool isIntegratedDevice) {
+    sysmanDeviceDirName = "xe";
+    updateSysmanDeviceDirName(sysmanDeviceDirName);
 }
 
 } // namespace Sysman

@@ -1,9 +1,11 @@
 /*
- * Copyright (C) 2018-2023 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
+
+#include "shared/source/command_stream/command_stream_receiver.h"
 
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
 #include "opencl/test/unit_test/fixtures/hello_world_fixture.h"
@@ -14,9 +16,50 @@
 
 using namespace NEO;
 
-typedef HelloWorldTest<HelloWorldFixtureFactory> IOQTaskTestsMt;
+struct IOQTaskTestsMt : public HelloWorldTest<HelloWorldFixtureFactory> {
+    void SetUp() override {
+        ClDeviceFixture::setUp();
+        ASSERT_NE(nullptr, pClDevice);
+        pDevice->disableSecondaryEngines = true;
+
+        CommandQueueFixture::setUp(pClDevice, 0);
+        ASSERT_NE(nullptr, pCmdQ);
+        CommandStreamFixture::setUp(pCmdQ);
+        ASSERT_NE(nullptr, pCS);
+        IndirectHeapFixture::setUp(pCmdQ);
+        KernelFixture::setUp(pClDevice, kernelName);
+        ASSERT_NE(nullptr, pKernel);
+
+        auto retVal = CL_INVALID_VALUE;
+        BufferDefaults::context = new MockContext(pClDevice);
+
+        destBuffer = Buffer::create(
+            BufferDefaults::context,
+            CL_MEM_READ_WRITE,
+            sizeUserMemory,
+            nullptr,
+            retVal);
+
+        srcBuffer = Buffer::create(
+            BufferDefaults::context,
+            CL_MEM_READ_WRITE,
+            sizeUserMemory,
+            nullptr,
+            retVal);
+
+        pDestMemory = destBuffer->getCpuAddressForMapping();
+        pSrcMemory = srcBuffer->getCpuAddressForMapping();
+
+        memset(pDestMemory, destPattern, sizeUserMemory);
+        memset(pSrcMemory, srcPattern, sizeUserMemory);
+
+        pKernel->setArg(0, srcBuffer);
+        pKernel->setArg(1, destBuffer);
+    }
+};
 
 TEST_F(IOQTaskTestsMt, GivenBlockingAndBlockedOnUserEventWhenReadingBufferThenTaskCountAndTaskLevelAreIncremented) {
+    USE_REAL_FILE_SYSTEM();
     auto buffer = std::unique_ptr<Buffer>(BufferHelper<>::create());
 
     auto alignedReadPtr = alignedMalloc(BufferDefaults::sizeInBytes, MemoryConstants::cacheLineSize);
@@ -157,7 +200,7 @@ TEST_F(IOQTaskTestsMt, GivenMultipleThreadsWhenMappingBufferThenEventsAreComplet
 }
 
 TEST_F(IOQTaskTestsMt, GivenMultipleThreadsWhenMappingImageThenEventsAreCompleted) {
-    auto image = std::unique_ptr<Image>(ImageHelper<Image1dDefaults>::create(context));
+    auto image = std::unique_ptr<Image>(ImageHelperUlt<Image1dDefaults>::create(context));
 
     auto userEvent = clCreateUserEvent(pContext, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);

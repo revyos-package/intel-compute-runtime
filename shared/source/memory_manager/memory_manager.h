@@ -6,12 +6,15 @@
  */
 
 #pragma once
+#include "shared/source/device/sub_device.h"
+#include "shared/source/helpers/common_types.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/engine_control.h"
 #include "shared/source/helpers/heap_assigner.h"
 #include "shared/source/memory_manager/alignment_selector.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
 #include "shared/source/memory_manager/memadvise_flags.h"
+#include "shared/source/memory_manager/unified_memory_reuse.h"
 #include "shared/source/os_interface/os_memory.h"
 #include "shared/source/utilities/stackvec.h"
 
@@ -26,8 +29,7 @@
 
 namespace NEO {
 
-using SubDeviceIdsVec = StackVec<uint32_t, 4>;
-
+class AllocationsList;
 class MultiGraphicsAllocation;
 class CpuPageFaultManager;
 class GfxPartition;
@@ -45,6 +47,7 @@ class HostPtrManager;
 class OsContext;
 class PrefetchManager;
 class HeapAllocator;
+class ReleaseHelper;
 
 enum AllocationUsage {
     TEMPORARY_ALLOCATION,
@@ -92,7 +95,7 @@ constexpr size_t paddingBufferSize = 2 * MemoryConstants::megaByte;
 
 namespace MemoryTransferHelper {
 bool transferMemoryToAllocation(bool useBlitter, const Device &device, GraphicsAllocation *dstAllocation, size_t dstOffset, const void *srcMemory, size_t srcSize);
-bool transferMemoryToAllocationBanks(const Device &device, GraphicsAllocation *dstAllocation, size_t dstOffset, const void *srcMemory,
+bool transferMemoryToAllocationBanks(bool useBlitter, const Device &device, GraphicsAllocation *dstAllocation, size_t dstOffset, const void *srcMemory,
                                      size_t srcSize, DeviceBitfield dstMemoryBanks);
 } // namespace MemoryTransferHelper
 
@@ -202,7 +205,7 @@ class MemoryManager {
 
     void waitForDeletions();
     MOCKABLE_VIRTUAL void waitForEnginesCompletion(GraphicsAllocation &graphicsAllocation);
-    MOCKABLE_VIRTUAL bool allocInUse(GraphicsAllocation &graphicsAllocation);
+    MOCKABLE_VIRTUAL bool allocInUse(GraphicsAllocation &graphicsAllocation) const;
     void cleanTemporaryAllocationListOnAllEngines(bool waitForCompletion);
 
     bool isAsyncDeleterEnabled() const;
@@ -241,6 +244,8 @@ class MemoryManager {
     const EngineControl *getRegisteredEngineForCsr(CommandStreamReceiver *commandStreamReceiver);
     void unregisterEngineForCsr(CommandStreamReceiver *commandStreamReceiver);
 
+    virtual void drainGemCloseWorker() const {};
+
     HostPtrManager *getHostPtrManager() const { return hostPtrManager.get(); }
     void setDefaultEngineIndex(uint32_t rootDeviceIndex, uint32_t engineIndex) { defaultEngineIndex[rootDeviceIndex] = engineIndex; }
     OsContext *getDefaultEngineContext(uint32_t rootDeviceIndex, DeviceBitfield subdevicesBitfield);
@@ -273,8 +278,11 @@ class MemoryManager {
     virtual AllocationStatus registerLocalMemAlloc(GraphicsAllocation *allocation, uint32_t rootDeviceIndex);
 
     virtual bool setMemAdvise(GraphicsAllocation *gfxAllocation, MemAdviseFlags flags, uint32_t rootDeviceIndex) { return true; }
+    virtual bool setSharedSystemMemAdvise(const void *ptr, const size_t size, MemAdvise memAdviseOp, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) { return true; }
     virtual bool setMemPrefetch(GraphicsAllocation *gfxAllocation, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) { return true; }
+    virtual bool prefetchSharedSystemAlloc(const void *ptr, const size_t size, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) { return true; }
     virtual bool setAtomicAccess(GraphicsAllocation *gfxAllocation, size_t size, AtomicAccessMode mode, uint32_t rootDeviceIndex) { return true; }
+    virtual bool setSharedSystemAtomicAccess(const void *ptr, const size_t size, AtomicAccessMode mode, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) { return true; }
 
     bool isExternalAllocation(AllocationType allocationType);
     LocalMemoryUsageBankSelector *getLocalMemoryUsageBankSelector(AllocationType allocationType, uint32_t rootDeviceIndex);
@@ -328,7 +336,6 @@ class MemoryManager {
     virtual uint32_t getNumMediaEncoders(uint32_t rootDeviceIndex) const { return 0; }
 
     virtual bool isCompressionSupportedForShareable(bool isShareable) { return true; }
-    virtual bool usmCompressionSupported(Device *device);
 
     size_t getUsedLocalMemorySize(uint32_t rootDeviceIndex) const { return localMemAllocsSize[rootDeviceIndex]; }
     size_t getUsedSystemMemorySize() const { return sysMemAllocsSize; }
@@ -336,25 +343,24 @@ class MemoryManager {
 
     virtual void getExtraDeviceProperties(uint32_t rootDeviceIndex, uint32_t *moduleId, uint16_t *serverType) { return; }
 
-    std::unique_lock<std::mutex> obtainHostAllocationsReuseLock() const {
-        return std::unique_lock<std::mutex>(hostAllocationsReuseMtx);
-    }
+    void initUsmReuseLimits();
+    UsmReuseInfo usmReuseInfo;
+    LocalMemAllocationMode usmDeviceAllocationMode = LocalMemAllocationMode::hwDefault;
+    bool isLocalOnlyAllocationMode() const { return usmDeviceAllocationMode == LocalMemAllocationMode::localOnly; }
 
-    void recordHostAllocationSaveForReuse(size_t size) {
-        hostAllocationsSavedForReuseSize += size;
-    }
-
-    void recordHostAllocationGetFromReuse(size_t size) {
-        hostAllocationsSavedForReuseSize -= size;
-    }
-
-    size_t getHostAllocationsSavedForReuseSize() const {
-        return hostAllocationsSavedForReuseSize;
+    bool shouldLimitAllocationsReuse() const {
+        return getUsedSystemMemorySize() >= usmReuseInfo.getLimitAllocationsReuseThreshold();
     }
 
     void addCustomHeapAllocatorConfig(AllocationType allocationType, bool isFrontWindowPool, const CustomHeapAllocatorConfig &config);
     std::optional<std::reference_wrapper<CustomHeapAllocatorConfig>> getCustomHeapAllocatorConfig(AllocationType allocationType, bool isFrontWindowPool);
     void removeCustomHeapAllocatorConfig(AllocationType allocationType, bool isFrontWindowPool);
+
+    void storeTemporaryAllocation(std::unique_ptr<GraphicsAllocation> &&gfxAllocation, uint32_t osContextId, TaskCountType taskCount);
+    void cleanTemporaryAllocations(const CommandStreamReceiver &csr, TaskCountType waitTaskCount);
+    std::unique_ptr<GraphicsAllocation> obtainTemporaryAllocationWithPtr(CommandStreamReceiver *csr, size_t requiredSize, const void *requiredPtr, AllocationType allocationType);
+    bool isSingleTemporaryAllocationsListEnabled() const { return singleTemporaryAllocationsList; }
+    AllocationsList &getTemporaryAllocationsList() const { return *temporaryAllocations; }
 
   protected:
     bool getAllocationData(AllocationData &allocationData, const AllocationProperties &properties, const void *hostPtr, const StorageInfo &storageInfo);
@@ -392,10 +398,12 @@ class MemoryManager {
     void zeroCpuMemoryIfRequested(const AllocationData &allocationData, void *cpuPtr, size_t size);
     void updateLatestContextIdForRootDevice(uint32_t rootDeviceIndex);
     virtual DeviceBitfield computeStorageInfoMemoryBanks(const AllocationProperties &properties, DeviceBitfield preferredBank, DeviceBitfield allBanks);
+    virtual bool getLocalOnlyRequired(AllocationType allocationType, const ProductHelper &productHelper, const ReleaseHelper *releaseHelper, bool preferCompressed) const;
 
     bool initialized = false;
     bool forceNonSvmForExternalHostPtr = false;
     bool force32bitAllocations = false;
+    bool singleTemporaryAllocationsList = false;
     std::unique_ptr<DeferredDeleter> deferredDeleter;
     bool asyncDeleterEnabled = false;
     std::vector<bool> enable64kbpages;
@@ -406,6 +414,7 @@ class MemoryManager {
     MultiDeviceEngineControlContainer allRegisteredEngines;
     MultiDeviceEngineControlContainer secondaryEngines;
     std::unique_ptr<HostPtrManager> hostPtrManager;
+    std::unique_ptr<AllocationsList> temporaryAllocations;
     uint32_t latestContextId = std::numeric_limits<uint32_t>::max();
     std::map<uint32_t, uint32_t> rootDeviceIndexToContextId; // This map will contain initial value of latestContextId for each rootDeviceIndex
     std::unique_ptr<DeferredDeleter> multiContextResourceDestructor;
@@ -428,8 +437,6 @@ class MemoryManager {
     std::mutex physicalMemoryAllocationMapMutex;
     std::unique_ptr<std::atomic<size_t>[]> localMemAllocsSize;
     std::atomic<size_t> sysMemAllocsSize;
-    size_t hostAllocationsSavedForReuseSize = 0u;
-    mutable std::mutex hostAllocationsReuseMtx;
     std::map<std::pair<AllocationType, bool>, CustomHeapAllocatorConfig> customHeapAllocators;
 };
 

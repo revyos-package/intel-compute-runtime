@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -348,7 +348,7 @@ TEST_F(Wddm20WithMockGdiDllTests, GivenCpuValueDifferentThanGpuHangIndicationWhe
 
 TEST_F(Wddm20WithMockGdiDllTests, whencreateMonitoredFenceForDirectSubmissionThenCreateFence) {
     MonitoredFence fence{};
-    wddm->getWddmInterface()->createMonitoredFenceForDirectSubmission(fence, *osContext);
+    wddm->getWddmInterface()->createFenceForDirectSubmission(fence, *osContext);
     EXPECT_EQ(wddmMockInterface->createMonitoredFenceCalled, 1u);
     EXPECT_NE(osContext->getHwQueue().progressFenceHandle, fence.fenceHandle);
     wddm->getWddmInterface()->destroyMonitorFence(fence);
@@ -833,6 +833,22 @@ TEST_F(Wddm20WithMockGdiDllTestsWithoutWddmInit, givenUseNoRingFlushesKmdModeDeb
     EXPECT_TRUE(!!privateData->NoRingFlushes);
 }
 
+TEST_F(Wddm20WithMockGdiDllTestsWithoutWddmInit, whenCreateContextIsCalledThenDummyPageBackingEnabledFlagIsDisabled) {
+    init();
+    auto createContextParams = this->getCreateContextDataFcn();
+    auto privateData = (CREATECONTEXT_PVTDATA *)createContextParams->pPrivateDriverData;
+    EXPECT_FALSE(!!privateData->DummyPageBackingEnabled);
+}
+
+TEST_F(Wddm20WithMockGdiDllTestsWithoutWddmInit, givenDummyPageBackingEnabledFlagSetToTrueWhenCreateContextIsCalledThenFlagIsEnabled) {
+    DebugManagerStateRestore dbgRestore;
+    debugManager.flags.DummyPageBackingEnabled.set(true);
+    init();
+    auto createContextParams = this->getCreateContextDataFcn();
+    auto privateData = (CREATECONTEXT_PVTDATA *)createContextParams->pPrivateDriverData;
+    EXPECT_TRUE(!!privateData->DummyPageBackingEnabled);
+}
+
 TEST_F(Wddm20WithMockGdiDllTestsWithoutWddmInit, givenEngineTypeWhenCreatingContextThenPassCorrectNodeOrdinal) {
     init();
     auto createContextParams = this->getCreateContextDataFcn();
@@ -1120,12 +1136,21 @@ TEST_F(WddmLockWithMakeResidentTests, givenAllocationThatDoesntNeedMakeResidentB
     wddm->lockResource(ALLOCATION_HANDLE, false, 0x1000);
     EXPECT_TRUE(mockTemporaryResources->resourceHandles.empty());
     EXPECT_EQ(0u, wddm->makeResidentResult.called);
-    wddm->unlockResource(ALLOCATION_HANDLE);
+    wddm->unlockResource(ALLOCATION_HANDLE, false);
 }
 
 TEST_F(WddmLockWithMakeResidentTests, givenAllocationThatNeedsMakeResidentBeforeLockWhenLockThenCallBlockingMakeResident) {
     wddm->lockResource(ALLOCATION_HANDLE, true, 0x1000);
     EXPECT_EQ(1u, wddm->makeResidentResult.called);
+}
+
+TEST_F(WddmLockWithMakeResidentTests, givenAllocationAndForcePagingFenceTrueWhenApplyBlockingMakeResidentThenWaitOnPagingFenceFromCpuIsCalledWithIsKmdWaitNeededAsFalse) {
+    auto allocHandle = ALLOCATION_HANDLE;
+    const bool forcePagingFence = true;
+    wddm->temporaryResources->makeResidentResources(&allocHandle, 1u, 0x1000, forcePagingFence);
+    EXPECT_EQ(1u, mockTemporaryResources->acquireLockResult.called);
+    EXPECT_EQ(reinterpret_cast<uint64_t>(&mockTemporaryResources->resourcesLock), mockTemporaryResources->acquireLockResult.uint64ParamPassed);
+    EXPECT_NE(forcePagingFence, wddm->waitOnPagingFenceFromCpuResult.isKmdWaitNeededPassed);
 }
 
 TEST_F(WddmLockWithMakeResidentTests, givenAllocationWhenApplyBlockingMakeResidentThenAcquireUniqueLock) {

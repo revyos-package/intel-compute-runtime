@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Intel Corporation
+ * Copyright (C) 2024-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -13,7 +13,6 @@
 #include <cstring>
 #include <igfxfmid.h>
 #include <type_traits>
-#include <variant>
 
 template <class T>
 struct CmdParse;
@@ -102,18 +101,21 @@ struct Xe2HpgCoreFamily : public Xe2HpgCore {
     using Parse = CmdParse<Xe2HpgCoreFamily>;
     using GfxFamily = Xe2HpgCoreFamily;
     using DefaultWalkerType = COMPUTE_WALKER;
+    using PorWalkerType = COMPUTE_WALKER;
     using FrontEndStateCommand = CFE_STATE;
     using XY_BLOCK_COPY_BLT = typename GfxFamily::XY_BLOCK_COPY_BLT;
     using XY_COPY_BLT = typename GfxFamily::MEM_COPY;
     using XY_COLOR_BLT = typename GfxFamily::XY_FAST_COLOR_BLT;
     using MI_STORE_REGISTER_MEM_CMD = typename GfxFamily::MI_STORE_REGISTER_MEM;
     using TimestampPacketType = uint64_t;
+    using StallingBarrierType = RESOURCE_BARRIER;
     static const COMPUTE_WALKER cmdInitGpgpuWalker;
     static const CFE_STATE cmdInitCfeState;
     static const INTERFACE_DESCRIPTOR_DATA cmdInitInterfaceDescriptorData;
     static const MI_BATCH_BUFFER_END cmdInitBatchBufferEnd;
     static const MI_BATCH_BUFFER_START cmdInitBatchBufferStart;
     static const PIPE_CONTROL cmdInitPipeControl;
+    static const RESOURCE_BARRIER cmdInitResourceBarrier;
     static const STATE_COMPUTE_MODE cmdInitStateComputeMode;
     static const _3DSTATE_BINDING_TABLE_POOL_ALLOC cmdInitStateBindingTablePoolAlloc;
     static const MI_SEMAPHORE_WAIT cmdInitMiSemaphoreWait;
@@ -150,6 +152,7 @@ struct Xe2HpgCoreFamily : public Xe2HpgCore {
     static constexpr bool isQwordInOrderCounter = false;
     static constexpr bool walkerPostSyncSupport = true;
     static constexpr size_t indirectDataAlignment = COMPUTE_WALKER::INDIRECTDATASTARTADDRESS_ALIGN_SIZE;
+    static constexpr GFXCORE_FAMILY gfxCoreFamily = IGFX_XE2_HPG_CORE;
 
     static constexpr bool supportsCmdSet(GFXCORE_FAMILY cmdSetBaseFamily) {
         return cmdSetBaseFamily == IGFX_XE_HP_CORE;
@@ -175,6 +178,10 @@ struct Xe2HpgCoreFamily : public Xe2HpgCore {
         return false;
     }
 
+    static constexpr bool isHeaplessRequired() {
+        return false;
+    }
+
     template <typename InterfaceDescriptorType>
     static constexpr bool isInterfaceDescriptorHeaplessMode() {
         return false;
@@ -184,8 +191,6 @@ struct Xe2HpgCoreFamily : public Xe2HpgCore {
     static constexpr auto getPostSyncType() {
         return std::decay_t<POSTSYNC_DATA>{};
     }
-
-    using WalkerVariant = std::variant<COMPUTE_WALKER *>;
 };
 
 enum class MemoryCompressionState;

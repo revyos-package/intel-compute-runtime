@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -19,8 +19,9 @@ namespace Sysman {
 
 class SysmanKmdInterface;
 class PmuInterface;
+class LinuxSysmanImp;
 struct Device;
-class LinuxEngineImp : public OsEngine, NEO::NonCopyableOrMovableClass {
+class LinuxEngineImp : public OsEngine, NEO::NonCopyableAndNonMovableClass {
   public:
     ze_result_t getActivity(zes_engine_stats_t *pStats) override;
     ze_result_t getActivityExt(uint32_t *pCount, zes_engine_stats_t *pStats) override {
@@ -29,28 +30,29 @@ class LinuxEngineImp : public OsEngine, NEO::NonCopyableOrMovableClass {
     ze_result_t getProperties(zes_engine_properties_t &properties) override;
     bool isEngineModuleSupported() override;
     static zes_engine_group_t getGroupFromEngineType(zes_engine_group_t type);
+    void getConfigPair(std::pair<uint64_t, uint64_t> &configPair) override;
     LinuxEngineImp() = default;
-    LinuxEngineImp(OsSysman *pOsSysman, zes_engine_group_t type, uint32_t engineInstance, uint32_t subDeviceId, ze_bool_t onSubDevice);
-    ~LinuxEngineImp() override {
-        if (fd != -1) {
-            close(static_cast<int>(fd));
-            fd = -1;
-        }
-    }
+    LinuxEngineImp(OsSysman *pOsSysman, zes_engine_group_t type, uint32_t engineInstance, uint32_t tileId, ze_bool_t onSubDevice);
+    ~LinuxEngineImp() override;
+    void cleanup();
 
   protected:
     SysmanKmdInterface *pSysmanKmdInterface = nullptr;
+    LinuxSysmanImp *pLinuxSysmanImp = nullptr;
     zes_engine_group_t engineGroup = ZES_ENGINE_GROUP_ALL;
     uint32_t engineInstance = 0;
     PmuInterface *pPmuInterface = nullptr;
     NEO::Drm *pDrm = nullptr;
     SysmanDeviceImp *pDevice = nullptr;
-    uint32_t subDeviceId = 0;
+    uint32_t gtId = 0;
+    uint32_t tileId = 0;
     ze_bool_t onSubDevice = false;
 
   private:
     void init();
-    int64_t fd = -1;
+    std::vector<std::pair<int64_t, int64_t>> fdList{};
+    std::pair<uint64_t, uint64_t> pmuConfigPair{};
+    ze_result_t initStatus = ZE_RESULT_SUCCESS;
 };
 
 } // namespace Sysman

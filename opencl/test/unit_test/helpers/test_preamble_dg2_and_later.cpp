@@ -1,27 +1,23 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/source/command_stream/stream_properties.h"
-#include "shared/source/compiler_interface/external_functions.h"
 #include "shared/source/debug_settings/debug_settings_manager.h"
-#include "shared/source/kernel/implicit_args_helper.h"
 #include "shared/source/os_interface/product_helper.h"
 #include "shared/test/common/fixtures/preamble_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/test_macros/test.h"
-
-#include "opencl/source/helpers/hardware_commands_helper.h"
 
 using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 using PreambleCfeStateDg2AndLater = PreambleFixture;
-using IsDG2AndLater = IsAtLeastXeHpgCore;
+using IsDG2AndLater = IsAtLeastXeCore;
 
-HWTEST2_F(PreambleCfeStateDg2AndLater, whenprogramVFEStateIsCalledWithProperAdditionalKernelExecInfoThenProperStateIsSet, IsDG2AndLater) {
+HWTEST2_F(PreambleCfeStateDg2AndLater, whenprogramVFEStateIsCalledWithProperAdditionalKernelExecInfoThenProperStateIsSet, IsHeapfulSupportedAndAtLeastXeCore) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
     HardwareInfo hwInfo = *defaultHwInfo;
@@ -55,7 +51,7 @@ HWTEST2_F(PreambleCfeStateDg2AndLater, whenprogramVFEStateIsCalledWithProperAddi
     EXPECT_FALSE(cfeState->getComputeOverdispatchDisable());
 }
 
-HWTEST2_F(PreambleCfeStateDg2AndLater, givenSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveSetValue, IsDG2AndLater) {
+HWTEST2_F(PreambleCfeStateDg2AndLater, givenSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveSetValue, IsHeapfulSupportedAndAtLeastXeCore) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
     uint32_t expectedValue1 = 1u;

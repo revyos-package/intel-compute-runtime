@@ -1,16 +1,15 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#pragma once
-
 #include "shared/source/helpers/flat_batch_buffer_helper.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/l3_range.h"
 #include "shared/source/helpers/pipe_control_args.h"
+#include "shared/source/indirect_heap/indirect_heap.h"
 #include "shared/source/kernel/implicit_args_helper.h"
 
 #include "opencl/source/command_queue/command_queue.h"
@@ -20,11 +19,11 @@
 namespace NEO {
 
 template <typename GfxFamily>
-typename HardwareCommandsHelper<GfxFamily>::INTERFACE_DESCRIPTOR_DATA *HardwareCommandsHelper<GfxFamily>::getInterfaceDescriptor(
+template <typename InterfaceDescriptorType>
+InterfaceDescriptorType *HardwareCommandsHelper<GfxFamily>::getInterfaceDescriptor(
     const IndirectHeap &indirectHeap,
     uint64_t offsetInterfaceDescriptor,
-    INTERFACE_DESCRIPTOR_DATA *inlineInterfaceDescriptor) {
-
+    InterfaceDescriptorType *inlineInterfaceDescriptor) {
     return inlineInterfaceDescriptor;
 }
 
@@ -71,13 +70,25 @@ size_t HardwareCommandsHelper<GfxFamily>::sendCrossThreadData(
 
     auto pImplicitArgs = kernel.getImplicitArgs();
     if (pImplicitArgs) {
-        pImplicitArgs->localIdTablePtr = indirectHeap.getGraphicsAllocation()->getGpuAddress() + offsetCrossThreadData;
+        size_t localWorkSize[3] = {0u, 0u, 0u};
 
+        pImplicitArgs->setLocalIdTablePtr(indirectHeap.getGraphicsAllocation()->getGpuAddress() + offsetCrossThreadData);
+        if (pImplicitArgs->v0.header.structVersion == 0) {
+            localWorkSize[0] = pImplicitArgs->v0.localSizeX;
+            localWorkSize[1] = pImplicitArgs->v0.localSizeY;
+            localWorkSize[2] = pImplicitArgs->v0.localSizeZ;
+        } else if (pImplicitArgs->v1.header.structVersion == 1) {
+            localWorkSize[0] = pImplicitArgs->v1.localSizeX;
+            localWorkSize[1] = pImplicitArgs->v1.localSizeY;
+            localWorkSize[2] = pImplicitArgs->v1.localSizeZ;
+        } else {
+            UNRECOVERABLE_IF(true);
+        }
         const auto &kernelDescriptor = kernel.getDescriptor();
 
         const auto &kernelAttributes = kernelDescriptor.kernelAttributes;
         uint32_t requiredWalkOrder = 0u;
-        size_t localWorkSize[3] = {pImplicitArgs->localSizeX, pImplicitArgs->localSizeY, pImplicitArgs->localSizeZ};
+
         auto generationOfLocalIdsByRuntime = EncodeDispatchKernel<GfxFamily>::isRuntimeLocalIdsGenerationRequired(
             3,
             localWorkSize,
@@ -97,7 +108,7 @@ size_t HardwareCommandsHelper<GfxFamily>::sendCrossThreadData(
         auto ptrToPatchImplicitArgs = indirectHeap.getSpace(sizeForImplicitArgsProgramming);
         EncodeDispatchKernel<GfxFamily>::template patchScratchAddressInImplicitArgs<heaplessModeEnabled>(*pImplicitArgs, scratchAddress, true);
 
-        ImplicitArgsHelper::patchImplicitArgs(ptrToPatchImplicitArgs, *pImplicitArgs, kernelDescriptor, std::make_pair(generationOfLocalIdsByRuntime, requiredWalkOrder), rootDeviceEnvironment, nullptr);
+        ImplicitArgsHelper::patchImplicitArgs(ptrToPatchImplicitArgs, *pImplicitArgs, kernelDescriptor, std::make_pair(!generationOfLocalIdsByRuntime, requiredWalkOrder), rootDeviceEnvironment, nullptr);
     }
 
     uint32_t sizeToCopy = sizeCrossThreadData;
@@ -120,6 +131,9 @@ size_t HardwareCommandsHelper<GfxFamily>::sendCrossThreadData(
     }
 
     if (sizeCrossThreadData > 0) {
+        if constexpr (!heaplessModeEnabled) {
+            DEBUG_BREAK_IF(indirectHeap.getUsed() % 64 != 0);
+        }
         dest = static_cast<char *>(indirectHeap.getSpace(sizeCrossThreadData));
         memcpy_s(dest, sizeCrossThreadData, src, sizeCrossThreadData);
     }

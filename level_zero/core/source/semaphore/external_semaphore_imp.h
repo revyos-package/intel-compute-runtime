@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/os_interface/external_semaphore.h"
 
 #include "level_zero/core/source/device/device.h"
@@ -24,17 +25,17 @@ namespace L0 {
 
 class ExternalSemaphoreImp : public ExternalSemaphore {
   public:
-    ze_result_t initialize(ze_device_handle_t device, const ze_intel_external_semaphore_exp_desc_t *semaphoreDesc);
+    ze_result_t initialize(ze_device_handle_t device, const ze_external_semaphore_ext_desc_t *semaphoreDesc);
     ze_result_t releaseExternalSemaphore() override;
 
     std::unique_ptr<NEO::ExternalSemaphore> neoExternalSemaphore;
 
   protected:
     Device *device = nullptr;
-    const ze_intel_external_semaphore_exp_desc_t *desc;
+    const ze_external_semaphore_ext_desc_t *desc;
 };
 
-class ExternalSemaphoreController {
+class ExternalSemaphoreController : NEO::NonCopyableAndNonMovableClass {
   public:
     enum SemaphoreOperation {
         Wait,
@@ -73,6 +74,10 @@ class ExternalSemaphoreController {
             event->destroy();
         }
 
+        for (auto event : processedProxyEvents) {
+            event->destroy();
+        }
+
         for (auto &eventPools : eventPoolsMap) {
             for (auto &eventPool : eventPools.second) {
                 eventPool->destroy();
@@ -80,7 +85,7 @@ class ExternalSemaphoreController {
         }
     }
 
-    ze_result_t allocateProxyEvent(ze_intel_external_semaphore_exp_handle_t hExtSemaphore, ze_device_handle_t hDevice, ze_context_handle_t hContext, uint64_t fenceValue, ze_event_handle_t *phEvent, SemaphoreOperation operation);
+    ze_result_t allocateProxyEvent(ze_device_handle_t hDevice, ze_context_handle_t hContext, ze_event_handle_t *phEvent);
     void processProxyEvents();
 
     std::mutex semControllerMutex;
@@ -90,6 +95,7 @@ class ExternalSemaphoreController {
     std::unordered_map<ze_device_handle_t, size_t> eventsCreatedFromLatestPoolMap;
     const size_t maxEventCountInPool = 20u;
     std::vector<std::tuple<Event *, ExternalSemaphore *, uint64_t, SemaphoreOperation>> proxyEvents;
+    std::vector<Event *> processedProxyEvents;
     bool continueRunning = true;
 
   private:
@@ -97,5 +103,7 @@ class ExternalSemaphoreController {
 
     std::thread extSemThread;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<ExternalSemaphoreController>);
 
 } // namespace L0

@@ -9,8 +9,11 @@
 
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/constants.h"
+#include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/ptr_math.h"
 #include "shared/source/helpers/string.h"
+#include "shared/source/sku_info/operations/sku_info_transfer.h"
+#include "shared/test/common/helpers/default_hw_info.h"
 
 #include <map>
 
@@ -47,6 +50,7 @@ void mockSetAdapterInfo(const void *pGfxPlatform, const void *pGTSystemInfo, uin
     if (pGTSystemInfo != NULL) {
         gAdapterInfo.SystemInfo = *(GT_SYSTEM_INFO *)pGTSystemInfo;
     }
+    NEO::SkuInfoTransfer::transferFtrTableForGmm(&gAdapterInfo.SkuTable, &NEO::defaultHwInfo->featureTable);
     gGpuAddressSpace = gpuAddressSpace;
     initGfxPartition();
 }
@@ -156,20 +160,25 @@ inline void *getStaticStorage(uint32_t slot) {
     return ptrOffset(baseAddress, slot * singleStorageSize);
 }
 
-static bool createAllocation2FailOnReadOnlyAllocation = false;
-static bool createAllocation2ReadOnlyFlagWasPassed = false;
+static D3DKMT_CREATEALLOCATIONFLAGS createAllocationFlags{};
+static bool captureCreateAllocationFlags = false;
 static uint32_t createAllocation2NumCalled = 0;
+static bool supportCreateAllocationWithReadWriteExisitingSysMemory = true;
 
-void setCreateAllocation2ReadOnlyFailConfig(bool fail) {
-    createAllocation2FailOnReadOnlyAllocation = fail;
-    createAllocation2ReadOnlyFlagWasPassed = false;
+void setCapturingCreateAllocationFlags() {
+    captureCreateAllocationFlags = true;
     createAllocation2NumCalled = 0;
 }
 
-void getCreateAllocation2ReadOnlyFailConfig(bool &readOnlyFlagWasPassed, uint32_t &numCalled) {
-    readOnlyFlagWasPassed = createAllocation2ReadOnlyFlagWasPassed;
+void getCapturedCreateAllocationFlags(D3DKMT_CREATEALLOCATIONFLAGS &capturedCreateAllocationFlags, uint32_t &numCalled) {
+    capturedCreateAllocationFlags = createAllocationFlags;
     numCalled = createAllocation2NumCalled;
-    setCreateAllocation2ReadOnlyFailConfig(false);
+    captureCreateAllocationFlags = false;
+}
+
+void setSupportCreateAllocationWithReadWriteExisitingSysMemory(bool supportValue, bool &previousValue) {
+    previousValue = supportCreateAllocationWithReadWriteExisitingSysMemory;
+    supportCreateAllocationWithReadWriteExisitingSysMemory = supportValue;
 }
 
 NTSTATUS __stdcall mockD3DKMTCreateAllocation2(IN OUT D3DKMT_CREATEALLOCATION *allocation) {
@@ -187,14 +196,9 @@ NTSTATUS __stdcall mockD3DKMTCreateAllocation2(IN OUT D3DKMT_CREATEALLOCATION *a
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (createAllocation2FailOnReadOnlyAllocation) {
+    if (captureCreateAllocationFlags) {
+        createAllocationFlags = pallocation.Flags;
         createAllocation2NumCalled++;
-        if (pallocation.Flags.ReadOnly) {
-            createAllocation2ReadOnlyFlagWasPassed = true;
-            return STATUS_SUCCESS;
-        } else {
-            return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
-        }
     }
 
     numOfAllocations = allocation->NumAllocations;
@@ -215,6 +219,9 @@ NTSTATUS __stdcall mockD3DKMTCreateAllocation2(IN OUT D3DKMT_CREATEALLOCATION *a
                 static uint32_t handleIdForStaticStorage = 1u;
                 static uint32_t handleIdForUserPtr = ALLOCATION_HANDLE + 1u;
                 if (allocationInfo->pSystemMem) {
+                    if (!supportCreateAllocationWithReadWriteExisitingSysMemory && !createAllocationFlags.ReadOnly) {
+                        return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+                    }
                     userPtrMap.insert({handleIdForUserPtr, const_cast<void *>(allocationInfo->pSystemMem)});
                     allocationInfo->hAllocation = handleIdForUserPtr;
                     handleIdForUserPtr++;
@@ -381,6 +388,8 @@ NTSTATUS __stdcall mockD3DKMTQueryAdapterInfo(IN CONST D3DKMT_QUERYADAPTERINFO *
         adapterInfo->GfxMemorySize = 2181038080;
         adapterInfo->SystemSharedMemory = 4249540608;
         adapterInfo->SystemVideoMemory = 0;
+        adapterInfo->DedicatedVideoMemory = 0x123467800;
+        adapterInfo->LMemBarSize = 0x123467A0;
         adapterInfo->GfxTimeStampFreq = 1;
 
         adapterInfo->GfxPartition.Standard.Base = gAdapterInfo.GfxPartition.Standard.Base;
@@ -398,6 +407,10 @@ NTSTATUS __stdcall mockD3DKMTQueryAdapterInfo(IN CONST D3DKMT_QUERYADAPTERINFO *
         adapterInfo->GfxPartition.Heap32[2].Limit = gAdapterInfo.GfxPartition.Heap32[2].Limit;
         adapterInfo->GfxPartition.Heap32[3].Base = gAdapterInfo.GfxPartition.Heap32[3].Base;
         adapterInfo->GfxPartition.Heap32[3].Limit = gAdapterInfo.GfxPartition.Heap32[3].Limit;
+
+        adapterInfo->SegmentId[0] = 0x12;
+        adapterInfo->SegmentId[1] = 0x34;
+        adapterInfo->SegmentId[2] = 0x56;
 
         adapterInfo->stAdapterBDF.Data = gAdapterBDF.Data;
         return STATUS_SUCCESS;
@@ -550,6 +563,10 @@ NTSTATUS __stdcall mockD3DKMTCreateSynchronizationObject2(IN OUT D3DKMT_CREATESY
     }
     synchObject->Info.MonitoredFence.FenceValueGPUVirtualAddress = monitorFenceGpuAddress;
     synchObject->hSyncObject = 4;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS __stdcall mockD3DKMTCreateNativeFence(IN OUT D3DKMT_CREATENATIVEFENCE *synchObject) {
     return STATUS_SUCCESS;
 }
 

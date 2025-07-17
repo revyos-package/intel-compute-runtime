@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -78,6 +78,7 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
         int32_t callbackExecutionStatusTarget; // minimum event execution status that will triger this callback
         void *userData;
     };
+    static_assert(NEO::NonCopyableAndNonMovable<IFList<Callback, true, true>>);
 
     struct ProfilingInfo {
         uint64_t cpuTimeInNs;
@@ -90,9 +91,6 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
 
     Event(CommandQueue *cmdQueue, cl_command_type cmdType,
           TaskCountType taskLevel, TaskCountType taskCount);
-
-    Event(const Event &) = delete;
-    Event &operator=(const Event &) = delete;
 
     ~Event() override;
 
@@ -170,12 +168,12 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
             DEBUG_BREAK_IF(true);
             return false;
         }
-        return (callbacks[(uint32_t)target].peekHead() != nullptr);
+        return (callbacks[static_cast<uint32_t>(target)].peekHead() != nullptr);
     }
 
     bool peekHasCallbacks() {
-        for (uint32_t i = 0; i < (uint32_t)ECallbackTarget::max; ++i) {
-            if (peekHasCallbacks((ECallbackTarget)i)) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(ECallbackTarget::max); ++i) {
+            if (peekHasCallbacks(static_cast<ECallbackTarget>(i))) {
                 return true;
             }
         }
@@ -375,7 +373,7 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
     cl_command_type cmdType{};
 
     // callbacks to be executed when this event changes its execution state
-    IFList<Callback, true, true> callbacks[(uint32_t)ECallbackTarget::max];
+    IFList<Callback, true, true> callbacks[static_cast<uint32_t>(ECallbackTarget::max)];
 
     // can be accessed only with transitionExecutionState
     // this is to ensure state consitency event when doning lock-free multithreading
@@ -409,4 +407,6 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
     // can be accessed only with updateTaskCount
     std::atomic<TaskCountType> taskCount{0};
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<Event>);
 } // namespace NEO

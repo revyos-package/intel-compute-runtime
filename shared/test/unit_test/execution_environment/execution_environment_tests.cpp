@@ -25,6 +25,7 @@
 #include "shared/source/os_interface/os_thread.h"
 #include "shared/source/os_interface/os_time.h"
 #include "shared/source/release_helper/release_helper.h"
+#include "shared/test/common/fixtures/mock_aub_center_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/mocks/mock_ail_configuration.h"
 #include "shared/test/common/mocks/mock_device.h"
@@ -122,6 +123,32 @@ TEST(ExecutionEnvironment, givenDeviceWhenItIsDestroyedThenMemoryManagerIsStillA
     EXPECT_NE(nullptr, executionEnvironment.memoryManager);
 }
 
+class TestAubCenter : public AubCenter {
+  public:
+    using AubCenter::AubCenter;
+
+    void resetAubManager() {
+        aubManager.reset(nullptr);
+    }
+};
+TEST(RootDeviceEnvironment, givenNullptrAubManagerWhenInitializeAubCenterIsCalledThenMessErrorIsPrintedAndAbortCalled) {
+    ::testing::internal::CaptureStderr();
+    MockExecutionEnvironment executionEnvironment;
+    executionEnvironment.rootDeviceEnvironments[0]->setHwInfoAndInitHelpers(defaultHwInfo.get());
+    auto rootDeviceEnvironment = static_cast<MockRootDeviceEnvironment *>(executionEnvironment.rootDeviceEnvironments[0].get());
+
+    MockAubCenterFixture::setMockAubCenter(*rootDeviceEnvironment, CommandStreamReceiverType::aub, true);
+    auto testAubCenter = std::make_unique<TestAubCenter>(*rootDeviceEnvironment, false, "", CommandStreamReceiverType::aub);
+    testAubCenter->resetAubManager();
+    rootDeviceEnvironment->aubCenter = std::move(testAubCenter);
+
+    rootDeviceEnvironment->useMockAubCenter = false;
+    EXPECT_THROW(rootDeviceEnvironment->initAubCenter(true, "test.aub", CommandStreamReceiverType::aub), std::runtime_error);
+
+    std::string output = ::testing::internal::GetCapturedStderr();
+    EXPECT_NE(output.find("ERROR: Simulation mode detected but Aubstream is not available.\n"), std::string::npos);
+}
+
 TEST(RootDeviceEnvironment, givenExecutionEnvironmentWhenInitializeAubCenterIsCalledThenItIsReceivesCorrectInputParams) {
     MockExecutionEnvironment executionEnvironment;
     executionEnvironment.rootDeviceEnvironments[0]->setHwInfoAndInitHelpers(defaultHwInfo.get());
@@ -177,23 +204,15 @@ TEST(RootDeviceEnvironment, givenUseAubStreamFalseWhenGetAubManagerIsCalledThenR
     auto aubManager = rootDeviceEnvironment->aubCenter->getAubManager();
     EXPECT_EQ(nullptr, aubManager);
 }
-
 TEST(RootDeviceEnvironment, givenExecutionEnvironmentWhenInitializeAubCenterIsCalledThenItIsInitalizedOnce) {
     MockExecutionEnvironment executionEnvironment{defaultHwInfo.get(), false, 1u};
     auto rootDeviceEnvironment = executionEnvironment.rootDeviceEnvironments[0].get();
     rootDeviceEnvironment->initAubCenter(false, "", CommandStreamReceiverType::aub);
     auto currentAubCenter = rootDeviceEnvironment->aubCenter.get();
     EXPECT_NE(nullptr, currentAubCenter);
-    auto currentAubStreamProvider = currentAubCenter->getStreamProvider();
-    EXPECT_NE(nullptr, currentAubStreamProvider);
-    auto currentAubFileStream = currentAubStreamProvider->getStream();
-    EXPECT_NE(nullptr, currentAubFileStream);
     rootDeviceEnvironment->initAubCenter(false, "", CommandStreamReceiverType::aub);
     EXPECT_EQ(currentAubCenter, rootDeviceEnvironment->aubCenter.get());
-    EXPECT_EQ(currentAubStreamProvider, rootDeviceEnvironment->aubCenter->getStreamProvider());
-    EXPECT_EQ(currentAubFileStream, rootDeviceEnvironment->aubCenter->getStreamProvider()->getStream());
 }
-
 TEST(RootDeviceEnvironment, givenRootExecutionEnvironmentWhenGetAssertHandlerIsCalledThenItIsInitalizedOnce) {
     const HardwareInfo *hwInfo = defaultHwInfo.get();
     auto device = std::unique_ptr<Device>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(hwInfo));
@@ -304,11 +323,11 @@ TEST(ExecutionEnvironment, givenExperimentalUSMAllocationReuseCleanerSetWhenInit
 
     VariableBackup<decltype(NEO::Thread::createFunc)> funcBackup{&NEO::Thread::createFunc, [](void *(*func)(void *), void *arg) -> std::unique_ptr<Thread> { return nullptr; }};
     MockExecutionEnvironment executionEnvironment{};
-    executionEnvironment.initializeUnifiedMemoryReuseCleaner();
+    executionEnvironment.initializeUnifiedMemoryReuseCleaner(true);
     auto cleaner = executionEnvironment.unifiedMemoryReuseCleaner.get();
 
     EXPECT_NE(cleaner, nullptr);
-    executionEnvironment.initializeUnifiedMemoryReuseCleaner();
+    executionEnvironment.initializeUnifiedMemoryReuseCleaner(true);
     EXPECT_EQ(cleaner, executionEnvironment.unifiedMemoryReuseCleaner.get());
 }
 
@@ -317,9 +336,21 @@ TEST(ExecutionEnvironment, givenExperimentalUSMAllocationReuseCleanerSetZeroWhen
     debugManager.flags.ExperimentalUSMAllocationReuseCleaner.set(0);
 
     MockExecutionEnvironment executionEnvironment{};
-    executionEnvironment.initializeUnifiedMemoryReuseCleaner();
+    executionEnvironment.initializeUnifiedMemoryReuseCleaner(true);
 
     EXPECT_EQ(nullptr, executionEnvironment.unifiedMemoryReuseCleaner.get());
+}
+
+TEST(ExecutionEnvironment, givenExperimentalUSMAllocationReuseCleanerSetAndNotEnabledWhenInitializeUnifiedMemoryReuseCleanerThenForceInit) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.ExperimentalUSMAllocationReuseCleaner.set(1);
+
+    VariableBackup<decltype(NEO::Thread::createFunc)> funcBackup{&NEO::Thread::createFunc, [](void *(*func)(void *), void *arg) -> std::unique_ptr<Thread> { return nullptr; }};
+    MockExecutionEnvironment executionEnvironment{};
+    executionEnvironment.initializeUnifiedMemoryReuseCleaner(false);
+    auto cleaner = executionEnvironment.unifiedMemoryReuseCleaner.get();
+
+    EXPECT_NE(cleaner, nullptr);
 }
 
 TEST(ExecutionEnvironment, givenNeoCalEnabledWhenCreateExecutionEnvironmentThenSetDebugVariables) {
@@ -330,11 +361,12 @@ TEST(ExecutionEnvironment, givenNeoCalEnabledWhenCreateExecutionEnvironmentThenS
 #undef DECLARE_DEBUG_VARIABLE
 #define DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description) \
     EXPECT_EQ(defaultValue, debugManager.flags.variableName.getRef());
-
+#define DECLARE_DEBUG_SCOPED_V(dataType, variableName, defaultValue, description, ...) \
+    DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
 #include "shared/source/debug_settings/release_variables.inl"
 
 #include "debug_variables.inl"
-
+#undef DECLARE_DEBUG_SCOPED_V
 #undef DECLARE_DEBUG_VARIABLE
 
     DebugManagerStateRestore restorer;
@@ -363,11 +395,13 @@ TEST(ExecutionEnvironment, givenNeoCalEnabledWhenCreateExecutionEnvironmentThenS
             }                                                                          \
         }                                                                              \
     }
+#define DECLARE_DEBUG_SCOPED_V(dataType, variableName, defaultValue, description, ...) \
+    DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
 
 #include "shared/source/debug_settings/release_variables.inl"
 
 #include "debug_variables.inl"
-
+#undef DECLARE_DEBUG_SCOPED_V
 #undef DECLARE_DEBUG_VARIABLE
 }
 
@@ -384,7 +418,9 @@ TEST(ExecutionEnvironment, givenEnvVarUsedInCalConfigAlsoSetByAppWhenCreateExecu
 TEST(ExecutionEnvironment, givenExecutionEnvironmentWhenInitializeMemoryManagerIsCalledThenItIsInitalized) {
     MockExecutionEnvironment executionEnvironment{};
     executionEnvironment.initializeMemoryManager();
-    EXPECT_NE(nullptr, executionEnvironment.memoryManager);
+    ASSERT_NE(nullptr, executionEnvironment.memoryManager);
+    EXPECT_TRUE(executionEnvironment.memoryManager->isInitialized());
+    EXPECT_NE(0u, executionEnvironment.memoryManager->usmReuseInfo.getMaxAllocationsSavedForReuseSize());
 }
 
 static_assert(sizeof(ExecutionEnvironment) == sizeof(std::unique_ptr<MemoryManager>) +
@@ -414,7 +450,7 @@ TEST(ExecutionEnvironment, givenExecutionEnvironmentWithVariousMembersWhenItIsDe
         }
     };
     struct UnifiedMemoryReuseCleanerMock : public DestructorCounted<UnifiedMemoryReuseCleaner, 7> {
-        UnifiedMemoryReuseCleanerMock(uint32_t &destructorId) : DestructorCounted(destructorId) {}
+        UnifiedMemoryReuseCleanerMock(uint32_t &destructorId) : DestructorCounted(destructorId, false) {}
     };
     struct DirectSubmissionControllerMock : public DestructorCounted<DirectSubmissionController, 6> {
         DirectSubmissionControllerMock(uint32_t &destructorId) : DestructorCounted(destructorId) {}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -33,6 +33,8 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/gtest_helpers.h"
 #include "shared/test/common/helpers/kernel_binary_helper.h"
+#include "shared/test/common/helpers/mock_file_io.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/test_files.h"
 #include "shared/test/common/libult/global_environment.h"
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
@@ -702,38 +704,6 @@ TEST_F(MinimumProgramFixture, givenEmptyAilWhenCreateProgramWithSourcesThenSourc
     pProgram->release();
 }
 
-TEST_F(MinimumProgramFixture, givenAILReturningTrueForFallbackRequirementWhenBuildingProgramThenMarkContextAsNonZebin) {
-    class MockAIL : public MockAILConfiguration {
-      public:
-        bool isFallbackToPatchtokensRequired() override {
-            return true;
-        }
-    };
-    auto pDevice = pContext->getDevice(0);
-    auto rootDeviceEnvironment = pDevice->getExecutionEnvironment()->rootDeviceEnvironments[rootDeviceIndex].get();
-    rootDeviceEnvironment->ailConfiguration.reset(new MockAIL());
-
-    ASSERT_FALSE(pContext->checkIfContextIsNonZebin());
-
-    const char *kernelSources[] = {"some source code"};
-    size_t knownSourceSize = strlen(kernelSources[0]);
-    MockProgram *pProgram = nullptr;
-    pProgram = Program::create<SucceedingGenBinaryProgram>(
-        pContext,
-        1,
-        kernelSources,
-        &knownSourceSize,
-        retVal);
-
-    ASSERT_NE(nullptr, pProgram);
-    ASSERT_EQ(CL_SUCCESS, retVal);
-
-    retVal = pProgram->build(pProgram->getDevices(), "");
-    EXPECT_EQ(CL_SUCCESS, retVal);
-    EXPECT_TRUE(pContext->checkIfContextIsNonZebin());
-    pProgram->release();
-}
-
 TEST_F(MinimumProgramFixture, givenApplicationContextMarkedAsNonZebinWhenBuildingProgramThenInternalOptionsShouldContainDisableZebinOption) {
     const char *kernelSources[] = {"some source code"};
     size_t knownSourceSize = strlen(kernelSources[0]);
@@ -761,6 +731,8 @@ TEST_F(MinimumProgramFixture, givenApplicationContextMarkedAsNonZebinWhenBuildin
 }
 
 TEST_F(ProgramFromSourceTest, GivenSpecificParamatersWhenBuildingProgramThenSuccessOrCorrectErrorCodeIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     KernelBinaryHelper kbHelper(binaryFileName, true);
     auto device = pPlatform->getClDevice(0);
 
@@ -863,6 +835,7 @@ TEST_F(ProgramFromSourceTest, GivenSpecificParamatersWhenBuildingProgramThenSucc
 }
 
 TEST_F(ProgramFromSourceTest, GivenDuplicateOptionsWhenCreatingWithSourceThenBuildSucceeds) {
+    USE_REAL_FILE_SYSTEM();
     KernelBinaryHelper kbHelper(binaryFileName, false);
 
     retVal = pProgram->build(pProgram->getDevices(), nullptr);
@@ -882,6 +855,7 @@ TEST_F(ProgramFromSourceTest, GivenDuplicateOptionsWhenCreatingWithSourceThenBui
 }
 
 TEST_F(ProgramFromSourceTest, WhenBuildingProgramThenFeaturesAndExtraExtensionsAreNotAdded) {
+    USE_REAL_FILE_SYSTEM();
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pClDevice = pContext->getDevice(0);
     pClDevice->getExecutionEnvironment()->rootDeviceEnvironments[pClDevice->getRootDeviceIndex()]->compilerInterface.reset(cip);
@@ -899,6 +873,8 @@ TEST_F(ProgramFromSourceTest, WhenBuildingProgramThenFeaturesAndExtraExtensionsA
 }
 
 TEST_F(ProgramFromSourceTest, givenFp64EmulationEnabledWhenBuildingProgramThenExtraExtensionsAreAdded) {
+    USE_REAL_FILE_SYSTEM();
+
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pClDevice = static_cast<ClDevice *>(devices[0]);
     pClDevice->getExecutionEnvironment()->setFP64EmulationEnabled();
@@ -915,6 +891,8 @@ TEST_F(ProgramFromSourceTest, givenFp64EmulationEnabledWhenBuildingProgramThenEx
 }
 
 TEST_F(ProgramFromSourceTest, WhenBuildingProgramWithOpenClC20ThenExtraExtensionsAreAdded) {
+    USE_REAL_FILE_SYSTEM();
+
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pClDevice = pContext->getDevice(0);
     pClDevice->getExecutionEnvironment()->rootDeviceEnvironments[pClDevice->getRootDeviceIndex()]->compilerInterface.reset(cip);
@@ -935,6 +913,8 @@ TEST_F(ProgramFromSourceTest, WhenBuildingProgramWithOpenClC20ThenExtraExtension
 }
 
 TEST_F(ProgramFromSourceTest, WhenBuildingProgramWithOpenClC30ThenFeaturesAreAdded) {
+    USE_REAL_FILE_SYSTEM();
+
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pClDevice = pContext->getDevice(0);
     pClDevice->getExecutionEnvironment()->rootDeviceEnvironments[pClDevice->getRootDeviceIndex()]->compilerInterface.reset(cip);
@@ -957,6 +937,8 @@ TEST_F(ProgramFromSourceTest, WhenBuildingProgramWithOpenClC30ThenFeaturesAreAdd
 }
 
 TEST_F(ProgramFromSourceTest, WhenBuildingProgramWithOpenClC30ThenFeaturesAreAddedOnlyOnce) {
+    USE_REAL_FILE_SYSTEM();
+
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pClDevice = pContext->getDevice(0);
     pClDevice->getExecutionEnvironment()->rootDeviceEnvironments[pClDevice->getRootDeviceIndex()]->compilerInterface.reset(cip);
@@ -1050,6 +1032,27 @@ TEST_F(ProgramFromSourceTest, WhenCompilingProgramWithOpenClC30ThenFeaturesAreAd
     EXPECT_TRUE(hasSubstr(pCompilerInterface->buildInternalOptions, extensionsWithFeaturesOption));
 }
 
+TEST_F(ProgramFromSourceTest, GivenDumpZEBinWhenBuildingProgramFromSourceThenZebinIsDumped) {
+    USE_REAL_FILE_SYSTEM();
+    DebugManagerStateRestore restorer;
+    debugManager.flags.DumpZEBin.set(1);
+
+    KernelBinaryHelper kbHelper(binaryFileName, true);
+
+    createProgramWithSource(
+        pContext,
+        sourceFileName);
+
+    std::string fileName = "dumped_zebin_module.elf";
+    EXPECT_FALSE(virtualFileExists(fileName));
+
+    retVal = pProgram->build(pProgram->getDevices(), nullptr);
+    EXPECT_EQ(CL_SUCCESS, retVal);
+
+    EXPECT_TRUE(virtualFileExists(fileName));
+    removeVirtualFile(fileName);
+}
+
 class Callback {
   public:
     Callback() {
@@ -1079,6 +1082,8 @@ class Callback {
 std::map<const void *, uint32_t> Callback::watchList;
 
 TEST_F(ProgramFromSourceTest, GivenDifferentCommpilerOptionsWhenBuildingProgramThenKernelHashesAreDifferent) {
+    USE_REAL_FILE_SYSTEM();
+
     KernelBinaryHelper kbHelper(binaryFileName, true);
 
     auto rootDeviceIndex = pContext->getDevice(0)->getRootDeviceIndex();
@@ -1145,6 +1150,8 @@ TEST_F(ProgramFromSourceTest, GivenEmptyProgramWhenCreatingProgramThenInvalidVal
 }
 
 TEST_F(ProgramFromSourceTest, GivenSpecificParamatersWhenCompilingProgramThenSuccessOrCorrectErrorCodeIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     createProgramWithSource(
         pContext,
         sourceFileName);
@@ -1267,6 +1274,8 @@ TEST_F(ProgramFromSourceTest, GivenFlagsWhenCompilingProgramThenBuildOptionsHave
 }
 
 TEST_F(ProgramTests, GivenFlagsWhenLinkingProgramThenBuildOptionsHaveBeenApplied) {
+    USE_REAL_FILE_SYSTEM();
+
     auto cip = new MockCompilerInterfaceCaptureBuildOptions();
     auto pProgram = std::make_unique<SucceedingGenBinaryProgram>(toClDeviceVector(*pClDevice));
     pProgram->sourceCode = "__kernel mock() {}";
@@ -1297,6 +1306,8 @@ TEST_F(ProgramTests, GivenFlagsWhenLinkingProgramThenBuildOptionsHaveBeenApplied
 }
 
 TEST_F(ProgramFromSourceTest, GivenAdvancedOptionsWhenCreatingProgramThenSuccessIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     std::string testFile;
     size_t sourceSize = 0;
 
@@ -1349,6 +1360,8 @@ TEST_F(ProgramFromSourceTest, GivenAdvancedOptionsWhenCreatingProgramThenSuccess
 }
 
 TEST_F(ProgramFromSourceTest, GivenSpecificParamatersWhenLinkingProgramThenSuccessOrCorrectErrorCodeIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     createProgramWithSource(
         pContext,
         sourceFileName);
@@ -1417,6 +1430,8 @@ TEST_F(ProgramFromSourceTest, GivenSpecificParamatersWhenLinkingProgramThenSucce
 }
 
 TEST_F(ProgramFromSourceTest, GivenInvalidOptionsWhenCreatingLibraryThenCorrectErrorIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     cl_program program = pProgram;
 
     // Order of following microtests is important - do not change.
@@ -1507,37 +1522,6 @@ TEST_F(PatchTokenTests, WhenBuildingProgramThenConstantKernelArgsAreAvailable) {
     uint32_t sizeOfPtr = sizeof(void *);
     EXPECT_EQ(pKernelInfo->getArgDescriptorAt(0).as<ArgDescPointer>().pointerSize, sizeOfPtr);
     EXPECT_EQ(pKernelInfo->getArgDescriptorAt(1).as<ArgDescPointer>().pointerSize, sizeOfPtr);
-
-    delete pKernel;
-}
-
-TEST_F(PatchTokenTests, GivenVmeKernelWhenBuildingKernelThenArgAvailable) {
-    if (!pDevice->getHardwareInfo().capabilityTable.supportsVme) {
-        GTEST_SKIP();
-    }
-    // PATCH_TOKEN_INLINE_VME_SAMPLER_INFO token indicates a VME kernel.
-
-    createProgramFromBinary(pContext, pContext->getDevices(), "vme_kernels");
-
-    ASSERT_NE(nullptr, pProgram);
-    retVal = pProgram->build(
-        pProgram->getDevices(),
-        nullptr);
-
-    EXPECT_EQ(CL_SUCCESS, retVal);
-
-    auto pKernelInfo = pProgram->getKernelInfo("device_side_block_motion_estimate_intel", rootDeviceIndex);
-    ASSERT_NE(nullptr, pKernelInfo);
-    EXPECT_EQ(true, pKernelInfo->kernelDescriptor.kernelAttributes.flags.usesVme);
-
-    auto pKernel = Kernel::create(
-        pProgram,
-        *pKernelInfo,
-        *pClDevice,
-        retVal);
-
-    EXPECT_EQ(CL_SUCCESS, retVal);
-    ASSERT_NE(nullptr, pKernel);
 
     delete pKernel;
 }
@@ -1716,7 +1700,7 @@ TEST_F(ProgramTests, whenGetInternalOptionsThenLSCPolicyIsSet) {
     }
 }
 
-HWTEST2_F(ProgramTests, givenDebugFlagSetToWbWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ProgramTests, givenDebugFlagSetToWbWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.OverrideL1CachePolicyInSurfaceStateAndStateless.set(2);
     MockProgram program(pContext, false, toClDeviceVector(*pClDevice));
@@ -1724,7 +1708,7 @@ HWTEST2_F(ProgramTests, givenDebugFlagSetToWbWhenGetInternalOptionsThenCorrectBu
     EXPECT_TRUE(CompilerOptions::contains(internalOptions, "-cl-store-cache-default=7 -cl-load-cache-default=4"));
 }
 
-HWTEST2_F(ProgramTests, givenDebugFlagSetForceAllResourcesUncachedWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ProgramTests, givenDebugFlagSetForceAllResourcesUncachedWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.OverrideL1CachePolicyInSurfaceStateAndStateless.set(2);
     debugManager.flags.ForceAllResourcesUncached.set(true);
@@ -1733,7 +1717,7 @@ HWTEST2_F(ProgramTests, givenDebugFlagSetForceAllResourcesUncachedWhenGetInterna
     EXPECT_TRUE(CompilerOptions::contains(internalOptions, "-cl-store-cache-default=2 -cl-load-cache-default=2"));
 }
 
-HWTEST2_F(ProgramTests, givenAtLeastXeHpgCoreWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ProgramTests, givenAtLeastXeHpgCoreWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     MockProgram program(pContext, false, toClDeviceVector(*pClDevice));
     auto internalOptions = program.getInternalOptions();
     EXPECT_TRUE(CompilerOptions::contains(internalOptions, "-cl-store-cache-default=2 -cl-load-cache-default=4"));
@@ -1743,28 +1727,25 @@ TEST_F(ProgramTests, WhenCreatingProgramThenBindlessIsEnabledOnlyIfDebugFlagIsEn
     using namespace testing;
     DebugManagerStateRestore restorer;
 
-    {
-
+    if (!pDevice->getCompilerProductHelper().isHeaplessModeEnabled(*defaultHwInfo)) {
         debugManager.flags.UseBindlessMode.set(0);
         MockProgram programNoBindless(pContext, false, toClDeviceVector(*pClDevice));
         auto internalOptionsNoBindless = programNoBindless.getInternalOptions();
         EXPECT_FALSE(CompilerOptions::contains(internalOptionsNoBindless, CompilerOptions::bindlessMode)) << internalOptionsNoBindless;
     }
-    {
 
-        debugManager.flags.UseBindlessMode.set(1);
-        MockProgram programBindless(pContext, false, toClDeviceVector(*pClDevice));
-        auto internalOptionsBindless = programBindless.getInternalOptions();
-        EXPECT_TRUE(CompilerOptions::contains(internalOptionsBindless, CompilerOptions::bindlessMode)) << internalOptionsBindless;
-    }
+    debugManager.flags.UseBindlessMode.set(1);
+    MockProgram programBindless(pContext, false, toClDeviceVector(*pClDevice));
+    auto internalOptionsBindless = programBindless.getInternalOptions();
+    EXPECT_TRUE(CompilerOptions::contains(internalOptionsBindless, CompilerOptions::bindlessMode)) << internalOptionsBindless;
 }
 
-TEST_F(ProgramTests, GivenForce32BitAddressessWhenProgramIsCreatedThenGreaterThan4gbBuffersRequiredIsCorrectlySet) {
+TEST_F(ProgramTests, GivenForce32BitAddressesWhenProgramIsCreatedThenGreaterThan4gbBuffersRequiredIsCorrectlySet) {
     DebugManagerStateRestore dbgRestorer;
     cl_int retVal = CL_DEVICE_NOT_FOUND;
     debugManager.flags.DisableStatelessToStatefulOptimization.set(false);
     if (pDevice) {
-        const_cast<DeviceInfo *>(&pDevice->getDeviceInfo())->force32BitAddressess = true;
+        const_cast<DeviceInfo *>(&pDevice->getDeviceInfo())->force32BitAddresses = true;
         MockProgram program(pContext, false, toClDeviceVector(*pClDevice));
         auto internalOptions = program.getInternalOptions();
         const auto &compilerProductHelper = pDevice->getRootDeviceEnvironment().getHelper<CompilerProductHelper>();
@@ -1806,10 +1787,10 @@ TEST_F(ProgramTests, givenProgramWhenItIsCompiledThenItAlwaysHavePreserveVec3Typ
     EXPECT_TRUE(CompilerOptions::contains(internalOptions, CompilerOptions::preserveVec3Type)) << internalOptions;
 }
 
-TEST_F(ProgramTests, Force32BitAddressessWhenProgramIsCreatedThenGreaterThan4gbBuffersRequiredIsCorrectlySet) {
+TEST_F(ProgramTests, Force32BitAddressesWhenProgramIsCreatedThenGreaterThan4gbBuffersRequiredIsCorrectlySet) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.DisableStatelessToStatefulOptimization.set(false);
-    const_cast<DeviceInfo *>(&pDevice->getDeviceInfo())->force32BitAddressess = true;
+    const_cast<DeviceInfo *>(&pDevice->getDeviceInfo())->force32BitAddresses = true;
     std::unique_ptr<MockProgram> program{Program::createBuiltInFromSource<MockProgram>("", pContext, pContext->getDevices(), nullptr)};
     auto internalOptions = program->getInternalOptions();
     const auto &compilerProductHelper = pDevice->getRootDeviceEnvironment().getHelper<CompilerProductHelper>();
@@ -1881,6 +1862,8 @@ TEST_F(ProgramTests, givenSkipLastExplicitArgWhenContainsStatefulAccessIsCalledT
 }
 
 TEST_F(ProgramTests, givenStatefulAndStatelessAccessesWhenProgramBuildIsCalledThenCorrectResultIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     DebugManagerStateRestore restorer;
     const auto &compilerProductHelper = pDevice->getRootDeviceEnvironment().getHelper<CompilerProductHelper>();
 
@@ -2115,8 +2098,13 @@ TEST_F(ProgramTests, whenCreatingFromZebinThenDontAppendEnableZebinFlagToBuildOp
         GTEST_SKIP();
     }
 
+    auto copyHwInfo = *defaultHwInfo;
+    MockExecutionEnvironment mockExecutionEnvironment{};
+    auto &compilerProductHelper = mockExecutionEnvironment.rootDeviceEnvironments[0]->getHelper<CompilerProductHelper>();
+    compilerProductHelper.adjustHwInfoForIgc(copyHwInfo);
+
     ZebinTestData::ValidEmptyProgram zebin;
-    zebin.elfHeader->machine = defaultHwInfo->platform.eProductFamily;
+    zebin.elfHeader->machine = copyHwInfo.platform.eProductFamily;
 
     auto device = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr, mockRootDeviceIndex));
     auto program = std::make_unique<MockProgram>(toClDeviceVector(*device));
@@ -2204,6 +2192,8 @@ TEST_F(ProgramTests, givenExistingGlobalSurfacesWhenProcessGenBinaryThenCleanupT
 }
 
 TEST_F(ProgramTests, GivenNoCompilerInterfaceRootDeviceEnvironmentWhenRebuildingBinaryThenOutOfHostMemoryErrorIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     auto pDevice = pContext->getDevice(0);
     auto executionEnvironment = pDevice->getExecutionEnvironment();
     std::unique_ptr<RootDeviceEnvironment> rootDeviceEnvironment = std::make_unique<NoCompilerInterfaceRootDeviceEnvironment>(*executionEnvironment);
@@ -2454,6 +2444,8 @@ TEST(isValidSpirvBinary, whenBinaryDoesNotContainLllvMagicThenBinaryIsNotValidLL
 }
 
 TEST_F(ProgramTests, WhenLinkingTwoValidSpirvProgramsThenValidProgramIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     const uint32_t spirv[16] = {0x03022307};
     cl_int errCode = CL_SUCCESS;
 
@@ -2525,6 +2517,8 @@ TEST_F(ProgramTests, givenProgramWithSpirvWhenRebuildProgramIsCalledThenSpirvPat
 }
 
 TEST_F(ProgramTests, givenProgramWithSpirvWhenRebuildIsCalledThenRebuildWarningIsIssued) {
+    USE_REAL_FILE_SYSTEM();
+
     const auto program{clUniquePtr(new MockProgram(toClDeviceVector(*pClDevice)))};
     uint32_t spirv[16] = {0x03022307, 0x23471113, 0x17192329};
     program->irBinary = makeCopy(spirv, sizeof(spirv));
@@ -2541,6 +2535,8 @@ TEST_F(ProgramTests, givenProgramWithSpirvWhenRebuildIsCalledThenRebuildWarningI
 }
 
 TEST_F(ProgramTests, givenProgramWithSpirvWhenRebuildIsCalledButSuppressFlagIsEnabledThenRebuildWarningIsNotIssued) {
+    USE_REAL_FILE_SYSTEM();
+
     const auto program{clUniquePtr(new MockProgram(toClDeviceVector(*pClDevice)))};
     uint32_t spirv[16] = {0x03022307, 0x23471113, 0x17192329};
     program->irBinary = makeCopy(spirv, sizeof(spirv));
@@ -2560,6 +2556,8 @@ TEST_F(ProgramTests, givenProgramWithSpirvWhenRebuildIsCalledButSuppressFlagIsEn
 }
 
 TEST_F(ProgramTests, givenProgramWithSpirvWhenRecompileIsCalledThenRebuildWarningIsIssued) {
+    USE_REAL_FILE_SYSTEM();
+
     const auto program{clUniquePtr(new MockProgram(toClDeviceVector(*pClDevice)))};
     uint32_t spirv[16] = {0x03022307, 0x23471113, 0x17192329};
     program->irBinary = makeCopy(spirv, sizeof(spirv));
@@ -2576,6 +2574,8 @@ TEST_F(ProgramTests, givenProgramWithSpirvWhenRecompileIsCalledThenRebuildWarnin
 }
 
 TEST_F(ProgramTests, givenProgramWithSpirvWhenRecompileIsCalledButSuppressFlagIsEnabledThenRebuildWarningIsNotIssued) {
+    USE_REAL_FILE_SYSTEM();
+
     const auto program{clUniquePtr(new MockProgram(toClDeviceVector(*pClDevice)))};
     uint32_t spirv[16] = {0x03022307, 0x23471113, 0x17192329};
     program->irBinary = makeCopy(spirv, sizeof(spirv));
@@ -3089,7 +3089,8 @@ using ProgramBinTest = Test<ProgramSimpleFixture>;
 TEST_F(ProgramBinTest, givenPrintProgramBinaryProcessingTimeSetWhenBuildProgramThenProcessingTimeIsPrinted) {
     DebugManagerStateRestore restorer;
     debugManager.flags.PrintProgramBinaryProcessingTime.set(true);
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
 
     createProgramFromBinary(pContext, pContext->getDevices(), "simple_kernels");
 
@@ -3097,7 +3098,7 @@ TEST_F(ProgramBinTest, givenPrintProgramBinaryProcessingTimeSetWhenBuildProgramT
         pProgram->getDevices(),
         nullptr);
 
-    auto output = testing::internal::GetCapturedStdout();
+    auto output = capture.getCapturedStdout();
     EXPECT_FALSE(output.compare(0, 14, "Elapsed time: "));
     EXPECT_EQ(CL_SUCCESS, retVal);
 }
@@ -3128,6 +3129,8 @@ struct DebugDataGuard {
 };
 
 TEST_F(ProgramBinTest, GivenBuildWithDebugDataThenBuildDataAvailableViaGetInfo) {
+    USE_REAL_FILE_SYSTEM();
+
     DebugDataGuard debugDataGuard;
 
     const char *sourceCode = "__kernel void\nCB(\n__global unsigned int* src, __global unsigned int* dst)\n{\nint id = (int)get_global_id(0);\ndst[id] = src[id];\n}\n";
@@ -3215,6 +3218,8 @@ TEST_F(ProgramBinTest, givenNoDebugDataAvailableThenDebugDataIsNotAvailableViaGe
 }
 
 TEST_F(ProgramBinTest, GivenDebugDataAvailableWhenLinkingProgramThenDebugDataIsStoredInProgram) {
+    USE_REAL_FILE_SYSTEM();
+
     DebugDataGuard debugDataGuard;
 
     const char *sourceCode = "__kernel void\nCB(\n__global unsigned int* src, __global unsigned int* dst)\n{\nint id = (int)get_global_id(0);\ndst[id] = src[id];\n}\n";
@@ -3273,6 +3278,8 @@ class MockCompilerInterfaceWithGtpinParam : public CompilerInterface {
 };
 
 TEST_F(ProgramBinTest, GivenSourceKernelWhenLinkingProgramThenGtpinInitInfoIsPassed) {
+    USE_REAL_FILE_SYSTEM();
+
     void *pIgcInitPtr = reinterpret_cast<void *>(0x1234);
     gtpinSetIgcInit(pIgcInitPtr);
     const char *sourceCode = "__kernel void\nCB(\n__global unsigned int* src, __global unsigned int* dst)\n{\nint id = (int)get_global_id(0);\ndst[id] = src[id];\n}\n";
@@ -3340,6 +3347,8 @@ TEST(ProgramCallbackTest, whenInvokeCallbackIsCalledThenFunctionIsProperlyInvoke
 }
 
 TEST(BuildProgramTest, givenMultiDeviceProgramWhenBuildingThenStoreAndProcessBinaryOnlyOncePerRootDevice) {
+    USE_REAL_FILE_SYSTEM();
+
     MockProgram *pProgram = nullptr;
     std::unique_ptr<char[]> pSource = nullptr;
     size_t sourceSize = 0;
@@ -3398,6 +3407,8 @@ TEST(BuildProgramTest, givenMultiDeviceProgramWhenBuildingThenStoreAndProcessBin
 }
 
 TEST(BuildProgramTest, givenMultiDeviceProgramWhenBuildingThenStoreKernelInfoPerEachRootDevice) {
+    USE_REAL_FILE_SYSTEM();
+
     MockProgram *pProgram = nullptr;
     std::unique_ptr<char[]> pSource = nullptr;
     size_t sourceSize = 0;

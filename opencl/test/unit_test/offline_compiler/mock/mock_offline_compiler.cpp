@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -15,7 +15,7 @@ namespace NEO {
 
 MockOfflineCompiler::MockOfflineCompiler() : OfflineCompiler() {
     uniqueHelper = std::make_unique<MockOclocArgHelper>(filesMap);
-    uniqueHelper->setAllCallBase(true);
+    uniqueHelper->setAllCallBase(false);
     argHelper = uniqueHelper.get();
 
     auto uniqueFclFacadeMock = std::make_unique<MockOclocFclFacade>(argHelper);
@@ -50,11 +50,11 @@ int MockOfflineCompiler::build() {
     return OfflineCompiler::build();
 }
 
-int MockOfflineCompiler::buildIrBinary() {
-    if (overrideBuildIrBinaryStatus) {
-        return buildIrBinaryStatus;
+int MockOfflineCompiler::buildToIrBinary() {
+    if (overrideBuildToIrBinaryStatus) {
+        return buildToIrBinaryStatus;
     }
-    return OfflineCompiler::buildIrBinary();
+    return OfflineCompiler::buildToIrBinary();
 }
 
 int MockOfflineCompiler::buildSourceCode() {
@@ -80,11 +80,12 @@ void MockOfflineCompiler::clearLog() {
     argHelper = uniqueHelper.get();
 }
 
-void MockOfflineCompiler::createDir(const std::string &path) {
+int MockOfflineCompiler::createDir(const std::string &path) {
     if (interceptCreatedDirs) {
         createdDirs.push_back(path);
+        return OCLOC_SUCCESS;
     } else {
-        OfflineCompiler::createDir(path);
+        return OfflineCompiler::createDir(path);
     }
 }
 

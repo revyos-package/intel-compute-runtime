@@ -9,29 +9,24 @@
 
 #include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/command_stream/linear_stream.h"
-#include "shared/source/command_stream/wait_status.h"
 #include "shared/source/device/device.h"
 #include "shared/source/helpers/engine_control.h"
 #include "shared/source/helpers/engine_node_helper.h"
 #include "shared/source/helpers/gfx_core_helper.h"
+#include "shared/source/helpers/hw_info.h"
 #include "shared/source/indirect_heap/indirect_heap.h"
-#include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/os_interface/os_context.h"
 #include "shared/source/os_interface/os_time.h"
-#include "shared/source/os_interface/sys_calls_common.h"
 
 #include "level_zero/core/source/cmdqueue/cmdqueue.h"
 #include "level_zero/core/source/device/device.h"
 #include "level_zero/core/source/device/device_imp.h"
 #include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
-#include "level_zero/core/source/helpers/properties_parser.h"
 #include "level_zero/tools/source/metrics/metric.h"
 
-#include "igfxfmid.h"
 #include "log_manager.h"
-
-#include <algorithm>
+#include "neo_igfxfmid.h"
 
 namespace L0 {
 
@@ -49,9 +44,8 @@ ze_result_t CommandListImp::destroy() {
         static_cast<DeviceImp *>(this->device)->bcsSplit.releaseResources();
     }
 
-    if (isImmediateType() && this->isFlushTaskSubmissionEnabled && !this->isSyncModeQueue) {
-        auto timeoutMicroseconds = NEO::TimeoutControls::maxTimeout;
-        getCsr(false)->waitForCompletionWithTimeout(NEO::WaitParams{false, false, false, timeoutMicroseconds}, getCsr(false)->peekTaskCount());
+    if (this->cmdQImmediate && !this->isSyncModeQueue) {
+        this->hostSynchronize(std::numeric_limits<uint64_t>::max());
     }
 
     if (!isImmediateType() &&
@@ -76,8 +70,6 @@ ze_result_t CommandListImp::destroy() {
         }
     }
 
-    this->forceDcFlushForDcFlushMitigation();
-
     delete this;
     return ZE_RESULT_SUCCESS;
 }
@@ -93,7 +85,7 @@ ze_result_t CommandListImp::appendMetricStreamerMarker(zet_metric_streamer_handl
 }
 
 ze_result_t CommandListImp::appendMetricQueryBegin(zet_metric_query_handle_t hMetricQuery) {
-    if (isImmediateType() && isFlushTaskSubmissionEnabled) {
+    if (isImmediateType()) {
         this->device->activateMetricGroups();
     }
 
@@ -191,7 +183,7 @@ CommandList *CommandList::createImmediate(uint32_t productFamily, Device *device
                 engineGroupType = deviceImp->getInternalEngineGroupType();
             }
         } else {
-            returnValue = device->getCsrForOrdinalAndIndex(&csr, cmdQdesc.ordinal, cmdQdesc.index, cmdQdesc.priority, queueProperties.interruptHint);
+            returnValue = device->getCsrForOrdinalAndIndex(&csr, cmdQdesc.ordinal, cmdQdesc.index, cmdQdesc.priority, queueProperties.priorityLevel, queueProperties.interruptHint);
             if (returnValue != ZE_RESULT_SUCCESS) {
                 return commandList;
             }
@@ -209,16 +201,11 @@ CommandList *CommandList::createImmediate(uint32_t productFamily, Device *device
             commandList->isSyncModeQueue |= true;
         }
 
-        if (!internalUsage) {
-            auto &productHelper = device->getProductHelper();
-            commandList->isFlushTaskSubmissionEnabled = gfxCoreHelper.isPlatformFlushTaskEnabled(productHelper);
-            if (NEO::debugManager.flags.EnableFlushTaskSubmission.get() != -1) {
-                commandList->isFlushTaskSubmissionEnabled = !!NEO::debugManager.flags.EnableFlushTaskSubmission.get();
-            }
-            PRINT_DEBUG_STRING(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Flush Task for Immediate command list : %s\n", commandList->isFlushTaskSubmissionEnabled ? "Enabled" : "Disabled");
+        auto &productHelper = device->getProductHelper();
 
+        if (!internalUsage) {
             auto &rootDeviceEnvironment = device->getNEODevice()->getRootDeviceEnvironment();
-            bool enabledCmdListSharing = !NEO::EngineHelper::isCopyOnlyEngineType(engineGroupType) && commandList->isFlushTaskSubmissionEnabled;
+            bool enabledCmdListSharing = !NEO::EngineHelper::isCopyOnlyEngineType(engineGroupType);
             commandList->immediateCmdListHeapSharing = L0GfxCoreHelper::enableImmediateCmdListHeapSharing(rootDeviceEnvironment, enabledCmdListSharing);
         }
         csr->initializeResources(false, device->getDevicePreemptionMode());
@@ -258,36 +245,57 @@ CommandList *CommandList::createImmediate(uint32_t productFamily, Device *device
 
         commandList->isBcsSplitNeeded = deviceImp->bcsSplit.setupDevice(productFamily, internalUsage, &cmdQdesc, csr);
 
-        commandList->copyThroughLockedPtrEnabled = gfxCoreHelper.copyThroughLockedPtrEnabled(hwInfo, device->getProductHelper());
+        commandList->copyThroughLockedPtrEnabled = gfxCoreHelper.copyThroughLockedPtrEnabled(hwInfo, productHelper);
 
-        if ((NEO::debugManager.flags.ForceCopyOperationOffloadForComputeCmdList.get() == 1 || queueProperties.copyOffloadHint) && !commandList->isCopyOnly(false) && commandList->isInOrderExecutionEnabled()) {
-            commandList->enableCopyOperationOffload(productFamily, device, desc);
+        const bool cmdListSupportsCopyOffload = commandList->isInOrderExecutionEnabled() && !productHelper.isDcFlushAllowed();
+
+        if ((NEO::debugManager.flags.ForceCopyOperationOffloadForComputeCmdList.get() == 1 || queueProperties.copyOffloadHint) && cmdListSupportsCopyOffload) {
+            commandList->enableCopyOperationOffload();
         }
-
-        return commandList;
     }
 
     return commandList;
 }
 
-void CommandListImp::enableCopyOperationOffload(uint32_t productFamily, Device *device, const ze_command_queue_desc_t *desc) {
+void CommandListImp::enableCopyOperationOffload() {
+    if (isCopyOnly(false) || !static_cast<DeviceImp *>(device)->tryGetCopyEngineOrdinal().has_value()) {
+        return;
+    }
+
+    this->copyOffloadMode = device->getL0GfxCoreHelper().getDefaultCopyOffloadMode(device->getProductHelper().useAdditionalBlitProperties());
+
+    if (this->copyOffloadMode != CopyOffloadModes::dualStream || !isImmediateType()) {
+        // No need to create internal bcs queue
+        return;
+    }
+
+    auto &computeOsContext = getCsr(false)->getOsContext();
+
+    ze_command_queue_priority_t immediateQueuePriority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
+    if (computeOsContext.isHighPriority()) {
+        immediateQueuePriority = ZE_COMMAND_QUEUE_PRIORITY_PRIORITY_HIGH;
+    } else if (computeOsContext.isLowPriority()) {
+        immediateQueuePriority = ZE_COMMAND_QUEUE_PRIORITY_PRIORITY_LOW;
+    }
+
+    ze_command_queue_mode_t immediateQueueMode = this->isSyncModeQueue ? ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS : ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
+
     NEO::CommandStreamReceiver *copyCsr = nullptr;
     uint32_t ordinal = static_cast<DeviceImp *>(device)->getCopyEngineOrdinal();
 
-    device->getCsrForOrdinalAndIndex(&copyCsr, ordinal, 0, desc->priority, false);
+    device->getCsrForOrdinalAndIndex(&copyCsr, ordinal, 0, immediateQueuePriority, 0, false);
     UNRECOVERABLE_IF(!copyCsr);
 
     ze_command_queue_desc_t copyQueueDesc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC};
     copyQueueDesc.ordinal = ordinal;
-    copyQueueDesc.mode = desc->mode;
-    copyQueueDesc.priority = desc->priority;
+    copyQueueDesc.mode = immediateQueueMode;
+    copyQueueDesc.priority = immediateQueuePriority;
 
     ze_result_t returnValue = ZE_RESULT_SUCCESS;
-    auto offloadCommandQueue = CommandQueue::create(productFamily, device, copyCsr, &copyQueueDesc, true, false, true, returnValue);
+    auto offloadCommandQueue = CommandQueue::create(device->getHwInfo().platform.eProductFamily, device, copyCsr, &copyQueueDesc, true, false, true, returnValue);
     UNRECOVERABLE_IF(!offloadCommandQueue);
 
     this->cmdQImmediateCopyOffload = offloadCommandQueue;
-    this->copyOperationOffloadEnabled = true;
 }
 
 void CommandListImp::setStreamPropertiesDefaultSettings(NEO::StreamProperties &streamProperties) {

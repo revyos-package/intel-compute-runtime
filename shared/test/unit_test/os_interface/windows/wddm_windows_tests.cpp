@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -199,6 +199,7 @@ TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksAr
 
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnAllocate = gdi->createAllocation;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate = gdi->destroyAllocation;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate2 = gdi->destroyAllocation2;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA = gdi->mapGpuVirtualAddress;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMakeResident = gdi->makeResident;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEvict = gdi->evict;
@@ -218,6 +219,7 @@ TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksAr
     EXPECT_EQ(expectedDeviceCb.PagingFence, gmmMemory->deviceCallbacks.PagingFence);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnAllocate, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnAllocate);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnDeallocate);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate2, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnDeallocate2);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMakeResident, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnMakeResident);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEvict, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnEvict);
@@ -229,6 +231,46 @@ TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksAr
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEscape, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnEscape);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture);
+}
+
+class MockGmmMemoryWindows : public MockGmmMemoryBase {
+  public:
+    using MockGmmMemoryBase::MockGmmMemoryBase;
+    bool setDeviceInfo(GMM_DEVICE_INFO *deviceInfo) override {
+        for (int i = 0; i < 3; i++) {
+            segmentId[i] = deviceInfo->MsSegId[i];
+        }
+        adapterLocalMemory = deviceInfo->AdapterLocalMemory;
+        adapterCpuVisibleMemory = deviceInfo->AdapterCpuVisibleLocalMemory;
+        return MockGmmMemoryBase::setDeviceInfo(deviceInfo);
+    }
+
+    uint64_t adapterLocalMemory = 0;
+    uint64_t adapterCpuVisibleMemory = 0;
+    uint8_t segmentId[3]{};
+};
+
+TEST_F(Wddm20WithMockGdiDllTests, whenInitWddmThenAdapterInfoCapsArePassedToGmmLibViaSetDeviceInfo) {
+    uint8_t expectedSegmentId[3] = {0x12, 0x34, 0x56};
+    uint64_t expectedAdapterLocalMemory = 0x123467800u;
+    uint64_t expectedAdapterCpuVisibleMemory = 0x123467A0u;
+
+    wddm->segmentId[0] = 0u;
+    wddm->segmentId[1] = 0u;
+    wddm->segmentId[2] = 0u;
+    wddm->lmemBarSize = 0u;
+    wddm->dedicatedVideoMemory = 0u;
+
+    wddm->gmmMemory = std::make_unique<MockGmmMemoryWindows>(getGmmClientContext());
+    auto gmmMemory = static_cast<MockGmmMemoryWindows *>(wddm->getGmmMemory());
+    wddm->init();
+
+    EXPECT_EQ(1u, gmmMemory->setDeviceInfoCalled);
+    EXPECT_EQ(expectedSegmentId[0], gmmMemory->segmentId[0]);
+    EXPECT_EQ(expectedSegmentId[1], gmmMemory->segmentId[1]);
+    EXPECT_EQ(expectedSegmentId[2], gmmMemory->segmentId[2]);
+    EXPECT_EQ(expectedAdapterLocalMemory, gmmMemory->adapterLocalMemory);
+    EXPECT_EQ(expectedAdapterCpuVisibleMemory, gmmMemory->adapterCpuVisibleMemory);
 }
 
 class MockRegistryReaderWithDriverStorePath : public SettingsReader {
@@ -406,65 +448,16 @@ TEST_F(WddmTestWithMockGdiDll, givenSetThreadPriorityStateEnabledWhenInitWddmThe
     EXPECT_EQ(SysCalls::ThreadPriority::AboveNormal, SysCalls::setThreadPriorityLastValue);
 }
 
-TEST_F(WddmTestWithMockGdiDll, whenIsReadOnlyMemoryCalledThenCorrectValueReturned) {
-    EXPECT_FALSE(wddm->isReadOnlyMemory(nullptr));
+TEST_F(WddmTestWithMockGdiDll, whenGettingReadOnlyFlagThenReturnTrueOnlyForPageMisaligedCpuPointer) {
+    void *alignedPtr = reinterpret_cast<void *>(MemoryConstants::pageSize);
+    EXPECT_FALSE(wddm->getReadOnlyFlagValue(alignedPtr));
 
-    static int mem[10];
-    SysCalls::virtualQueryMemoryBasicInformation.Protect = PAGE_READWRITE;
-    EXPECT_FALSE(wddm->isReadOnlyMemory(mem));
+    void *misalignedPtr = reinterpret_cast<void *>(MemoryConstants::pageSize + MemoryConstants::cacheLineSize);
+    EXPECT_TRUE(wddm->getReadOnlyFlagValue(misalignedPtr));
 
-    static const int constMem[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    SysCalls::virtualQueryMemoryBasicInformation.Protect = PAGE_READONLY;
-    EXPECT_TRUE(wddm->isReadOnlyMemory(constMem));
+    EXPECT_FALSE(wddm->getReadOnlyFlagValue(nullptr));
 }
 
-TEST_F(WddmTestWithMockGdiDll, givenReadOnlyHostMemoryPassedToCreateAllocationThenAllocationCreatedWithRetryAndReadOnlyFlagPassed) {
-    wddm->init();
-    setCreateAllocation2ReadOnlyFailConfigFcn(true);
-
-    static const int constMem[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    SysCalls::virtualQueryMemoryBasicInformation.Protect = PAGE_READONLY;
-
-    D3DKMT_HANDLE handle, resHandle;
-    GmmRequirements gmmRequirements{};
-    Gmm gmm(executionEnvironment->rootDeviceEnvironments[0]->getGmmHelper(), constMem, 10, 0, GMM_RESOURCE_USAGE_OCL_BUFFER, {}, gmmRequirements);
-
-    EXPECT_EQ(STATUS_SUCCESS, wddm->createAllocation(constMem, &gmm, handle, resHandle, nullptr));
-    bool readOnlyFlagWasPassed = false;
-    uint32_t createAllocation2NumCalled = 0;
-    getCreateAllocation2ReadOnlyFailConfigFcn(readOnlyFlagWasPassed, createAllocation2NumCalled);
-    EXPECT_TRUE(readOnlyFlagWasPassed);
-    EXPECT_EQ(2u, createAllocation2NumCalled);
-}
-
-TEST_F(WddmTestWithMockGdiDll, givenReadOnlyHostMemoryPassedToCreateAllocationsAndMapGpuVaThenAllocationCreatedWithRetryAndReadOnlyFlagPassed) {
-    wddm->init();
-    wddm->callBaseMapGpuVa = false;
-    setCreateAllocation2ReadOnlyFailConfigFcn(true);
-
-    static const int constMem[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    SysCalls::virtualQueryMemoryBasicInformation.Protect = PAGE_READONLY;
-
-    GmmRequirements gmmRequirements{};
-    Gmm gmm(executionEnvironment->rootDeviceEnvironments[0]->getGmmHelper(), constMem, 10, 0, GMM_RESOURCE_USAGE_OCL_BUFFER, {}, gmmRequirements);
-
-    OsHandleStorage handleStorage;
-    OsHandleWin osHandle;
-    auto maxOsContextCount = 1u;
-    ResidencyData residency(maxOsContextCount);
-
-    handleStorage.fragmentCount = 1;
-    handleStorage.fragmentStorageData[0].cpuPtr = constMem;
-    handleStorage.fragmentStorageData[0].fragmentSize = 10;
-    handleStorage.fragmentStorageData[0].freeTheFragment = false;
-    handleStorage.fragmentStorageData[0].osHandleStorage = &osHandle;
-    handleStorage.fragmentStorageData[0].residency = &residency;
-    osHandle.gmm = &gmm;
-
-    EXPECT_EQ(STATUS_SUCCESS, wddm->createAllocationsAndMapGpuVa(handleStorage));
-    bool readOnlyFlagWasPassed = false;
-    uint32_t createAllocation2NumCalled = 0;
-    getCreateAllocation2ReadOnlyFailConfigFcn(readOnlyFlagWasPassed, createAllocation2NumCalled);
-    EXPECT_TRUE(readOnlyFlagWasPassed);
-    EXPECT_EQ(2u, createAllocation2NumCalled);
+TEST_F(WddmTestWithMockGdiDll, whenGettingReadOnlyFlagFallbackSupportThenTrueIsReturned) {
+    EXPECT_TRUE(wddm->isReadOnlyFlagFallbackSupported());
 }

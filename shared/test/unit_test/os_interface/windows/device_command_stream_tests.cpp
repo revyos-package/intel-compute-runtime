@@ -26,6 +26,7 @@
 #include "shared/test/common/helpers/dispatch_flags_helper.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
 #include "shared/test/common/helpers/execution_environment_helper.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_gmm_page_table_mngr.h"
 #include "shared/test/common/mocks/mock_io_functions.h"
@@ -242,7 +243,8 @@ TEST_F(WddmCommandStreamTest, givenPrintIndicesEnabledWhenFlushThenPrintIndices)
     ASSERT_NE(nullptr, commandBuffer);
     LinearStream cs(commandBuffer);
     BatchBuffer batchBuffer = BatchBufferHelper::createDefaultBatchBuffer(cs.getGraphicsAllocation(), &cs, cs.getUsed());
-    ::testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     csr->flush(batchBuffer, csr->getResidencyAllocations());
 
     const std::string engineType = EngineHelpers::engineTypeToString(csr->getOsContext().getEngineType());
@@ -256,7 +258,7 @@ TEST_F(WddmCommandStreamTest, givenPrintIndicesEnabledWhenFlushThenPrintIndices)
     auto osContextWin = static_cast<OsContextWin *>(&csr->getOsContext());
 
     expectedValue << SysCalls::getProcessId() << ": Wddm Submission with context handle " << osContextWin->getWddmContextHandle() << " and HwQueue handle " << osContextWin->getHwQueue().handle << "\n";
-    EXPECT_STREQ(::testing::internal::GetCapturedStdout().c_str(), expectedValue.str().c_str());
+    EXPECT_STREQ(capture.getCapturedStdout().c_str(), expectedValue.str().c_str());
 
     memoryManager->freeGraphicsMemory(commandBuffer);
 }
@@ -1066,7 +1068,26 @@ INSTANTIATE_TEST_SUITE_P(
     WddmCsrCompressionParameterizedTest,
     ::testing::Bool());
 
-HWTEST_F(WddmCsrCompressionTests, givenDisabledCompressionWhenFlushingThenDontInitTranslationTable) {
+struct WddmCsrCompressionTestsWithMockWddmCsr : public WddmCsrCompressionTests {
+
+    void SetUp() override {}
+
+    void TearDown() override {}
+
+    template <typename FamilyType>
+    void setUpT() {
+        EnvironmentWithCsrWrapper environment;
+        environment.setCsrType<MockWddmCsr<FamilyType>>();
+        WddmCsrCompressionTests::SetUp();
+    }
+
+    template <typename FamilyType>
+    void tearDownT() {
+        WddmCsrCompressionTests::TearDown();
+    }
+};
+
+HWTEST_TEMPLATED_F(WddmCsrCompressionTestsWithMockWddmCsr, givenDisabledCompressionWhenFlushingThenDontInitTranslationTable) {
     ExecutionEnvironment *executionEnvironment = getExecutionEnvironmentImpl(hwInfo, 2);
     setCompressionEnabled(false, false);
     myMockWddm = static_cast<WddmMock *>(executionEnvironment->rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Wddm>());
@@ -1075,9 +1096,8 @@ HWTEST_F(WddmCsrCompressionTests, givenDisabledCompressionWhenFlushingThenDontIn
 
     std::unique_ptr<MockDevice> device(Device::create<MockDevice>(executionEnvironment, 1u));
 
-    auto mockWddmCsr = new MockWddmCsr<FamilyType>(*executionEnvironment, 1, device->getDeviceBitfield());
+    auto mockWddmCsr = static_cast<MockWddmCsr<FamilyType> *>(&device->getGpgpuCommandStreamReceiver());
     mockWddmCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    device->resetCommandStreamReceiver(mockWddmCsr);
 
     auto memoryManager = executionEnvironment->memoryManager.get();
     for (auto engine : memoryManager->getRegisteredEngines(device->getRootDeviceIndex())) {
@@ -1114,12 +1134,14 @@ struct MockWddmDrmDirectSubmissionDispatchCommandBuffer : public MockWddmDirectS
         return false;
     }
 
-    void flushMonitorFence() override {
+    void flushMonitorFence(bool notifyKmd) override {
         flushMonitorFenceCalled++;
+        lastNotifyKmdParamValue = notifyKmd;
     }
 
     uint32_t dispatchCommandBufferCalled = 0;
     uint32_t flushMonitorFenceCalled = 0u;
+    uint32_t lastNotifyKmdParamValue = false;
 };
 
 HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenCsrWhenFlushMonitorFenceThenFlushMonitorFenceOnDirectSubmission) {
@@ -1152,7 +1174,7 @@ HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenCsrWhenFlushMonitorFenceTh
     auto directSubmission = reinterpret_cast<MockSubmission *>(mockCsr->directSubmission.get());
     EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 0u);
 
-    csr->flushMonitorFence();
+    csr->flushMonitorFence(false);
 
     EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 1u);
 }
@@ -1178,11 +1200,11 @@ HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenDirectSubmissionEnabledOnB
     EXPECT_TRUE(csr->isBlitterDirectSubmissionEnabled());
 
     EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 0u);
-    csr->flushMonitorFence();
+    csr->flushMonitorFence(false);
     EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 1u);
 }
 
-HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenLastSubmittedFenceLowerThanFenceValueToWaitWhenWaitFromCpuThenFlushMonitorFence) {
+HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenLastSubmittedFenceLowerThanFenceValueToWaitWhenWaitFromCpuThenFlushMonitorFenceWithNotifyEnabledFlag) {
     using Dispatcher = RenderDispatcher<FamilyType>;
     using MockSubmission = MockWddmDrmDirectSubmissionDispatchCommandBuffer<FamilyType, Dispatcher>;
     auto mockCsr = static_cast<MockWddmCsr<FamilyType> *>(csr);
@@ -1224,7 +1246,8 @@ HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenLastSubmittedFenceLowerTha
     static_cast<OsContextWin *>(device->getDefaultEngine().osContext)->getResidencyController().resetMonitoredFenceParams(handle, &value, gpuVa);
     wddm->waitFromCpu(1, monitorFence, false);
 
-    EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 1u);
+    EXPECT_EQ(directSubmission->flushMonitorFenceCalled, 2u);
+    EXPECT_TRUE(directSubmission->lastNotifyKmdParamValue);
 }
 
 HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenDirectSubmissionFailsThenFlushReturnsError) {
@@ -1363,7 +1386,7 @@ HWTEST_TEMPLATED_F(WddmCommandStreamMockGdiTest, givenDirectSubmissionEnabledOnB
                           directSubmission->getSizeDispatch(false, false, directSubmission->dispatchMonitorFenceRequired(false));
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    auto heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(compilerProductHelper.isHeaplessModeEnabled());
+    auto heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo));
 
     if (directSubmission->miMemFenceRequired && !heaplessStateInit) {
         expectedSize += directSubmission->getSizeSystemMemoryFenceAddress();

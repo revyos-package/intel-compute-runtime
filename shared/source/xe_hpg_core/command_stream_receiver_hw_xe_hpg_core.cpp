@@ -14,6 +14,7 @@ using Family = NEO::XeHpgCoreFamily;
 #include "shared/source/command_stream/command_stream_receiver_hw_dg2_and_later.inl"
 #include "shared/source/command_stream/command_stream_receiver_hw_heap_addressing.inl"
 #include "shared/source/command_stream/command_stream_receiver_hw_xehp_and_later.inl"
+#include "shared/source/helpers/blit_commands_helper_from_gen12lp_to_xe3.inl"
 #include "shared/source/helpers/blit_commands_helper_xehp_and_later.inl"
 #include "shared/source/helpers/populate_factory.h"
 #include "shared/source/helpers/state_base_address_xehp_and_later.inl"
@@ -129,7 +130,7 @@ void BlitCommandsHelper<Family>::appendBlitCommandsBlockCopy(const BlitPropertie
     DEBUG_BREAK_IF((AuxTranslationDirection::none != blitProperties.auxTranslationDirection) &&
                    (blitProperties.dstAllocation != blitProperties.srcAllocation || !blitProperties.dstAllocation->isCompressionEnabled()));
 
-    auto mocs = rootDeviceEnvironment.getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED);
+    auto mocs = rootDeviceEnvironment.getGmmHelper()->getUncachedMOCS();
 
     if (debugManager.flags.OverrideBlitterMocs.get() != -1) {
         mocs = static_cast<uint32_t>(debugManager.flags.OverrideBlitterMocs.get());
@@ -150,8 +151,13 @@ void BlitCommandsHelper<Family>::appendBlitCommandsBlockCopy(const BlitPropertie
 }
 
 template <>
-void BlitCommandsHelper<Family>::dispatchBlitMemoryByteFill(NEO::GraphicsAllocation *dstAlloc, uint64_t offset, uint32_t *pattern, LinearStream &linearStream, size_t size, RootDeviceEnvironment &rootDeviceEnvironment) {
-    NEO::BlitCommandsHelper<Family>::dispatchBlitMemoryFill(dstAlloc, offset, pattern, linearStream, size, rootDeviceEnvironment, COLOR_DEPTH::COLOR_DEPTH_8_BIT_COLOR, 1);
+size_t BlitCommandsHelper<Family>::getNumberOfBlitsForByteFill(const Vec3<size_t> &copySize, size_t patternSize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed) {
+    return NEO::BlitCommandsHelper<Family>::getNumberOfBlitsForFill(copySize, patternSize, rootDeviceEnvironment, isSystemMemoryPoolUsed);
+}
+
+template <>
+BlitCommandsResult BlitCommandsHelper<Family>::dispatchBlitMemoryByteFill(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment) {
+    return NEO::BlitCommandsHelper<Family>::dispatchBlitMemoryFill(blitProperties, linearStream, rootDeviceEnvironment);
 }
 
 template <>
@@ -161,6 +167,8 @@ template class CommandStreamReceiverHw<Family>;
 template struct BlitCommandsHelper<Family>;
 template void BlitCommandsHelper<Family>::appendColorDepth<typename Family::XY_BLOCK_COPY_BLT>(const BlitProperties &blitProperties, typename Family::XY_BLOCK_COPY_BLT &blitCmd);
 template void BlitCommandsHelper<Family>::appendBlitCommandsForBuffer<typename Family::XY_BLOCK_COPY_BLT>(const BlitProperties &blitProperties, typename Family::XY_BLOCK_COPY_BLT &blitCmd, const RootDeviceEnvironment &rootDeviceEnvironment);
+
+template void BlitCommandsHelper<Family>::applyAdditionalBlitProperties<typename Family::XY_BLOCK_COPY_BLT>(const BlitProperties &blitProperties, typename Family::XY_BLOCK_COPY_BLT &blitCmd, const RootDeviceEnvironment &rootDeviceEnvironment, bool last);
 
 const Family::COMPUTE_WALKER Family::cmdInitGpgpuWalker = Family::COMPUTE_WALKER::sInit();
 const Family::CFE_STATE Family::cmdInitCfeState = Family::CFE_STATE::sInit();

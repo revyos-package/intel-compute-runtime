@@ -1,11 +1,14 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #pragma once
+
+#include "shared/offline_compiler/source/ocloc_fcl_facade.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 
 #include "cif/common/cif_main.h"
 #include "cif/import/library_api.h"
@@ -24,15 +27,10 @@ class OsLibrary;
 
 struct HardwareInfo;
 
-class OclocIgcFacade {
+class OclocIgcFacade : NEO::NonCopyableAndNonMovableClass {
   public:
     OclocIgcFacade(OclocArgHelper *argHelper);
     MOCKABLE_VIRTUAL ~OclocIgcFacade();
-
-    OclocIgcFacade(OclocIgcFacade &) = delete;
-    OclocIgcFacade(const OclocIgcFacade &&) = delete;
-    OclocIgcFacade &operator=(const OclocIgcFacade &) = delete;
-    OclocIgcFacade &operator=(OclocIgcFacade &&) = delete;
 
     int initialize(const HardwareInfo &hwInfo);
     bool isInitialized() const;
@@ -65,5 +63,30 @@ class OclocIgcFacade {
     CIF::RAII::UPtr_t<IGC::IgcOclDeviceCtxTagOCL> igcDeviceCtx;
     bool initialized{false};
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<OclocIgcFacade>);
+
+class OclocIgcAsFcl : public OclocFclFacadeBase {
+  public:
+    OclocIgcAsFcl(OclocArgHelper *argHelper);
+    ~OclocIgcAsFcl() override;
+
+    int initialize(const HardwareInfo &hwInfo) override;
+    bool isInitialized() const override;
+    IGC::CodeType::CodeType_t getPreferredIntermediateRepresentation() const override;
+    CIF::RAII::UPtr_t<CIF::Builtins::BufferLatest> createConstBuffer(const void *data, size_t size) override;
+    CIF::RAII::UPtr_t<IGC::OclTranslationOutputTagOCL> translate(IGC::CodeType::CodeType_t inType, IGC::CodeType::CodeType_t outType, CIF::Builtins::BufferLatest *error,
+                                                                 CIF::Builtins::BufferSimple *src,
+                                                                 CIF::Builtins::BufferSimple *options,
+                                                                 CIF::Builtins::BufferSimple *internalOptions,
+                                                                 CIF::Builtins::BufferSimple *tracingOptions,
+                                                                 uint32_t tracingOptionsCount) override;
+
+  protected:
+    IGC::CodeType::CodeType_t preferredIntermediateRepresentation = IGC::CodeType::undefined;
+    std::unique_ptr<OclocIgcFacade> igc;
+};
+
+static_assert(NEO::NonCopyableAndNonMovable<OclocIgcAsFcl>);
 
 } // namespace NEO

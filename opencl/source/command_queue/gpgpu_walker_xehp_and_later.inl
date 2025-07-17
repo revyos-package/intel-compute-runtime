@@ -1,11 +1,10 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#pragma once
 #include "shared/source/command_container/implicit_scaling.h"
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/execution_environment/root_device_environment.h"
@@ -112,8 +111,10 @@ void GpgpuWalkerHelper<GfxFamily>::setupTimestampPacket(LinearStream *cmdStream,
         postSyncData.setDataportSubsliceCacheFlush(!!NEO::debugManager.flags.ForcePostSyncL1Flush.get());
     }
 
-    EncodeDispatchKernel<GfxFamily>::template setupPostSyncMocs<WalkerType>(*walkerCmd, rootDeviceEnvironment,
-                                                                            MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, rootDeviceEnvironment));
+    auto mocs = EncodePostSync<GfxFamily>::getPostSyncMocs(rootDeviceEnvironment,
+                                                           MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, rootDeviceEnvironment));
+
+    postSyncData.setMocs(mocs);
 
     if (debugManager.flags.UseImmDataWriteModeOnPostSyncOperation.get()) {
         postSyncData.setOperation(POSTSYNC_DATA::OPERATION::OPERATION_WRITE_IMMEDIATE_DATA);
@@ -140,7 +141,7 @@ size_t EnqueueOperation<GfxFamily>::getSizeRequiredCSKernel(bool reserveProfilin
     size_t numBarriers = MemorySynchronizationCommands<GfxFamily>::isBarrierWaRequired(commandQueue.getDevice().getRootDeviceEnvironment()) ? 2 : 1;
 
     size_t size = sizeof(WalkerType) +
-                  (MemorySynchronizationCommands<GfxFamily>::getSizeForSingleBarrier(false) * numBarriers) +
+                  (MemorySynchronizationCommands<GfxFamily>::getSizeForSingleBarrier() * numBarriers) +
                   HardwareCommandsHelper<GfxFamily>::getSizeRequiredCS() +
                   EncodeMemoryPrefetch<GfxFamily>::getSizeForMemoryPrefetch(pKernel->getKernelInfo().heapInfo.kernelHeapSize, commandQueue.getDevice().getRootDeviceEnvironment());
     auto devices = commandQueue.getGpgpuCommandStreamReceiver().getOsContext().getDeviceBitfield();

@@ -58,6 +58,11 @@ XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, givenDebugFlagWhenCheckingIfBuffer
 
 using ProductHelperTestXeHpgCore = Test<DeviceFixture>;
 
+XE_HPG_CORETEST_F(ProductHelperTestXeHpgCore, givenProductHelperWhenCheckTimestampWaitSupportForQueuesThenReturnTrue) {
+    auto &productHelper = getHelper<ProductHelper>();
+    EXPECT_TRUE(productHelper.isTimestampWaitSupportedForQueues(false));
+}
+
 XE_HPG_CORETEST_F(ProductHelperTestXeHpgCore, givenDebugVariableSetWhenConfigureIsCalledThenSetupBlitterOperationsSupportedFlag) {
     DebugManagerStateRestore restore;
     auto &productHelper = getHelper<ProductHelper>();
@@ -142,11 +147,6 @@ XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, GivenVariousValuesWhenAlignSlmSize
     EXPECT_EQ(65536u, gfxCoreHelper.alignSlmSize(65536));
 }
 
-XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, givenGfxCoreHelperWhenCheckTimestampWaitSupportForQueuesThenReturnTrue) {
-    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
-    EXPECT_TRUE(gfxCoreHelper.isTimestampWaitSupportedForQueues());
-}
-
 XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, givenDisablePipeControlFlagIsEnabledWhenLocalMemoryIsEnabledThenReturnTrueAndProgramPipeControl) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     DebugManagerStateRestore restore;
@@ -161,7 +161,7 @@ XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, givenDisablePipeControlFlagIsEnabl
     constexpr size_t bufferSize = 128u;
     uint8_t buffer[bufferSize];
     LinearStream cmdStream(buffer, bufferSize);
-    MemorySynchronizationCommands<FamilyType>::addBarrierWa(cmdStream, 0x1000, rootDeviceEnvironment);
+    MemorySynchronizationCommands<FamilyType>::addBarrierWa(cmdStream, 0x1000, rootDeviceEnvironment, NEO::PostSyncMode::noWrite);
     EXPECT_EQ(sizeof(PIPE_CONTROL), cmdStream.getUsed());
 }
 
@@ -179,7 +179,7 @@ XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, givenDisablePipeControlFlagIsEnabl
     constexpr size_t bufferSize = 128u;
     uint8_t buffer[bufferSize];
     LinearStream cmdStream(buffer, bufferSize);
-    MemorySynchronizationCommands<FamilyType>::addBarrierWa(cmdStream, 0x1000, rootDeviceEnvironment);
+    MemorySynchronizationCommands<FamilyType>::addBarrierWa(cmdStream, 0x1000, rootDeviceEnvironment, NEO::PostSyncMode::noWrite);
     EXPECT_EQ(0u, cmdStream.getUsed());
 }
 
@@ -320,7 +320,7 @@ XE_HPG_CORETEST_F(GfxCoreHelperTestXeHpgCore, GivenVariousValuesWhenComputeSlmSi
     const auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     auto hardwareInfo = *defaultHwInfo;
     for (auto &testInput : computeSlmValuesXeHpgTestsInput) {
-        EXPECT_EQ(testInput.expected, gfxCoreHelper.computeSlmValues(hardwareInfo, testInput.slmSize));
+        EXPECT_EQ(testInput.expected, gfxCoreHelper.computeSlmValues(hardwareInfo, testInput.slmSize, nullptr, false));
     }
 }
 

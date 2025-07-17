@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -48,7 +48,7 @@ class TimestampPackets : public TagTypeBase {
         }
     }
 
-    void assignDataToAllTimestamps(uint32_t packetIndex, void *source) {
+    void assignDataToAllTimestamps(uint32_t packetIndex, const void *source) {
         memcpy_s(&packets[packetIndex], sizeof(Packet), source, sizeof(Packet));
     }
 
@@ -64,6 +64,10 @@ class TimestampPackets : public TagTypeBase {
 
     void const *getContextEndAddress(uint32_t packetIndex) const { return static_cast<void const *>(&packets[packetIndex].contextEnd); }
     void const *getContextStartAddress(uint32_t packetIndex) const { return static_cast<void const *>(&packets[packetIndex].contextStart); }
+
+    uint32_t getPacketCount() const {
+        return packetCount;
+    }
 
   protected:
     struct alignas(1) Packet {
@@ -182,7 +186,7 @@ struct TimestampPacketHelper {
         size_t size = count * TimestampPacketHelper::getRequiredCmdStreamSizeForNodeDependencyWithBlitEnqueue<GfxFamily>();
 
         if (auxTranslationDirection == AuxTranslationDirection::nonAuxToAux && cacheFlushForBcsRequired) {
-            size += MemorySynchronizationCommands<GfxFamily>::getSizeForBarrierWithPostSyncOperation(rootDeviceEnvironment, false);
+            size += MemorySynchronizationCommands<GfxFamily>::getSizeForBarrierWithPostSyncOperation(rootDeviceEnvironment, NEO::PostSyncMode::immediateData);
         }
 
         return size;

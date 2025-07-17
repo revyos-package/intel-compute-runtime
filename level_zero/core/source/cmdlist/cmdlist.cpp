@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -34,7 +34,7 @@ CommandList::~CommandList() {
         cmdQImmediateCopyOffload->destroy();
     }
     removeDeallocationContainerData();
-    if (!isImmediateType() || !this->isFlushTaskSubmissionEnabled) {
+    if (!isImmediateType()) {
         removeHostPtrAllocations();
     }
     removeMemoryPrefetchAllocations();
@@ -57,8 +57,7 @@ void CommandList::removeHostPtrAllocations() {
     if (restartDirectSubmission) {
         const auto &engines = memoryManager->getRegisteredEngines(device->getRootDeviceIndex());
         for (const auto &engine : engines) {
-            auto lock = engine.commandStreamReceiver->obtainUniqueOwnership();
-            engine.commandStreamReceiver->stopDirectSubmission(false);
+            engine.commandStreamReceiver->stopDirectSubmission(false, true);
         }
     }
 
@@ -79,17 +78,6 @@ void CommandList::removeHostPtrAllocations() {
     hostPtrMap.clear();
 }
 
-void CommandList::forceDcFlushForDcFlushMitigation() {
-    if (this->device && this->device->getProductHelper().isDcFlushMitigated()) {
-        for (const auto &engine : this->device->getNEODevice()->getMemoryManager()->getRegisteredEngines(this->device->getNEODevice()->getRootDeviceIndex())) {
-            if (engine.commandStreamReceiver->isDirectSubmissionEnabled()) {
-                engine.commandStreamReceiver->registerDcFlushForDcMitigation();
-                engine.commandStreamReceiver->flushTagUpdate();
-            }
-        }
-    }
-}
-
 void CommandList::removeMemoryPrefetchAllocations() {
     if (this->performMemoryPrefetch) {
         auto prefetchManager = this->device->getDriverHandle()->getMemoryManager()->getPrefetchManager();
@@ -100,11 +88,15 @@ void CommandList::removeMemoryPrefetchAllocations() {
     }
 }
 
-void CommandList::registerCsrDcFlushForDcMitigation(NEO::CommandStreamReceiver &csr) {
-    if (this->requiresDcFlushForDcMitigation) {
-        csr.registerDcFlushForDcMitigation();
-        this->requiresDcFlushForDcMitigation = false;
+void CommandList::storeFillPatternResourcesForReuse() {
+    for (auto &patternAlloc : this->patternAllocations) {
+        device->storeReusableAllocation(*patternAlloc);
     }
+    this->patternAllocations.clear();
+    for (auto &patternTag : this->patternTags) {
+        patternTag->returnTag();
+    }
+    this->patternTags.clear();
 }
 
 NEO::GraphicsAllocation *CommandList::getAllocationFromHostPtrMap(const void *buffer, uint64_t bufferSize, bool copyOffload) {
@@ -120,7 +112,7 @@ NEO::GraphicsAllocation *CommandList::getAllocationFromHostPtrMap(const void *bu
             return allocation->second;
         }
     }
-    if (this->storeExternalPtrAsTemporary()) {
+    if (isImmediateType()) {
         auto csr = getCsr(copyOffload);
         auto allocation = csr->getInternalAllocationStorage()->obtainTemporaryAllocationWithPtr(bufferSize, buffer, NEO::AllocationType::externalHostPtr);
         if (allocation != nullptr) {
@@ -133,14 +125,6 @@ NEO::GraphicsAllocation *CommandList::getAllocationFromHostPtrMap(const void *bu
     return nullptr;
 }
 
-bool CommandList::isWaitForEventsFromHostEnabled() {
-    bool waitForEventsFromHostEnabled = false;
-    if (NEO::debugManager.flags.EventWaitOnHost.get() != -1) {
-        waitForEventsFromHostEnabled = NEO::debugManager.flags.EventWaitOnHost.get();
-    }
-    return waitForEventsFromHostEnabled;
-}
-
 NEO::GraphicsAllocation *CommandList::getHostPtrAlloc(const void *buffer, uint64_t bufferSize, bool hostCopyAllowed, bool copyOffload) {
     NEO::GraphicsAllocation *alloc = getAllocationFromHostPtrMap(buffer, bufferSize, copyOffload);
     if (alloc) {
@@ -150,7 +134,7 @@ NEO::GraphicsAllocation *CommandList::getHostPtrAlloc(const void *buffer, uint64
     if (alloc == nullptr) {
         return nullptr;
     }
-    if (this->storeExternalPtrAsTemporary()) {
+    if (isImmediateType()) {
         alloc->hostPtrTaskCountAssignment++;
         auto csr = getCsr(copyOffload);
         csr->getInternalAllocationStorage()->storeAllocationWithTaskCount(std::unique_ptr<NEO::GraphicsAllocation>(alloc), NEO::AllocationUsage::TEMPORARY_ALLOCATION, csr->peekTaskCount());
@@ -239,6 +223,8 @@ void CommandList::synchronizeEventList(uint32_t numWaitEvents, ze_event_handle_t
 }
 
 NEO::CommandStreamReceiver *CommandList::getCsr(bool copyOffload) const {
-    return copyOffload ? static_cast<CommandQueueImp *>(this->cmdQImmediateCopyOffload)->getCsr() : static_cast<CommandQueueImp *>(this->cmdQImmediate)->getCsr();
+    auto queue = isDualStreamCopyOffloadOperation(copyOffload) ? this->cmdQImmediateCopyOffload : this->cmdQImmediate;
+
+    return static_cast<CommandQueueImp *>(queue)->getCsr();
 }
 } // namespace L0

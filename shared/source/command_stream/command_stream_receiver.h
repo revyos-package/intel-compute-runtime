@@ -6,32 +6,37 @@
  */
 
 #pragma once
-#include "shared/source/command_stream/csr_definitions.h"
 #include "shared/source/command_stream/linear_stream.h"
+#include "shared/source/command_stream/memory_compression_state.h"
+#include "shared/source/command_stream/preemption_mode.h"
 #include "shared/source/command_stream/stream_properties.h"
-#include "shared/source/gmm_helper/cache_settings_helper.h"
 #include "shared/source/helpers/blit_properties_container.h"
 #include "shared/source/helpers/cache_policy.h"
 #include "shared/source/helpers/common_types.h"
 #include "shared/source/helpers/completion_stamp.h"
 #include "shared/source/helpers/kmd_notify_properties.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/helpers/options.h"
-#include "shared/source/memory_manager/graphics_allocation.h"
+#include "shared/source/kernel/kernel_execution_type.h"
 #include "shared/source/utilities/spinlock.h"
 
-#include "aubstream/allocation_params.h"
-
 #include <atomic>
-#include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 
-namespace NEO {
+namespace aub_stream {
+struct AllocationParams;
+} // namespace aub_stream
 
+namespace NEO {
 enum class AllocationType;
 enum class DebugPauseState : uint32_t;
 struct BatchBuffer;
+struct DispatchBcsFlags;
+struct DispatchFlags;
 struct HardwareInfo;
+struct ImmediateDispatchFlags;
 struct WaitParams;
 class SubmissionAggregator;
 class FlushStampTracker;
@@ -40,7 +45,6 @@ class FlatBatchBufferHelper;
 class AllocationsList;
 class Device;
 class ExecutionEnvironment;
-class ExperimentalCommandBuffer;
 class GmmPageTableMngr;
 class GraphicsAllocation;
 class HostPtrSurface;
@@ -56,6 +60,7 @@ class HwPerfCounter;
 class HwTimeStamps;
 class GmmHelper;
 class TagAllocatorBase;
+class TimestampPacketContainer;
 class KmdNotifyHelper;
 class GfxCoreHelper;
 class ProductHelper;
@@ -78,7 +83,7 @@ enum class DispatchMode {
     batchedDispatch             // dispatching is batched, explicit clFlush is required
 };
 
-class CommandStreamReceiver {
+class CommandStreamReceiver : NEO::NonCopyableAndNonMovableClass {
   public:
     static constexpr size_t startingResidencyContainerSize = 128;
 
@@ -90,11 +95,12 @@ class CommandStreamReceiver {
 
     using MutexType = std::recursive_mutex;
     using TimeType = std::chrono::high_resolution_clock::time_point;
+
+    CommandStreamReceiver() = delete;
+
     CommandStreamReceiver(ExecutionEnvironment &executionEnvironment,
                           uint32_t rootDeviceIndex,
                           const DeviceBitfield deviceBitfield);
-    CommandStreamReceiver(const CommandStreamReceiver &) = delete;
-    CommandStreamReceiver &operator=(const CommandStreamReceiver &) = delete;
 
     virtual ~CommandStreamReceiver();
 
@@ -103,10 +109,6 @@ class CommandStreamReceiver {
     virtual CompletionStamp flushTask(LinearStream &commandStreamTask, size_t commandStreamTaskStart,
                                       const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
                                       TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) = 0;
-
-    virtual CompletionStamp flushTaskStateless(LinearStream &commandStreamTask, size_t commandStreamTaskStart,
-                                               const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
-                                               TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) = 0;
 
     virtual CompletionStamp flushBcsTask(LinearStream &commandStream, size_t commandStreamStart, const DispatchBcsFlags &dispatchBcsFlags, const HardwareInfo &hwInfo) = 0;
     virtual CompletionStamp flushImmediateTask(LinearStream &immediateCommandStream, size_t immediateCommandStreamStart,
@@ -151,6 +153,7 @@ class CommandStreamReceiver {
     OSInterface *getOSInterface() const;
     ExecutionEnvironment &peekExecutionEnvironment() const { return executionEnvironment; }
     GmmHelper *peekGmmHelper() const;
+    DeviceBitfield peekDeviceBitfield() const { return deviceBitfield; }
 
     MOCKABLE_VIRTUAL void setTagAllocation(GraphicsAllocation *allocation);
     GraphicsAllocation *getTagAllocation() const {
@@ -257,7 +260,6 @@ class CommandStreamReceiver {
     void *getIndirectHeapCurrentPtr(IndirectHeapType heapType) const;
 
     virtual enum CommandStreamReceiverType getType() const = 0;
-    void setExperimentalCmdBuffer(std::unique_ptr<ExperimentalCommandBuffer> &&cmdBuffer);
 
     bool initializeTagAllocation();
     MOCKABLE_VIRTUAL bool createWorkPartitionAllocation(const Device &device);
@@ -312,7 +314,7 @@ class CommandStreamReceiver {
     virtual SubmissionStatus flushTagUpdate() = 0;
     virtual void updateTagFromWait() = 0;
     virtual bool isUpdateTagFromWaitEnabled() = 0;
-    virtual void flushMonitorFence(){};
+    virtual void flushMonitorFence(bool notifyKmd){};
     virtual bool isTlbFlushRequiredForStateCacheFlush();
 
     ScratchSpaceController *getScratchSpaceController() const {
@@ -341,23 +343,13 @@ class CommandStreamReceiver {
         requiresInstructionCacheFlush = true;
     }
 
-    MOCKABLE_VIRTUAL bool checkDcFlushRequiredForDcMitigationAndReset() {
-        auto ret = this->requiresDcFlush;
-        this->requiresDcFlush = false;
-        return ret;
-    }
-
-    void registerDcFlushForDcMitigation() {
-        this->requiresDcFlush = true;
-    }
-
     bool isLocalMemoryEnabled() const { return localMemoryEnabled; }
 
     uint32_t getRootDeviceIndex() const { return rootDeviceIndex; }
 
     MOCKABLE_VIRTUAL void startControllingDirectSubmissions();
 
-    bool isAnyDirectSubmissionEnabled() {
+    MOCKABLE_VIRTUAL bool isAnyDirectSubmissionEnabled() const {
         return this->isDirectSubmissionEnabled() || isBlitterDirectSubmissionEnabled();
     }
 
@@ -383,7 +375,7 @@ class CommandStreamReceiver {
         return false;
     }
 
-    virtual void stopDirectSubmission(bool blocking) {}
+    virtual void stopDirectSubmission(bool blocking, bool needsLock) {}
 
     virtual QueueThrottle getLastDirectSubmissionThrottle() = 0;
 
@@ -394,8 +386,6 @@ class CommandStreamReceiver {
     uint64_t getWorkPartitionAllocationGpuAddress() const;
 
     MOCKABLE_VIRTUAL bool isRcs() const;
-
-    virtual void initializeDefaultsForInternalEngine(){};
 
     virtual GraphicsAllocation *getClearColorAllocation() = 0;
 
@@ -505,6 +495,10 @@ class CommandStreamReceiver {
         return externalCondition ? dcFlushSupport : false;
     }
 
+    bool getHeaplessStateInitEnabled() const {
+        return heaplessStateInitEnabled;
+    }
+
     bool isTbxMode() const;
     bool ensureTagAllocationForRootDeviceIndex(uint32_t rootDeviceIndex);
 
@@ -569,6 +563,14 @@ class CommandStreamReceiver {
     bool isLatestFlushIsTaskCountUpdateOnly() const { return latestFlushIsTaskCountUpdateOnly; }
 
   protected:
+    virtual CompletionStamp flushTaskHeapless(LinearStream &commandStreamTask, size_t commandStreamTaskStart,
+                                              const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
+                                              TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) = 0;
+
+    virtual CompletionStamp flushTaskHeapful(LinearStream &commandStreamTask, size_t commandStreamTaskStart,
+                                             const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
+                                             TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) = 0;
+
     void cleanupResources();
     void printDeviceIndex();
     void checkForNewResources(TaskCountType submittedTaskCount, TaskCountType allocationTaskCount, GraphicsAllocation &gfxAllocation);
@@ -654,12 +656,12 @@ class CommandStreamReceiver {
 
     std::chrono::microseconds gpuHangCheckPeriod{CommonConstants::gpuHangCheckTimeInUS};
     uint32_t lastSentL3Config = 0;
-    uint32_t latestSentStatelessMocsConfig = CacheSettings::unknownMocs;
-    uint64_t lastSentSliceCount = QueueSliceCount::defaultSliceCount;
+    uint32_t latestSentStatelessMocsConfig;
+    uint64_t lastSentSliceCount;
 
     uint32_t requiredScratchSlot0Size = 0;
     uint32_t requiredScratchSlot1Size = 0;
-    uint32_t lastAdditionalKernelExecInfo = AdditionalKernelExecInfo::notSet;
+    uint32_t lastAdditionalKernelExecInfo;
     KernelExecutionType lastKernelExecutionType = KernelExecutionType::defaultType;
     MemoryCompressionState lastMemoryCompressionState = MemoryCompressionState::notApplicable;
     uint32_t activePartitions = 1;
@@ -676,6 +678,7 @@ class CommandStreamReceiver {
     bool isPreambleSent = false;
     bool isStateSipSent = false;
     bool isEnginePrologueSent = false;
+    bool areExceptionsSent = false;
     bool isPerDssBackedBufferSent = false;
     bool gsbaFor32BitProgrammed = false;
     bool gsbaStateDirty = true;
@@ -691,6 +694,7 @@ class CommandStreamReceiver {
     bool lastSystolicPipelineSelectMode = false;
     bool requiresInstructionCacheFlush = false;
     bool requiresDcFlush = false;
+    bool pushAllocationsForMakeResident = true;
 
     bool localMemoryEnabled = false;
     bool pageTableManagerInitialized = false;
@@ -703,6 +707,7 @@ class CommandStreamReceiver {
     bool forceSkipResourceCleanupRequired = false;
     bool resourcesInitialized = false;
     bool heaplessStateInitialized = false;
+    bool heaplessStateInitEnabled = false;
     bool doubleSbaWa = false;
     bool dshSupported = false;
     bool heaplessModeEnabled = false;
@@ -710,6 +715,8 @@ class CommandStreamReceiver {
     bool csrSurfaceProgrammingDone = false;
     bool latestFlushIsTaskCountUpdateOnly = false;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<CommandStreamReceiver>);
 
 typedef CommandStreamReceiver *(*CommandStreamReceiverCreateFunc)(bool withAubDump,
                                                                   ExecutionEnvironment &executionEnvironment,

@@ -59,7 +59,7 @@ struct KernelImp : Kernel {
     ze_result_t setArgumentValue(uint32_t argIndex, size_t argSize, const void *pArgValue) override;
 
     void setGroupCount(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
-    void patchRegionParams(const CmdListKernelLaunchParams &launchParams) override;
+    void patchRegionParams(const CmdListKernelLaunchParams &launchParams, const ze_group_count_t &threadGroupDimensions) override;
 
     ze_result_t setGroupSize(uint32_t groupSizeX, uint32_t groupSizeY,
                              uint32_t groupSizeZ) override;
@@ -69,6 +69,8 @@ struct KernelImp : Kernel {
                                  uint32_t *groupSizeZ) override;
 
     ze_result_t getKernelName(size_t *pSize, char *pName) override;
+    ze_result_t getArgumentSize(uint32_t argIndex, uint32_t *argSize) const override;
+    ze_result_t getArgumentType(uint32_t argIndex, uint32_t *pSize, char *pString) const override;
 
     uint32_t suggestMaxCooperativeGroupCount(NEO::EngineGroupType engineGroupType, bool forceSingleTileQuery) override {
         UNRECOVERABLE_IF(0 == this->groupSize[0]);
@@ -97,7 +99,7 @@ struct KernelImp : Kernel {
 
     ze_result_t setArgUnknown(uint32_t argIndex, size_t argSize, const void *argVal);
 
-    ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal) override;
+    ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal, bool isPacked) override;
 
     ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *peerAllocData) override;
 
@@ -233,6 +235,10 @@ struct KernelImp : Kernel {
     }
     uint8_t getRequiredSlmAlignment(uint32_t argIndex) const;
 
+    const std::vector<KernelArgInfo> &getKernelArgInfos() const {
+        return kernelArgInfos;
+    }
+
   protected:
     KernelImp() = default;
 
@@ -245,9 +251,11 @@ struct KernelImp : Kernel {
     virtual void evaluateIfRequiresGenerationOfLocalIdsByRuntime(const NEO::KernelDescriptor &kernelDescriptor) = 0;
     void *patchBindlessSurfaceState(NEO::GraphicsAllocation *alloc, uint32_t bindless);
     uint32_t getSurfaceStateIndexForBindlessOffset(NEO::CrossThreadDataOffset bindlessOffset) const;
+    ze_result_t validateWorkgroupSize() const;
 
     const KernelImmutableData *kernelImmData = nullptr;
     Module *module = nullptr;
+    uint32_t implicitArgsVersion = 0;
 
     typedef ze_result_t (KernelImp::*KernelArgHandler)(uint32_t argIndex, size_t argSize, const void *argVal);
     std::vector<KernelArgInfo> kernelArgInfos;

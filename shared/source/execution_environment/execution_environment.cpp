@@ -26,11 +26,9 @@
 #include "shared/source/os_interface/os_environment.h"
 #include "shared/source/os_interface/os_interface.h"
 #include "shared/source/os_interface/product_helper.h"
-#include "shared/source/utilities/wait_util.h"
 
 namespace NEO {
 ExecutionEnvironment::ExecutionEnvironment() {
-    WaitUtils::init();
     this->configureNeoEnvironment();
 }
 
@@ -90,6 +88,8 @@ bool ExecutionEnvironment::initializeMemoryManager() {
     } break;
     }
 
+    memoryManager->initUsmReuseLimits();
+
     return memoryManager->isInitialized();
 }
 
@@ -116,11 +116,16 @@ void ExecutionEnvironment::calculateMaxOsContextCount() {
         uint32_t numRootContexts = hasRootCsr ? 1 : 0;
         uint32_t numSecondaryContexts = 0;
         if (gfxCoreHelper.areSecondaryContextsSupported()) {
-            numSecondaryContexts += numRegularEngines * gfxCoreHelper.getContextGroupContextsCount();
-            numSecondaryContexts += numHpEngines * gfxCoreHelper.getContextGroupContextsCount();
+
+            auto groupCount = gfxCoreHelper.getContextGroupContextsCount();
+            if (rootDeviceEnvironment->osInterface && rootDeviceEnvironment->osInterface->getAggregatedProcessCount() > 1) {
+                groupCount = std::max(groupCount / rootDeviceEnvironment->osInterface->getAggregatedProcessCount(), 2u);
+            }
+            numSecondaryContexts += numRegularEngines * groupCount;
+            numSecondaryContexts += numHpEngines * groupCount;
             osContextCount -= (numRegularEngines + numHpEngines);
 
-            numRootContexts *= gfxCoreHelper.getContextGroupContextsCount();
+            numRootContexts *= groupCount;
         }
 
         MemoryManager::maxOsContextCount += (numSecondaryContexts + osContextCount) * subDevicesCount + numRootContexts;
@@ -147,16 +152,16 @@ DirectSubmissionController *ExecutionEnvironment::initializeDirectSubmissionCont
     return directSubmissionController.get();
 }
 
-void ExecutionEnvironment::initializeUnifiedMemoryReuseCleaner() {
+void ExecutionEnvironment::initializeUnifiedMemoryReuseCleaner(bool isAnyDirectSubmissionLightEnabled) {
     std::lock_guard<std::mutex> lock(initializeUnifiedMemoryReuseCleanerMutex);
-    auto initializeUnifiedMemoryReuseCleaner = UnifiedMemoryReuseCleaner::isSupported();
+    auto initializeUnifiedMemoryReuseCleaner = UnifiedMemoryReuseCleaner::isSupported() && !isAnyDirectSubmissionLightEnabled;
 
     if (debugManager.flags.ExperimentalUSMAllocationReuseCleaner.get() != -1) {
         initializeUnifiedMemoryReuseCleaner = debugManager.flags.ExperimentalUSMAllocationReuseCleaner.get() == 1;
     }
 
     if (initializeUnifiedMemoryReuseCleaner && nullptr == this->unifiedMemoryReuseCleaner) {
-        this->unifiedMemoryReuseCleaner = std::make_unique<UnifiedMemoryReuseCleaner>();
+        this->unifiedMemoryReuseCleaner = std::make_unique<UnifiedMemoryReuseCleaner>(isAnyDirectSubmissionLightEnabled);
         this->unifiedMemoryReuseCleaner->startThread();
     }
 }
@@ -366,7 +371,7 @@ void ExecutionEnvironment::adjustCcsCount(const uint32_t rootDeviceIndex) const 
     auto &rootDeviceEnvironment = rootDeviceEnvironments[rootDeviceIndex];
     UNRECOVERABLE_IF(!rootDeviceEnvironment);
     if (rootDeviceNumCcsMap.find(rootDeviceIndex) != rootDeviceNumCcsMap.end()) {
-        rootDeviceEnvironment->limitNumberOfCcs(rootDeviceNumCcsMap.at(rootDeviceIndex));
+        rootDeviceEnvironment->setNumberOfCcs(rootDeviceNumCcsMap.at(rootDeviceIndex));
     } else {
         adjustCcsCountImpl(rootDeviceEnvironment.get());
     }
@@ -380,21 +385,11 @@ void ExecutionEnvironment::parseCcsCountLimitations() {
         return;
     }
 
-    const uint32_t numRootDevices = static_cast<uint32_t>(rootDeviceEnvironments.size());
-
-    auto numberOfCcsEntries = StringHelpers::split(numberOfCcsString, ",");
-
-    for (const auto &entry : numberOfCcsEntries) {
-        auto subEntries = StringHelpers::split(entry, ":");
-        uint32_t rootDeviceIndex = StringHelpers::toUint32t(subEntries[0]);
-
-        if (rootDeviceIndex < numRootDevices) {
-            if (subEntries.size() > 1) {
-                uint32_t maxCcsCount = StringHelpers::toUint32t(subEntries[1]);
-                rootDeviceNumCcsMap.insert({rootDeviceIndex, maxCcsCount});
-                rootDeviceEnvironments[rootDeviceIndex]->limitNumberOfCcs(maxCcsCount);
-            }
-        }
+    for (auto rootDeviceIndex = 0u; rootDeviceIndex < rootDeviceEnvironments.size(); rootDeviceIndex++) {
+        auto &rootDeviceEnvironment = rootDeviceEnvironments[rootDeviceIndex];
+        UNRECOVERABLE_IF(!rootDeviceEnvironment);
+        auto &productHelper = rootDeviceEnvironment->getHelper<ProductHelper>();
+        productHelper.parseCcsMode(numberOfCcsString, rootDeviceNumCcsMap, rootDeviceIndex, rootDeviceEnvironment.get());
     }
 }
 

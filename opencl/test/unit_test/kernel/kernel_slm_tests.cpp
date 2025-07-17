@@ -1,24 +1,23 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/source/command_container/encode_surface_state.h"
-#include "shared/source/program/kernel_info.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
 #include "opencl/source/command_queue/command_queue_hw.h"
 #include "opencl/source/helpers/hardware_commands_helper.h"
-#include "opencl/source/kernel/kernel.h"
 #include "opencl/test/unit_test/fixtures/cl_device_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_cl_device.h"
 #include "opencl/test/unit_test/mocks/mock_kernel.h"
 #include "opencl/test/unit_test/mocks/mock_program.h"
 
 using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 struct KernelSLMAndBarrierTest : public ClDeviceFixture,
                                  public ::testing::TestWithParam<uint32_t> {
@@ -132,7 +131,7 @@ INSTANTIATE_TEST_SUITE_P(
     KernelSLMAndBarrierTest,
     testing::ValuesIn(slmSizeInKb));
 
-HWTEST_F(KernelSLMAndBarrierTest, GivenInterfaceDescriptorProgrammedWhenOverrideSlmAllocationSizeIsSetThenSlmSizeIsOverwritten) {
+HWTEST2_F(KernelSLMAndBarrierTest, GivenInterfaceDescriptorProgrammedWhenOverrideSlmAllocationSizeIsSetThenSlmSizeIsOverwritten, IsHeapfulSupported) {
 
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
     using INTERFACE_DESCRIPTOR_DATA = typename FamilyType::INTERFACE_DESCRIPTOR_DATA;

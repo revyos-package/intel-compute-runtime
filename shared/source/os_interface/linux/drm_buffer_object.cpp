@@ -7,6 +7,7 @@
 
 #include "shared/source/os_interface/linux/drm_buffer_object.h"
 
+#include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/command_stream/task_count_helper.h"
 #include "shared/source/execution_environment/execution_environment.h"
 #include "shared/source/execution_environment/root_device_environment.h"
@@ -199,8 +200,7 @@ int BufferObject::exec(uint32_t used, size_t startOffset, unsigned int flags, bo
                                 alignUp(used, 8), flags, drmContextId);
 
     if (debugManager.flags.PrintExecutionBuffer.get()) {
-        PRINT_DEBUG_STRING(debugManager.flags.PrintExecutionBuffer.get(), stdout, "Exec called with drmVmId = %u\n",
-                           static_cast<const OsContextLinux *>(osContext)->getDrmVmIds().size() ? static_cast<const OsContextLinux *>(osContext)->getDrmVmIds()[vmHandleId] : 0);
+        PRINT_DEBUG_STRING(debugManager.flags.PrintExecutionBuffer.get(), stdout, "Exec called with drmVmId = %u\n", drm->getVmIdForContext(*osContext, vmHandleId));
 
         printExecutionBuffer(execbuf, residencyCount, execObjectsStorage, residency);
     }
@@ -242,22 +242,23 @@ MemoryOperationsStatus BufferObject::evictUnusedAllocations(bool waitForCompleti
 }
 
 void BufferObject::printBOBindingResult(OsContext *osContext, uint32_t vmHandleId, bool bind, int retVal) {
+    auto vmId = this->drm->getVmIdForContext(*osContext, vmHandleId);
     if (retVal == 0) {
         if (bind) {
-            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stdout, "bind BO-%d to VM %u, drmVmId = %u, range: %llx - %llx, size: %lld, result: %d\n",
-                               this->handle.getBoHandle(), vmHandleId, static_cast<const OsContextLinux *>(osContext)->getDrmVmIds().size() ? static_cast<const OsContextLinux *>(osContext)->getDrmVmIds()[vmHandleId] : 0, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal);
+            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stdout, "bind BO-%d to VM %u, vmHandleId = %u, range: %llx - %llx, size: %lld, result: %d\n",
+                               this->handle.getBoHandle(), vmId, vmHandleId, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal);
         } else {
-            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stdout, "unbind BO-%d from VM %u, drmVmId = %u, range: %llx - %llx, size: %lld, result: %d\n",
-                               this->handle.getBoHandle(), vmHandleId, static_cast<const OsContextLinux *>(osContext)->getDrmVmIds().size() ? static_cast<const OsContextLinux *>(osContext)->getDrmVmIds()[vmHandleId] : 0, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal);
+            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stdout, "unbind BO-%d from VM %u, vmHandleId = %u, range: %llx - %llx, size: %lld, result: %d\n",
+                               this->handle.getBoHandle(), vmId, vmHandleId, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal);
         }
     } else {
         auto err = this->drm->getErrno();
         if (bind) {
-            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stderr, "bind BO-%d to VM %u, drmVmId = %u, range: %llx - %llx, size: %lld, result: %d, errno: %d(%s)\n",
-                               this->handle.getBoHandle(), vmHandleId, static_cast<const OsContextLinux *>(osContext)->getDrmVmIds().size() ? static_cast<const OsContextLinux *>(osContext)->getDrmVmIds()[vmHandleId] : 0, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal, err, strerror(err));
+            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stderr, "bind BO-%d to VM %u, vmHandleId = %u, range: %llx - %llx, size: %lld, result: %d, errno: %d(%s)\n",
+                               this->handle.getBoHandle(), vmId, vmHandleId, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal, err, strerror(err));
         } else {
-            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stderr, "unbind BO-%d from VM %u, drmVmId = %u, range: %llx - %llx, size: %lld, result: %d, errno: %d(%s)\n",
-                               this->handle.getBoHandle(), vmHandleId, static_cast<const OsContextLinux *>(osContext)->getDrmVmIds().size() ? static_cast<const OsContextLinux *>(osContext)->getDrmVmIds()[vmHandleId] : 0, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal, err, strerror(err));
+            PRINT_DEBUG_STRING(debugManager.flags.PrintBOBindingResult.get(), stderr, "unbind BO-%d from VM %u, vmHandleId = %u, range: %llx - %llx, size: %lld, result: %d, errno: %d(%s)\n",
+                               this->handle.getBoHandle(), vmId, vmHandleId, this->gpuAddress, ptrOffset(this->gpuAddress, this->size), this->size, retVal, err, strerror(err));
         }
     }
 }
@@ -304,7 +305,7 @@ void BufferObject::printExecutionBuffer(ExecBuffer &execbuf, const size_t &resid
     logger << "Command ";
     ioctlHelper->logExecObject(execObjectsStorage[i], logger, this->peekSize());
 
-    printf("%s\n", logger.str().c_str());
+    PRINT_DEBUG_STRING(debugManager.flags.PrintExecutionBuffer.get(), stdout, "%s\n", logger.str().c_str());
 }
 
 int bindBOsWithinContext(BufferObject *const boToPin[], size_t numberOfBos, OsContext *osContext, uint32_t vmHandleId, const bool forcePagingFence) {
@@ -325,6 +326,7 @@ int BufferObject::pin(BufferObject *const boToPin[], size_t numberOfBos, OsConte
     auto retVal = 0;
 
     if (this->drm->isVmBindAvailable()) {
+        auto lock = static_cast<DrmMemoryOperationsHandler *>(this->drm->getRootDeviceEnvironment().memoryOperationsInterface.get())->lockHandlerIfUsed();
         retVal = bindBOsWithinContext(boToPin, numberOfBos, osContext, vmHandleId, false);
     } else {
         StackVec<ExecObject, maxFragmentsCount + 1> execObject(numberOfBos + 1);
@@ -338,6 +340,7 @@ int BufferObject::validateHostPtr(BufferObject *const boToPin[], size_t numberOf
     auto retVal = 0;
 
     if (this->drm->isVmBindAvailable()) {
+        auto lock = static_cast<DrmMemoryOperationsHandler *>(this->drm->getRootDeviceEnvironment().memoryOperationsInterface.get())->lockHandlerIfUsed();
         for (size_t i = 0; i < numberOfBos; i++) {
             retVal = boToPin[i]->bind(osContext, vmHandleId, false);
             if (retVal) {
@@ -345,6 +348,16 @@ int BufferObject::validateHostPtr(BufferObject *const boToPin[], size_t numberOf
             }
         }
     } else {
+        StackVec<std::unique_lock<NEO::CommandStreamReceiver::MutexType>, 1> locks{};
+        if (this->drm->getRootDeviceEnvironment().executionEnvironment.memoryManager.get()) {
+            const auto &engines = this->drm->getRootDeviceEnvironment().executionEnvironment.memoryManager->getRegisteredEngines(osContext->getRootDeviceIndex());
+            for (const auto &engine : engines) {
+                if (engine.osContext->isDirectSubmissionLightActive()) {
+                    locks.push_back(engine.commandStreamReceiver->obtainUniqueOwnership());
+                    engine.commandStreamReceiver->stopDirectSubmission(false, false);
+                }
+            }
+        }
         StackVec<ExecObject, maxFragmentsCount + 1> execObject(numberOfBos + 1);
         retVal = this->exec(4u, 0u, 0u, false, osContext, vmHandleId, drmContextId, boToPin, numberOfBos, &execObject[0], 0, 0);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -183,10 +183,71 @@ struct GemClose {
     uint64_t userptr;
 };
 
+struct GemVmBind {
+    uint32_t vmId;
+    union {
+        uint32_t handle; /* For unbind, it is reserved and must be 0 */
+        int32_t fd;
+    };
+    uint64_t start;
+    uint64_t offset;
+    uint64_t length;
+    uint64_t flags;
+    uint64_t extensions;
+};
+
 struct PrimeHandle {
     uint32_t handle;
     uint32_t flags;
     int32_t fileDescriptor;
+};
+
+struct SyncObjHandle {
+    uint32_t handle;
+    uint32_t flags;
+    int32_t fd;
+    uint32_t pad;
+    uint64_t point;
+};
+
+struct SyncObjWait {
+    uint64_t handles;
+    int64_t timeoutNs;
+    uint32_t countHandles;
+    uint32_t flags;
+    uint32_t firstSignaled;
+    uint32_t pad;
+    uint64_t deadlineNs;
+};
+
+struct SyncObjTimelineWait {
+    uint64_t handles;
+    uint64_t points;
+    int64_t timeoutNs;
+    uint32_t countHandles;
+    uint32_t flags;
+    uint32_t firstSignaled;
+    uint32_t pad;
+    uint64_t deadlineNs;
+};
+
+struct SyncObjArray {
+    uint64_t handles;
+    uint32_t countHandles;
+    uint32_t pad;
+};
+
+struct SyncObjTimelineArray {
+    uint64_t handles;
+    uint64_t points;
+    uint32_t countHandles;
+    uint32_t flags;
+};
+
+struct PrimaryContextHandle {
+    uint32_t handle;
+    int32_t fd;
+    uint64_t reserved[2];
 };
 
 #pragma pack(1)
@@ -252,6 +313,11 @@ enum class DrmIoctl {
     gemClose,
     primeFdToHandle,
     primeHandleToFd,
+    syncObjFdToHandle,
+    syncObjWait,
+    syncObjTimelineWait,
+    syncObjSignal,
+    syncObjTimelineSignal,
     gemVmBind,
     gemVmUnbind,
     gemWaitUserFence,
@@ -271,10 +337,17 @@ enum class DrmIoctl {
     metadataDestroy,
     perfOpen,
     perfEnable,
-    perfDisable
+    perfDisable,
+    perfQuery,
+    primaryContextExport,
+    primaryContextImport
 };
 
 enum class DrmParam {
+    atomicClassUndefined,
+    atomicClassDevice,
+    atomicClassGlobal,
+    atomicClassSystem,
     contextCreateExtSetparam,
     contextCreateFlagsUseExtensions,
     contextEnginesExtLoadBalance,

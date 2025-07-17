@@ -9,7 +9,7 @@
 #include "shared/source/release_helper/release_helper.h"
 #include "shared/source/release_helper/release_helper_base.inl"
 
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 #include "release_definitions.h"
 
 namespace NEO {
@@ -26,8 +26,8 @@ std::vector<uint32_t> ReleaseHelperHw<release>::getSupportedNumGrfs() const {
 
 template <>
 uint32_t ReleaseHelperHw<release>::getNumThreadsPerEu() const {
-    if (debugManager.flags.Enable10ThreadsPerEu.get() == 0) {
-        return 8u;
+    if (debugManager.flags.OverrideNumThreadsPerEu.get() != -1) {
+        return debugManager.flags.OverrideNumThreadsPerEu.get();
     }
     return 10;
 }
@@ -38,12 +38,7 @@ bool ReleaseHelperHw<release>::isLocalOnlyAllowed() const {
 }
 
 template <>
-bool ReleaseHelperHw<release>::isDisablingMsaaRequired() const {
-    return (hardwareIpVersion.value == AOT::PTL_H_A0);
-}
-
-template <>
-uint32_t ReleaseHelperHw<release>::getStackSizePerRay() const {
+uint32_t ReleaseHelperHw<release>::getAsyncStackSizePerRay() const {
     return 64u;
 }
 

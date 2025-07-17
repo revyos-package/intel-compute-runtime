@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -230,7 +230,7 @@ TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFr
     }
 }
 
-HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFrequencySetRangeForFailures1ThenAPIExitsGracefully, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFrequencySetRangeForFailures1ThenAPIExitsGracefully, IsXeCore) {
     auto subDeviceCount = pLinuxSysmanImp->getSubDeviceCount();
     ze_bool_t onSubdevice = (subDeviceCount == 0) ? false : true;
     uint32_t subdeviceId = 0;
@@ -247,7 +247,7 @@ HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFr
     EXPECT_EQ(ZE_RESULT_ERROR_UNKNOWN, pFrequencyImp->frequencySetRange(&limits));
 }
 
-HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFrequencySetRangeForFailures2ThenAPIExitsGracefully, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFrequencySetRangeForFailures2ThenAPIExitsGracefully, IsXeCore) {
     auto subDeviceCount = pLinuxSysmanImp->getSubDeviceCount();
     ze_bool_t onSubdevice = (subDeviceCount == 0) ? false : true;
     uint32_t subdeviceId = 0;
@@ -264,7 +264,7 @@ HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyLimitsWhenCallingFr
     EXPECT_EQ(ZE_RESULT_ERROR_UNKNOWN, pFrequencyImp->frequencySetRange(&limits));
 }
 
-HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencySetRangeThenVerifyzesFrequencySetRangeTest1CallSucceeds, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencySetRangeThenVerifyzesFrequencySetRangeTest1CallSucceeds, IsXeCore) {
     auto handles = getFreqHandles(handleComponentCount);
     for (auto handle : handles) {
         const double startingMin = 900.0;
@@ -297,7 +297,7 @@ TEST_F(SysmanDeviceFrequencyFixtureXe, GivenNegativeRangeWhenSetRangeIsCalledAnd
     }
 }
 
-HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenNegativeRangeWhenSetRangeIsCalledAndGettingDefaultMaxValueFailsThenNoFreqRangeIsInEffect, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenNegativeRangeWhenSetRangeIsCalledAndGettingDefaultMaxValueFailsThenNoFreqRangeIsInEffect, IsXeCore) {
     auto handles = getFreqHandles(handleComponentCount);
     for (auto &handle : handles) {
         const double negativeMin = -1;
@@ -313,7 +313,7 @@ HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenNegativeRangeWhenSetRangeIsCalled
     }
 }
 
-HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencySetRangeThenVerifyzesFrequencySetRangeTest2CallSucceeds, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencySetRangeThenVerifyzesFrequencySetRangeTest2CallSucceeds, IsXeCore) {
     auto handles = getFreqHandles(handleComponentCount);
     for (auto handle : handles) {
         const double startingMax = 600.0;
@@ -385,205 +385,6 @@ TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFr
         EXPECT_EQ(nullptr, state.pNext);
         EXPECT_LE(state.currentVoltage, 0);
     }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforInvalidReasons) {
-    sysfsAccess->mockReadVal32Result = ZE_RESULT_ERROR_NOT_AVAILABLE;
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t invalidReason = 0;
-    uint32_t unsetAllThrottleReasons = 0u;
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, invalidReason);
-    sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-    sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(unsetAllThrottleReasons, state.throttleReasons);
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonAveragePower) {
-    auto handles = getFreqHandles(handleComponentCount);
-    for (auto handle : handles) {
-        zes_freq_state_t state;
-        uint32_t validReason = 1;
-        sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-        sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-        EXPECT_EQ(ZE_RESULT_SUCCESS, zesFrequencyGetState(handle, &state));
-        EXPECT_EQ((ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP), state.throttleReasons);
-        EXPECT_EQ(nullptr, state.pNext);
-    }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonBurstPower) {
-    auto handles = getFreqHandles(handleComponentCount);
-    for (auto handle : handles) {
-        zes_freq_state_t state;
-        uint32_t validReason = 1;
-        sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-        sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-        EXPECT_EQ(ZE_RESULT_SUCCESS, zesFrequencyGetState(handle, &state));
-        EXPECT_EQ((ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP), state.throttleReasons);
-        EXPECT_EQ(nullptr, state.pNext);
-    }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsCurrentExcursion) {
-    auto handles = getFreqHandles(handleComponentCount);
-    for (auto handle : handles) {
-        zes_freq_state_t state;
-        uint32_t validReason = 1;
-        sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-        sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-        EXPECT_EQ(ZE_RESULT_SUCCESS, zesFrequencyGetState(handle, &state));
-        EXPECT_EQ((ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT), state.throttleReasons);
-        EXPECT_EQ(nullptr, state.pNext);
-    }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsThermalExcursion) {
-    auto handles = getFreqHandles(handleComponentCount);
-    for (auto handle : handles) {
-        zes_freq_state_t state;
-        uint32_t validReason = 1;
-        sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-        sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-        EXPECT_EQ(ZE_RESULT_SUCCESS, zesFrequencyGetState(handle, &state));
-        EXPECT_EQ((ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT), state.throttleReasons);
-        EXPECT_EQ(nullptr, state.pNext);
-    }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsInvalidThermalExcursion) {
-    auto handles = getFreqHandles(handleComponentCount);
-    for (auto handle : handles) {
-        zes_freq_state_t state;
-        uint32_t validReason = 1;
-        uint32_t invalidReason = 0;
-        sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-        sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-        sysfsAccess->setValU32(throttleReasonThermalFile, invalidReason);
-        EXPECT_EQ(ZE_RESULT_SUCCESS, zesFrequencyGetState(handle, &state));
-        EXPECT_EQ((ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT), state.throttleReasons);
-        EXPECT_EQ(nullptr, state.pNext);
-    }
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforValidReasons) {
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t setAllThrottleReasons = (ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT |
-                                      ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT |
-                                      ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP |
-                                      ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP);
-
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-    sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-    sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasons, state.throttleReasons);
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforMissingTHermalStatusFile) {
-    sysfsAccess->mockReadThermalError = true;
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t invalidReason = 0;
-    uint32_t setAllThrottleReasonsExceptThermal =
-        (ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP |
-         ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP);
-
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-    sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptThermal, state.throttleReasons);
-
-    sysfsAccess->setValU32(throttleReasonThermalFile, invalidReason);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptThermal, state.throttleReasons);
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforMissingPL4StatusFile) {
-    sysfsAccess->mockReadPL4Error = true;
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t invalidReason = 0;
-    uint32_t setAllThrottleReasonsExceptPL4 =
-        (ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP |
-         ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP);
-
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-    sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-    sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL4, state.throttleReasons);
-
-    sysfsAccess->setValU32(throttleReasonPL4File, invalidReason);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL4, state.throttleReasons);
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforMissingPL1StatusFile) {
-    sysfsAccess->mockReadPL1Error = true;
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t invalidReason = 0;
-    uint32_t setAllThrottleReasonsExceptPL1 =
-        (ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP);
-
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-    sysfsAccess->setValU32(throttleReasonPL2File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-    sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL1, state.throttleReasons);
-
-    sysfsAccess->setValU32(throttleReasonPL1File, invalidReason);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL1, state.throttleReasons);
-}
-
-TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidFrequencyHandleWhenCallingzesFrequencyGetStateThenVerifyzesFrequencyThrottleReasonsStatusforMissingPL2StatusFile) {
-    sysfsAccess->mockReadPL2Error = true;
-    zes_freq_state_t state;
-    uint32_t validReason = 1;
-    uint32_t invalidReason = 0;
-    uint32_t setAllThrottleReasonsExceptPL2 =
-        (ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT |
-         ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP);
-
-    PublicLinuxFrequencyImp linuxFrequencyImp(pOsSysman, 0, 0, ZES_FREQ_DOMAIN_GPU);
-    sysfsAccess->setValU32(throttleReasonStatusFile, validReason);
-    sysfsAccess->setValU32(throttleReasonPL1File, validReason);
-    sysfsAccess->setValU32(throttleReasonPL4File, validReason);
-    sysfsAccess->setValU32(throttleReasonThermalFile, validReason);
-
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL2, state.throttleReasons);
-
-    sysfsAccess->setValU32(throttleReasonPL2File, invalidReason);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, linuxFrequencyImp.osFrequencyGetState(&state));
-    EXPECT_EQ(setAllThrottleReasonsExceptPL2, state.throttleReasons);
 }
 
 TEST_F(SysmanDeviceFrequencyFixtureXe, GivenValidStatePointerWhenValidatingfrequencyGetStateWhenOneOfTheFrequencyStateThenNegativeValueIsReturned) {

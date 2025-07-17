@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -17,6 +17,7 @@
 namespace NEO {
 
 struct EnqueueCopyBufferToImageTest : public CommandEnqueueFixture,
+                                      public SurfaceStateAccessor,
                                       public ::testing::Test {
 
     void SetUp() override {
@@ -27,7 +28,7 @@ struct EnqueueCopyBufferToImageTest : public CommandEnqueueFixture,
         BufferDefaults::context = new MockContext(pClDevice);
         context = new MockContext(pClDevice);
         srcBuffer = BufferHelper<>::create(context);
-        dstImage = Image2dHelper<>::create(context);
+        dstImage = Image2dHelperUlt<>::create(context);
     }
 
     void TearDown() override {
@@ -77,6 +78,19 @@ struct EnqueueCopyBufferToImageMipMapTest : public CommandEnqueueFixture,
         delete BufferDefaults::context;
         delete context;
         CommandEnqueueFixture::tearDown();
+    }
+
+    int32_t adjustBuiltInType(bool isHeaplessEnabled, int32_t builtInType) {
+
+        if (isHeaplessEnabled) {
+            switch (builtInType) {
+            case EBuiltInOps::copyBufferToImage3d:
+            case EBuiltInOps::copyBufferToImage3dStateless:
+                return EBuiltInOps::copyBufferToImage3dHeapless;
+            }
+        }
+
+        return builtInType;
     }
 
     MockContext *context = nullptr;

@@ -25,6 +25,7 @@ class SysmanProductHelperHw : public SysmanProductHelper {
     // Frequency
     void getFrequencyStepSize(double *pStepSize) override;
     bool isFrequencySetRangeSupported() override;
+    zes_freq_throttle_reason_flags_t getThrottleReasons(LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) override;
 
     // Memory
     ze_result_t getMemoryProperties(zes_mem_properties_t *pProperties, LinuxSysmanImp *pLinuxSysmanImp, NEO::Drm *pDrm, SysmanKmdInterface *pSysmanKmdInterface, uint32_t subDeviceId, bool isSubdevice) override;
@@ -53,17 +54,16 @@ class SysmanProductHelperHw : public SysmanProductHelper {
     uint64_t setPowerLimitValue(int32_t value) override;
     zes_limit_unit_t getPowerLimitUnit() override;
     bool isPowerSetLimitSupported() override;
-    std::string getCardCriticalPowerLimitFile() override;
-    SysfsValueUnit getCardCriticalPowerLimitNativeUnit() override;
-
-    // Diagnostics
-    bool isDiagnosticsSupported() override;
+    std::string getPackageCriticalPowerLimitFile() override;
+    SysfsValueUnit getPackageCriticalPowerLimitNativeUnit() override;
+    ze_result_t getPowerEnergyCounter(zes_power_energy_counter_t *pEnergy, LinuxSysmanImp *pLinuxSysmanImp, zes_power_domain_t powerDomain, uint32_t subDeviceId) override;
 
     // standby
     bool isStandbySupported(SysmanKmdInterface *pSysmanKmdInterface) override;
 
     // Firmware
     void getDeviceSupportedFwTypes(FirmwareUtil *pFwInterface, std::vector<std::string> &fwTypes) override;
+    bool isLateBindingSupported() override;
 
     // Ecc
     bool isEccConfigurationSupported() override;
@@ -75,6 +75,14 @@ class SysmanProductHelperHw : public SysmanProductHelper {
     // Pci
     ze_result_t getPciProperties(zes_pci_properties_t *pProperties) override;
     ze_result_t getPciStats(zes_pci_stats_t *pStats, LinuxSysmanImp *pLinuxSysmanImp) override;
+
+    // Engine
+    bool isAggregationOfSingleEnginesSupported() override;
+    ze_result_t getGroupEngineBusynessFromSingleEngines(LinuxSysmanImp *pLinuxSysmanImp, zes_engine_stats_t *pStats, zes_engine_group_t &engineGroup) override;
+
+    // Vf Management
+    bool isVfMemoryUtilizationSupported() override;
+    ze_result_t getVfLocalMemoryQuota(SysFsAccessInterface *pSysfsAccess, uint64_t &lMemQuota, const uint32_t &vfId) override;
 
     ~SysmanProductHelperHw() override = default;
 

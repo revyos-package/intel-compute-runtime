@@ -116,6 +116,7 @@ bool Wddm::init() {
     productHelper.adjustPlatformForProductFamily(hardwareInfo);
     rootDeviceEnvironment.initApiGfxCoreHelper();
     rootDeviceEnvironment.initGfxCoreHelper();
+    rootDeviceEnvironment.initializeGfxCoreHelperFromProductHelper();
     rootDeviceEnvironment.initializeGfxCoreHelperFromHwInfo();
     rootDeviceEnvironment.initAilConfigurationHelper();
     if (false == rootDeviceEnvironment.initAilConfiguration()) {
@@ -129,6 +130,7 @@ bool Wddm::init() {
     if (productHelper.configureHwInfoWddm(hardwareInfo, hardwareInfo, rootDeviceEnvironment)) {
         return false;
     }
+    rootDeviceEnvironment.initWaitUtils();
     setPlatformSupportEvictIfNecessaryFlag(productHelper);
 
     auto preemptionMode = PreemptionHelper::getDefaultPreemptionMode(*hardwareInfo);
@@ -136,7 +138,10 @@ bool Wddm::init() {
     rootDeviceEnvironment.initGmm();
     this->rootDeviceEnvironment.getGmmClientContext()->setHandleAllocator(this->hwDeviceId->getUmKmDataTranslator()->createGmmHandleAllocator());
 
-    if (WddmVersion::wddm23 == getWddmVersion()) {
+    auto wddmVersion = getWddmVersion();
+    if (WddmVersion::wddm32 == wddmVersion) {
+        wddmInterface = std::make_unique<WddmInterface32>(*this);
+    } else if (WddmVersion::wddm23 == wddmVersion) {
         wddmInterface = std::make_unique<WddmInterface23>(*this);
     } else {
         wddmInterface = std::make_unique<WddmInterface20>(*this);
@@ -301,11 +306,13 @@ bool Wddm::queryAdapterInfo() {
 
         memcpy_s(&gfxPartition, sizeof(gfxPartition), &adapterInfo.GfxPartition, sizeof(GMM_GFX_PARTITIONING));
         memcpy_s(&adapterBDF, sizeof(adapterBDF), &adapterInfo.stAdapterBDF, sizeof(ADAPTER_BDF));
+        memcpy_s(segmentId, sizeof(segmentId), adapterInfo.SegmentId, sizeof(adapterInfo.SegmentId));
 
         deviceRegistryPath = std::string(adapterInfo.DeviceRegistryPath, sizeof(adapterInfo.DeviceRegistryPath)).c_str();
 
         systemSharedMemory = adapterInfo.SystemSharedMemory;
         dedicatedVideoMemory = adapterInfo.DedicatedVideoMemory;
+        lmemBarSize = adapterInfo.LMemBarSize;
         maxRenderFrequency = adapterInfo.MaxRenderFreq;
         timestampFrequency = adapterInfo.GfxTimeStampFreq;
         instrumentationEnabled = adapterInfo.Caps.InstrumentationIsEnabled != 0;
@@ -540,6 +547,7 @@ bool Wddm::makeResident(const D3DKMT_HANDLE *handles, uint32_t count, bool cantT
         success = true;
     } else {
         DEBUG_BREAK_IF(cantTrimFurther);
+        DEBUG_BREAK_IF(makeResident.NumAllocations != 0u && makeResident.NumAllocations != count);
         perfLogResidencyTrimRequired(residencyLogger.get(), makeResident.NumBytesToTrim);
         if (numberOfBytesToTrim != nullptr) {
             *numberOfBytesToTrim = makeResident.NumBytesToTrim;
@@ -650,7 +658,11 @@ bool Wddm::freeGpuVirtualAddress(D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size) 
     return status == STATUS_SUCCESS;
 }
 
-NTSTATUS Wddm::createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle) {
+bool Wddm::isReadOnlyFlagFallbackAvailable(const D3DKMT_CREATEALLOCATION &createAllocation) const {
+    return isReadOnlyFlagFallbackSupported() && createAllocation.pAllocationInfo2->pSystemMem && !createAllocation.Flags.ReadOnly;
+}
+
+NTSTATUS Wddm::createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle) {
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     D3DDDI_ALLOCATIONINFO2 allocationInfo = {};
     D3DKMT_CREATEALLOCATION createAllocation = {};
@@ -658,13 +670,14 @@ NTSTATUS Wddm::createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKM
     if (gmm == nullptr)
         return false;
 
-    allocationInfo.pSystemMem = alignedCpuPtr;
+    allocationInfo.pSystemMem = gmm->gmmResourceInfo->getSystemMemPointer();
     allocationInfo.pPrivateDriverData = gmm->gmmResourceInfo->peekHandle();
     allocationInfo.PrivateDriverDataSize = static_cast<uint32_t>(gmm->gmmResourceInfo->peekHandleSize());
     createAllocation.NumAllocations = 1;
     createAllocation.Flags.CreateShared = outSharedHandle ? TRUE : FALSE;
     createAllocation.Flags.NtSecuritySharing = outSharedHandle ? TRUE : FALSE;
     createAllocation.Flags.CreateResource = outSharedHandle ? TRUE : FALSE;
+    createAllocation.Flags.ReadOnly = getReadOnlyFlagValue(cpuPtr);
     createAllocation.pAllocationInfo2 = &allocationInfo;
     createAllocation.hDevice = device;
 
@@ -677,11 +690,9 @@ NTSTATUS Wddm::createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKM
     }
 
     status = getGdi()->createAllocation2(&createAllocation);
-    if (status != STATUS_SUCCESS) {
-        if (isReadOnlyMemory(alignedCpuPtr)) {
-            createAllocation.Flags.ReadOnly = true;
-            status = getGdi()->createAllocation2(&createAllocation);
-        }
+    if (status != STATUS_SUCCESS && isReadOnlyFlagFallbackAvailable(createAllocation)) {
+        createAllocation.Flags.ReadOnly = TRUE;
+        status = getGdi()->createAllocation2(&createAllocation);
     }
     if (status != STATUS_SUCCESS) {
         DEBUG_BREAK_IF(true);
@@ -777,17 +788,15 @@ NTSTATUS Wddm::createAllocationsAndMapGpuVa(OsHandleStorage &osHandles) {
     createAllocation.Flags.CreateShared = FALSE;
     createAllocation.Flags.RestrictSharedAccess = FALSE;
     createAllocation.Flags.CreateResource = FALSE;
+    createAllocation.Flags.ReadOnly = getReadOnlyFlagValue(allocationInfo[0].pSystemMem);
     createAllocation.pAllocationInfo2 = allocationInfo;
     createAllocation.hDevice = device;
 
     while (status == STATUS_UNSUCCESSFUL) {
         status = getGdi()->createAllocation2(&createAllocation);
-
-        if (status != STATUS_SUCCESS) {
-            if (isReadOnlyMemory(allocationInfo[0].pSystemMem)) {
-                createAllocation.Flags.ReadOnly = true;
-                status = getGdi()->createAllocation2(&createAllocation);
-            }
+        if (status != STATUS_SUCCESS && isReadOnlyFlagFallbackAvailable(createAllocation)) {
+            createAllocation.Flags.ReadOnly = TRUE;
+            status = getGdi()->createAllocation2(&createAllocation);
         }
 
         if (status != STATUS_SUCCESS) {
@@ -836,9 +845,14 @@ bool Wddm::destroyAllocations(const D3DKMT_HANDLE *handles, uint32_t allocationC
     destroyAllocation.AllocationCount = allocationCount;
     destroyAllocation.Flags.AssumeNotInUse = debugManager.flags.SetAssumeNotInUse.get();
 
-    DeallocateGmm deallocateGmm{&destroyAllocation, getGdi()};
+    bool destroyViaGmm = true;
 
-    if (debugManager.flags.DestroyAllocationsViaGmm.get()) {
+    if (debugManager.flags.DestroyAllocationsViaGmm.get() != -1) {
+        destroyViaGmm = debugManager.flags.DestroyAllocationsViaGmm.get();
+    }
+
+    if (destroyViaGmm) {
+        DeallocateGmm deallocateGmm{&destroyAllocation, getGdi()};
         status = static_cast<NTSTATUS>(this->rootDeviceEnvironment.getGmmClientContext()->deallocate2(&deallocateGmm));
     } else {
         status = getGdi()->destroyAllocation2(&destroyAllocation);
@@ -967,13 +981,18 @@ void *Wddm::lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPrio
     return lock2.pData;
 }
 
-void Wddm::unlockResource(const D3DKMT_HANDLE &handle) {
+void Wddm::unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock) {
     D3DKMT_UNLOCK2 unlock2 = {};
 
     unlock2.hAllocation = handle;
     unlock2.hDevice = this->device;
 
     NTSTATUS status = getGdi()->unlock2(&unlock2);
+
+    if (applyMakeResidentPriorToLock) {
+        this->temporaryResources->evictResource(handle);
+    }
+
     if (status != STATUS_SUCCESS) {
         return;
     }
@@ -1017,6 +1036,7 @@ bool Wddm::createContext(OsContextWin &osContext) {
     privateData.ProcessID = NEO::SysCalls::getProcessId();
     privateData.pHwContextId = &hwContextId;
     privateData.NoRingFlushes = debugManager.flags.UseNoRingFlushesKmdMode.get();
+    privateData.DummyPageBackingEnabled = debugManager.flags.DummyPageBackingEnabled.get();
 
     applyAdditionalContextFlags(privateData, osContext);
 
@@ -1183,14 +1203,17 @@ bool Wddm::waitFromCpu(uint64_t lastFenceValue, const MonitoredFence &monitoredF
     NTSTATUS status = STATUS_SUCCESS;
 
     if (!skipResourceCleanup() && lastFenceValue > *monitoredFence.cpuAddress) {
-        if (lastFenceValue > monitoredFence.lastSubmittedFence) {
-            this->forEachContextWithinWddm([&monitoredFence](const EngineControl &engine) {
-                auto &contextMonitoredFence = static_cast<OsContextWin *>(engine.osContext)->getResidencyController().getMonitoredFence();
-                if (contextMonitoredFence.cpuAddress == monitoredFence.cpuAddress) {
-                    auto lock = engine.commandStreamReceiver->obtainUniqueOwnership();
-                    engine.commandStreamReceiver->flushMonitorFence();
-                }
-            });
+        CommandStreamReceiver *csr = nullptr;
+        this->forEachContextWithinWddm([&monitoredFence, &csr](const EngineControl &engine) {
+            auto &contextMonitoredFence = static_cast<OsContextWin *>(engine.osContext)->getResidencyController().getMonitoredFence();
+            if (contextMonitoredFence.cpuAddress == monitoredFence.cpuAddress) {
+                csr = engine.commandStreamReceiver;
+            }
+        });
+
+        if (csr != nullptr && lastFenceValue > monitoredFence.lastSubmittedFence) {
+            auto lock = csr->obtainUniqueOwnership();
+            csr->flushMonitorFence(false);
         }
 
         if (busyWait) {
@@ -1204,6 +1227,11 @@ bool Wddm::waitFromCpu(uint64_t lastFenceValue, const MonitoredFence &monitoredF
         }
 
         if (lastFenceValue > *monitoredFence.cpuAddress) {
+            if (csr != nullptr) {
+                // Flush monitor fence to emit KMD interrupt.
+                auto lock = csr->obtainUniqueOwnership();
+                csr->flushMonitorFence(true);
+            }
             D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU waitFromCpu = {};
             waitFromCpu.ObjectCount = 1;
             waitFromCpu.ObjectHandleArray = &monitoredFence.fenceHandle;
@@ -1214,7 +1242,6 @@ bool Wddm::waitFromCpu(uint64_t lastFenceValue, const MonitoredFence &monitoredF
             DEBUG_BREAK_IF(status != STATUS_SUCCESS);
         }
     }
-
     return status == STATUS_SUCCESS;
 }
 
@@ -1375,6 +1402,9 @@ void Wddm::updatePagingFenceValue(uint64_t newPagingFenceValue) {
 
 WddmVersion Wddm::getWddmVersion() {
     if (featureTable->flags.ftrWddmHwQueues) {
+        if (isNativeFenceAvailable()) {
+            return WddmVersion::wddm32;
+        }
         return WddmVersion::wddm23;
     } else {
         return WddmVersion::wddm20;

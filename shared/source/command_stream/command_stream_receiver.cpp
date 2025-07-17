@@ -7,10 +7,8 @@
 
 #include "shared/source/command_stream/command_stream_receiver.h"
 
-#include "shared/source/built_ins/built_ins.h"
 #include "shared/source/command_container/implicit_scaling.h"
 #include "shared/source/command_stream/aub_subcapture_status.h"
-#include "shared/source/command_stream/preemption.h"
 #include "shared/source/command_stream/scratch_space_controller.h"
 #include "shared/source/command_stream/submission_status.h"
 #include "shared/source/command_stream/submissions_aggregator.h"
@@ -30,8 +28,6 @@
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/pause_on_gpu_properties.h"
 #include "shared/source/helpers/ray_tracing_helper.h"
-#include "shared/source/helpers/string.h"
-#include "shared/source/helpers/timestamp_packet.h"
 #include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/memory_manager/memory_manager.h"
@@ -46,12 +42,10 @@
 #include "shared/source/utilities/tag_allocator.h"
 #include "shared/source/utilities/wait_util.h"
 
+#include "aub_services.h"
+
 #include <array>
 #include <iostream>
-
-namespace AubMemDump {
-#include "aub_services.h"
-}
 
 namespace NEO {
 
@@ -65,6 +59,8 @@ CommandStreamReceiver::CommandStreamReceiver(ExecutionEnvironment &executionEnvi
     residencyAllocations.reserve(startingResidencyContainerSize);
 
     latestSentStatelessMocsConfig = CacheSettings::unknownMocs;
+    lastSentSliceCount = QueueSliceCount::defaultSliceCount;
+    lastAdditionalKernelExecInfo = AdditionalKernelExecInfo::notSet;
     submissionAggregator.reset(new SubmissionAggregator());
     if (ApiSpecificConfig::getApiType() == ApiSpecificConfig::L0) {
         this->dispatchMode = DispatchMode::immediateDispatch;
@@ -99,7 +95,8 @@ CommandStreamReceiver::CommandStreamReceiver(ExecutionEnvironment &executionEnvi
     registeredClients.reserve(16);
 
     auto &compilerProductHelper = rootDeviceEnvironment.getHelper<CompilerProductHelper>();
-    this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled(hwInfo);
+    this->heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(heaplessModeEnabled);
     this->evictionAllocations.reserve(2 * MemoryConstants::kiloByte);
 }
 
@@ -156,7 +153,7 @@ void CommandStreamReceiver::makeResident(GraphicsAllocation &gfxAllocation) {
     gfxAllocation.updateTaskCount(submissionTaskCount, osContext->getContextId());
 
     if (gfxAllocation.isResidencyTaskCountBelow(submissionTaskCount, osContext->getContextId())) {
-        auto pushAllocations = true;
+        auto pushAllocations = this->pushAllocationsForMakeResident;
 
         if (debugManager.flags.MakeEachAllocationResident.get() != -1) {
             pushAllocations = !debugManager.flags.MakeEachAllocationResident.get();
@@ -504,10 +501,10 @@ WaitStatus CommandStreamReceiver::baseWaitFunction(volatile TagAddressType *poll
     waitStartTime = std::chrono::high_resolution_clock::now();
     lastHangCheckTime = waitStartTime;
     for (uint32_t i = 0; i < activePartitions; i++) {
-        while (*partitionAddress < taskCountToWait && timeDiff <= params.waitTimeout) {
+        while (*partitionAddress < taskCountToWait && (!params.enableTimeout || timeDiff <= params.waitTimeout)) {
             this->downloadTagAllocation(taskCountToWait);
 
-            if (!params.indefinitelyPoll && WaitUtils::waitFunction(partitionAddress, taskCountToWait)) {
+            if (!params.indefinitelyPoll && WaitUtils::waitFunction(partitionAddress, taskCountToWait, timeDiff)) {
                 break;
             }
 
@@ -516,9 +513,7 @@ WaitStatus CommandStreamReceiver::baseWaitFunction(volatile TagAddressType *poll
                 return WaitStatus::gpuHang;
             }
 
-            if (params.enableTimeout) {
-                timeDiff = std::chrono::duration_cast<std::chrono::microseconds>(currentTime - waitStartTime).count();
-            }
+            timeDiff = std::chrono::duration_cast<std::chrono::microseconds>(currentTime - waitStartTime).count();
         }
 
         partitionAddress = ptrOffset(partitionAddress, this->immWritePostSyncWriteOffset);
@@ -650,7 +645,6 @@ void CommandStreamReceiver::downloadAllocation(GraphicsAllocation &gfxAllocation
 void CommandStreamReceiver::startControllingDirectSubmissions() {
     auto controller = this->executionEnvironment.directSubmissionController.get();
     if (controller) {
-        controller->setTimeoutParamsForPlatform(this->getProductHelper());
         controller->startControlling();
     }
 }
@@ -701,10 +695,6 @@ IndirectHeap &CommandStreamReceiver::getIndirectHeap(IndirectHeap::Type heapType
         internalAllocationStorage->storeAllocation(std::unique_ptr<GraphicsAllocation>(heapMemory), REUSABLE_ALLOCATION);
         heapMemory = nullptr;
         this->heapStorageRequiresRecyclingTag = true;
-
-        if (this->peekRootDeviceEnvironment().getProductHelper().isDcFlushMitigated()) {
-            this->registerDcFlushForDcMitigation();
-        }
     }
 
     if (!heapMemory) {
@@ -878,7 +868,7 @@ bool CommandStreamReceiver::createWorkPartitionAllocation(const Device &device) 
         *copySrc = {logicalId++, deviceIndex};
         DeviceBitfield copyBitfield{};
         copyBitfield.set(deviceIndex);
-        auto copySuccess = MemoryTransferHelper::transferMemoryToAllocationBanks(device, workPartitionAllocation, 0, copySrc.get(), 2 * sizeof(uint32_t), copyBitfield);
+        auto copySuccess = MemoryTransferHelper::transferMemoryToAllocationBanks(true, device, workPartitionAllocation, 0, copySrc.get(), 2 * sizeof(uint32_t), copyBitfield);
 
         if (!copySuccess) {
             return false;
@@ -889,9 +879,10 @@ bool CommandStreamReceiver::createWorkPartitionAllocation(const Device &device) 
 }
 
 bool CommandStreamReceiver::createGlobalFenceAllocation() {
-    auto &gfxCoreHelper = getGfxCoreHelper();
-    auto &hwInfo = peekHwInfo();
-    if (!gfxCoreHelper.isFenceAllocationRequired(hwInfo)) {
+    const auto &gfxCoreHelper = this->getGfxCoreHelper();
+    const auto &hwInfo = this->peekHwInfo();
+    const auto &productHelper = this->getProductHelper();
+    if (!gfxCoreHelper.isFenceAllocationRequired(hwInfo, productHelper)) {
         return true;
     }
 
@@ -1047,7 +1038,7 @@ void CommandStreamReceiver::downloadTagAllocation(TaskCountType taskCountToWait)
 bool CommandStreamReceiver::testTaskCountReady(volatile TagAddressType *pollAddress, TaskCountType taskCountToWait) {
     this->downloadTagAllocation(taskCountToWait);
     for (uint32_t i = 0; i < activePartitions; i++) {
-        if (!WaitUtils::waitFunction(pollAddress, taskCountToWait)) {
+        if (!WaitUtils::waitFunction(pollAddress, taskCountToWait, 0)) {
             return false;
         }
 
@@ -1169,7 +1160,7 @@ void CommandStreamReceiver::createGlobalStatelessHeap() {
 }
 
 bool CommandStreamReceiver::isRayTracingStateProgramingNeeded(Device &device) const {
-    return device.getRTMemoryBackedBuffer() && getBtdCommandDirty();
+    return device.rayTracingIsInitialized() && getBtdCommandDirty();
 }
 
 void CommandStreamReceiver::registerClient(void *client) {

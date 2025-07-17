@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -112,6 +112,20 @@ std::vector<bool> UnitTestHelper<GfxFamily>::getProgrammedLargeGrfValues(Command
 }
 
 template <typename GfxFamily>
+std::vector<bool> UnitTestHelper<GfxFamily>::getProgrammedLargeGrfValues(LinearStream &linearStream) {
+    using STATE_COMPUTE_MODE = typename GfxFamily::STATE_COMPUTE_MODE;
+
+    std::vector<bool> largeGrfValues;
+    HardwareParse hwParser;
+    hwParser.parseCommands<GfxFamily>(linearStream);
+    auto commands = hwParser.getCommandsList<STATE_COMPUTE_MODE>();
+    for (auto &cmd : commands) {
+        largeGrfValues.push_back(reinterpret_cast<STATE_COMPUTE_MODE *>(cmd)->getLargeGrfMode());
+    }
+    return largeGrfValues;
+}
+
+template <typename GfxFamily>
 inline bool UnitTestHelper<GfxFamily>::getWorkloadPartitionForStoreRegisterMemCmd(typename GfxFamily::MI_STORE_REGISTER_MEM &storeRegisterMem) {
     return storeRegisterMem.getWorkloadPartitionIdOffsetEnable();
 }
@@ -167,6 +181,12 @@ template <typename GfxFamily>
 void *UnitTestHelper<GfxFamily>::getInitWalkerCmd(bool heapless) {
     using COMPUTE_WALKER = typename GfxFamily::COMPUTE_WALKER;
     return new COMPUTE_WALKER;
+}
+
+template <typename GfxFamily>
+template <typename WalkerType>
+uint64_t UnitTestHelper<GfxFamily>::getWalkerActivePostSyncAddress(WalkerType *walkerCmd) {
+    return walkerCmd->getPostSync().getDestinationAddress();
 }
 
 } // namespace NEO

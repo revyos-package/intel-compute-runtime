@@ -5,11 +5,9 @@
  *
  */
 
-#include "shared/source/built_ins/built_ins.h"
 #include "shared/source/gen_common/reg_configs_common.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/local_memory_access_modes.h"
-#include "shared/source/memory_manager/allocations_list.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
@@ -94,7 +92,12 @@ HWTEST_F(EnqueueWriteBufferTypeTest, GivenNonBlockingEnqueueWhenWritingBufferThe
 
     EnqueueWriteBufferHelper<>::enqueueWriteBuffer(pCmdQ, srcBuffer.get(), CL_FALSE);
     EXPECT_EQ(csr.peekTaskCount(), pCmdQ->taskCount);
-    EXPECT_EQ(csr.peekTaskLevel(), pCmdQ->taskLevel + 1);
+
+    auto cmdQTaskLevel = pCmdQ->taskLevel;
+    if (!csr.isUpdateTagFromWaitEnabled()) {
+        cmdQTaskLevel++;
+    }
+    EXPECT_EQ(csr.peekTaskLevel(), cmdQTaskLevel);
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueWriteBufferTypeTest, WhenWritingBufferThenCommandsAreProgrammedCorrectly) {
@@ -156,7 +159,7 @@ HWTEST_F(EnqueueWriteBufferTypeTest, WhenWritingBufferThenIndirectDataIsAdded) {
     EnqueueWriteBufferHelper<>::enqueueWriteBuffer(pCmdQ, srcBuffer.get(), EnqueueWriteBufferTraits::blocking);
 
     auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
 
     auto builtInType = adjustBuiltInType(heaplessEnabled, EBuiltInOps::copyBufferToBuffer);
     auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtInType,
@@ -278,7 +281,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueWriteBufferTypeTest, WhenWritingBufferThen
     EXPECT_NE(0u, idd.getConstantIndirectUrbEntryReadLength());
 }
 
-HWTEST2_F(EnqueueWriteBufferTypeTest, WhenWritingBufferThenOnePipelineSelectIsProgrammed, IsAtMostXeHpcCore) {
+HWTEST2_F(EnqueueWriteBufferTypeTest, WhenWritingBufferThenOnePipelineSelectIsProgrammed, IsAtMostXeCore) {
     srcBuffer->forceDisallowCPUCopy = true;
     enqueueWriteBuffer<FamilyType>();
     int numCommands = getNumberOfPipelineSelectsThatEnablePipelineSelect<FamilyType>();
@@ -638,12 +641,9 @@ struct WriteBufferStagingBufferTest : public EnqueueWriteBufferHw {
     }
 
     void TearDown() override {
-        if (defaultHwInfo->capabilityTable.ftrSvm == false) {
-            return;
-        }
         EnqueueWriteBufferHw::TearDown();
     }
-    constexpr static size_t chunkSize = MemoryConstants::megaByte * 2;
+    constexpr static size_t chunkSize = MemoryConstants::pageSize;
 
     unsigned char ptr[MemoryConstants::cacheLineSize];
     MockBuffer buffer;
@@ -652,12 +652,51 @@ struct WriteBufferStagingBufferTest : public EnqueueWriteBufferHw {
 
 HWTEST_F(WriteBufferStagingBufferTest, whenEnqueueStagingWriteBufferCalledThenReturnSuccess) {
     MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(&buffer, false, 0, buffer.getSize(), ptr, nullptr);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, &buffer, false, 0, buffer.getSize(), ptr, nullptr);
     EXPECT_TRUE(mockCommandQueueHw.flushCalled);
     EXPECT_EQ(res, CL_SUCCESS);
     EXPECT_EQ(1ul, mockCommandQueueHw.enqueueWriteBufferCounter);
     auto &csr = device->getUltCommandStreamReceiver<FamilyType>();
     EXPECT_EQ(0u, csr.createAllocationForHostSurfaceCalled);
+}
+
+HWTEST_F(WriteBufferStagingBufferTest, whenHostPtrRegisteredThenDontUseStagingUntilEventCompleted) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableCopyWithStagingBuffers.set(1);
+    MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
+
+    cl_event event;
+    auto retVal = mockCommandQueueHw.enqueueWriteBuffer(&buffer,
+                                                        CL_FALSE,
+                                                        0,
+                                                        MemoryConstants::cacheLineSize,
+                                                        ptr,
+                                                        nullptr,
+                                                        0,
+                                                        nullptr,
+                                                        &event);
+    EXPECT_EQ(CL_SUCCESS, retVal);
+    auto pEvent = castToObjectOrAbort<Event>(event);
+
+    EXPECT_TRUE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
+    EXPECT_FALSE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
+
+    pEvent->updateExecutionStatus();
+    EXPECT_TRUE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
+
+    pEvent->release();
+}
+
+HWTEST_F(WriteBufferStagingBufferTest, whenHostPtrRegisteredThenDontUseStagingUntilFinishCalled) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableCopyWithStagingBuffers.set(1);
+    MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
+
+    EXPECT_TRUE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
+    EXPECT_FALSE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
+
+    mockCommandQueueHw.finish();
+    EXPECT_TRUE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, MemoryConstants::cacheLineSize, CL_COMMAND_WRITE_BUFFER, false, false));
 }
 
 HWTEST_F(WriteBufferStagingBufferTest, whenEnqueueStagingWriteBufferCalledWithLargeSizeThenSplitTransfer) {
@@ -669,7 +708,7 @@ HWTEST_F(WriteBufferStagingBufferTest, whenEnqueueStagingWriteBufferCalledWithLa
                                                                             chunkSize * 4,
                                                                             nullptr,
                                                                             retVal));
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(buffer.get(), false, 0, chunkSize * 4, hostPtr, nullptr);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, buffer.get(), false, 0, chunkSize * 4, hostPtr, nullptr);
     EXPECT_TRUE(mockCommandQueueHw.flushCalled);
     EXPECT_EQ(retVal, CL_SUCCESS);
     EXPECT_EQ(res, CL_SUCCESS);
@@ -684,7 +723,7 @@ HWTEST_F(WriteBufferStagingBufferTest, whenEnqueueStagingWriteBufferCalledWithEv
     constexpr cl_command_type expectedLastCmd = CL_COMMAND_WRITE_BUFFER;
     MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
     cl_event event;
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(&buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, &buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
     EXPECT_EQ(res, CL_SUCCESS);
 
     auto pEvent = (Event *)event;
@@ -699,7 +738,7 @@ HWTEST_F(WriteBufferStagingBufferTest, givenOutOfOrderQueueWhenEnqueueStagingWri
     MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
     mockCommandQueueHw.setOoqEnabled();
     cl_event event;
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(&buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, &buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
     EXPECT_EQ(res, CL_SUCCESS);
 
     auto pEvent = (Event *)event;
@@ -713,7 +752,7 @@ HWTEST_F(WriteBufferStagingBufferTest, givenCmdQueueWithProfilingWhenEnqueueStag
     cl_event event;
     MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
     mockCommandQueueHw.setProfilingEnabled();
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(&buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, &buffer, false, 0, MemoryConstants::cacheLineSize, ptr, &event);
     EXPECT_EQ(res, CL_SUCCESS);
 
     auto pEvent = (Event *)event;
@@ -726,8 +765,25 @@ HWTEST_F(WriteBufferStagingBufferTest, givenCmdQueueWithProfilingWhenEnqueueStag
 HWTEST_F(WriteBufferStagingBufferTest, whenEnqueueStagingWriteBufferFailedThenPropagateErrorCode) {
     MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
     mockCommandQueueHw.enqueueWriteBufferCallBase = false;
-    auto res = mockCommandQueueHw.enqueueStagingWriteBuffer(&buffer, false, 0, MemoryConstants::cacheLineSize, ptr, nullptr);
+    auto res = mockCommandQueueHw.enqueueStagingBufferTransfer(CL_COMMAND_WRITE_BUFFER, &buffer, false, 0, MemoryConstants::cacheLineSize, ptr, nullptr);
 
     EXPECT_EQ(res, CL_INVALID_OPERATION);
     EXPECT_EQ(1ul, mockCommandQueueHw.enqueueWriteBufferCounter);
+}
+
+HWTEST_F(WriteBufferStagingBufferTest, whenIsValidForStagingTransferCalledThenReturnCorrectValue) {
+    MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
+    auto isStagingBuffersEnabled = device->getProductHelper().isStagingBuffersEnabled();
+    unsigned char ptr[16];
+
+    EXPECT_EQ(isStagingBuffersEnabled, mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, 16, CL_COMMAND_WRITE_BUFFER, false, false));
+}
+
+HWTEST_F(WriteBufferStagingBufferTest, whenIsValidForStagingTransferCalledAndCpuCopyAllowedThenReturnCorrectValue) {
+    DebugManagerStateRestore dbgRestore;
+    debugManager.flags.DoCpuCopyOnWriteBuffer.set(1);
+    MockCommandQueueHw<FamilyType> mockCommandQueueHw(context.get(), device.get(), &props);
+    unsigned char ptr[16];
+
+    EXPECT_FALSE(mockCommandQueueHw.isValidForStagingTransfer(&buffer, ptr, 16, CL_COMMAND_WRITE_BUFFER, true, false));
 }

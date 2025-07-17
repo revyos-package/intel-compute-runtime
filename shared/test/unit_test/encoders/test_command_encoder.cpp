@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,10 +8,12 @@
 #include "shared/source/command_container/cmdcontainer.h"
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_container/encode_surface_state.h"
+#include "shared/source/helpers/in_order_cmd_helpers.h"
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/fixtures/device_fixture.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
+#include "shared/test/common/mocks/mock_timestamp_container.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
 using namespace NEO;
@@ -212,4 +214,36 @@ HWTEST2_F(CommandEncoderTest, givenPredicateBitSetWhenProgrammingBbStartThenSetC
 
     EncodeBatchBufferStartOrEnd<FamilyType>::programBatchBufferStart(&cmdStream, 0, false, false, true);
     EXPECT_EQ(1u, cmd.getPredicationEnable());
+}
+
+HWTEST_F(CommandEncoderTest, givenEncodePostSyncArgsWhenCallingRequiresSystemMemoryFenceThenCorrectValuesAreReturned) {
+    EncodePostSyncArgs args{};
+    for (bool hostScopeSignalEvent : {true, false}) {
+        for (bool kernelUsingSystemAllocation : {true, false}) {
+            args.device = pDevice;
+            args.isHostScopeSignalEvent = hostScopeSignalEvent;
+            args.isUsingSystemAllocation = kernelUsingSystemAllocation;
+
+            if (hostScopeSignalEvent && kernelUsingSystemAllocation && pDevice->getProductHelper().isGlobalFenceInPostSyncRequired(pDevice->getHardwareInfo())) {
+                EXPECT_TRUE(args.requiresSystemMemoryFence());
+            } else {
+                EXPECT_FALSE(args.requiresSystemMemoryFence());
+            }
+        }
+    }
+}
+
+HWTEST_F(CommandEncoderTest, givenEncodePostSyncArgsWhenCallingIsRegularEventThenCorrectValuesAreReturned) {
+    EncodePostSyncArgs args{};
+    MockTagAllocator<DeviceAllocNodeType<true>> deviceTagAllocator(0, pDevice->getMemoryManager());
+    auto inOrderExecInfo = InOrderExecInfo::create(deviceTagAllocator.getTag(), deviceTagAllocator.getTag(), *pDevice, 1, false); // setting duplicateStorage = true;
+    for (bool inOrderExec : {true, false}) {
+        for (uint64_t eventAddress : {0, 0x1010}) {
+            args.device = pDevice;
+            args.inOrderExecInfo = (inOrderExec) ? reinterpret_cast<InOrderExecInfo *>(0x1234) : nullptr;
+            args.eventAddress = eventAddress;
+            bool expectedRegularEvent = (eventAddress != 0 && !inOrderExec);
+            EXPECT_EQ(expectedRegularEvent, args.isRegularEvent());
+        }
+    }
 }

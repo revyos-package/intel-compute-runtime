@@ -19,6 +19,7 @@
 
 namespace NEO {
 
+struct HardwareInfo;
 class ReleaseHelper;
 enum class ReleaseType;
 
@@ -27,7 +28,7 @@ using createReleaseHelperFunctionType = std::unique_ptr<ReleaseHelper> (*)(Hardw
 inline createReleaseHelperFunctionType *releaseHelperFactory[maxArchitecture]{};
 
 using ThreadsPerEUConfigs = StackVec<uint32_t, 6>;
-using SizeToPreferredSlmValueArray = std::array<SizeToPreferredSlmValue, 20>;
+using SizeToPreferredSlmValueArray = std::array<SizeToPreferredSlmValue, 23>;
 
 class ReleaseHelper {
   public:
@@ -56,13 +57,16 @@ class ReleaseHelper {
     virtual bool isRayTracingSupported() const = 0;
     virtual uint32_t getAdditionalFp16Caps() const = 0;
     virtual uint32_t getAdditionalExtraCaps() const = 0;
-    virtual uint32_t getStackSizePerRay() const = 0;
+    virtual uint32_t getAsyncStackSizePerRay() const = 0;
     virtual bool isLocalOnlyAllowed() const = 0;
-    virtual bool isDisablingMsaaRequired() const = 0;
     virtual bool isDummyBlitWaRequired() const = 0;
+    virtual bool isDirectSubmissionLightSupported() const = 0;
     virtual const SizeToPreferredSlmValueArray &getSizeToPreferredSlmValue(bool isHeapless) const = 0;
-    virtual bool isNumRtStacksPerDssFixedValue() const = 0;
     virtual bool getFtrXe2Compression() const = 0;
+    virtual bool programmAdditionalStallPriorToBarrierWithTimestamp() const = 0;
+    virtual uint32_t computeSlmValues(uint32_t slmSize, bool isHeapless) const = 0;
+    virtual bool isBlitImageAllowedForDepthFormat() const = 0;
+    virtual bool isPostImageWriteFlushRequired() const = 0;
 
   protected:
     ReleaseHelper(HardwareIpVersion hardwareIpVersion) : hardwareIpVersion(hardwareIpVersion) {}
@@ -98,13 +102,16 @@ class ReleaseHelperHw : public ReleaseHelper {
     bool isRayTracingSupported() const override;
     uint32_t getAdditionalFp16Caps() const override;
     uint32_t getAdditionalExtraCaps() const override;
-    uint32_t getStackSizePerRay() const override;
+    uint32_t getAsyncStackSizePerRay() const override;
     bool isLocalOnlyAllowed() const override;
-    bool isDisablingMsaaRequired() const override;
     bool isDummyBlitWaRequired() const override;
+    bool isDirectSubmissionLightSupported() const override;
     const SizeToPreferredSlmValueArray &getSizeToPreferredSlmValue(bool isHeapless) const override;
-    bool isNumRtStacksPerDssFixedValue() const override;
     bool getFtrXe2Compression() const override;
+    bool programmAdditionalStallPriorToBarrierWithTimestamp() const override;
+    uint32_t computeSlmValues(uint32_t slmSize, bool isHeapless) const override;
+    bool isBlitImageAllowedForDepthFormat() const override;
+    bool isPostImageWriteFlushRequired() const override;
 
   protected:
     ReleaseHelperHw(HardwareIpVersion hardwareIpVersion) : ReleaseHelper(hardwareIpVersion) {}

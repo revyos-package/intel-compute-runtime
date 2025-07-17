@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -12,8 +12,6 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/mocks/mock_migration_sync_data.h"
-#include "shared/test/common/mocks/mock_multi_graphics_allocation.h"
-#include "shared/test/common/test_macros/test.h"
 
 #include "opencl/source/memory_manager/migration_controller.h"
 #include "opencl/test/unit_test/fixtures/buffer_fixture.h"
@@ -33,7 +31,7 @@ struct MigrationControllerTests : public ::testing::Test {
             memoryManager->localMemorySupported[rootDeviceIndex] = true;
         }
         auto &compilerProductHelper = context.getDevice(0)->getCompilerProductHelper();
-        auto heapless = compilerProductHelper.isHeaplessModeEnabled();
+        auto heapless = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
         heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(heapless);
     }
     void TearDown() override {
@@ -46,7 +44,7 @@ struct MigrationControllerTests : public ::testing::Test {
 };
 
 HWTEST2_F(MigrationControllerTests, givenAllocationWithUndefinedLocationWhenHandleMigrationThenNoMigrationIsPerformedAndProperLocationIsSet, MatchAny) {
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
     EXPECT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
     EXPECT_EQ(MigrationSyncData::locationUndefined, pImage->getMultiGraphicsAllocation().getMigrationSyncData()->getCurrentLocation());
@@ -59,7 +57,7 @@ HWTEST2_F(MigrationControllerTests, givenAllocationWithUndefinedLocationWhenHand
 }
 
 HWTEST2_F(MigrationControllerTests, givenAllocationWithDefinedLocationWhenHandleMigrationToTheSameLocationThenDontMigrateMemory, MatchAny) {
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
     EXPECT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
     pImage->getMultiGraphicsAllocation().getMigrationSyncData()->setCurrentLocation(1);
@@ -74,7 +72,7 @@ HWTEST2_F(MigrationControllerTests, givenAllocationWithDefinedLocationWhenHandle
 
 HWTEST2_F(MigrationControllerTests, givenNotLockableImageAllocationWithDefinedLocationWhenHandleMigrationToDifferentLocationThenMigrateMemoryViaReadWriteImage, MatchAny) {
     REQUIRE_IMAGE_SUPPORT_OR_SKIP(&context);
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
     EXPECT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
     auto srcAllocation = pImage->getMultiGraphicsAllocation().getGraphicsAllocation(0);
@@ -86,6 +84,9 @@ HWTEST2_F(MigrationControllerTests, givenNotLockableImageAllocationWithDefinedLo
     EXPECT_FALSE(srcAllocation->isAllocationLockable());
     EXPECT_FALSE(dstAllocation->isAllocationLockable());
 
+    const auto csr0LatestFlushedTaskCountBefore = pCsr0->peekLatestFlushedTaskCount();
+    const auto csr1LatestFlushedTaskCountBefore = pCsr1->peekLatestFlushedTaskCount();
+
     pImage->getMultiGraphicsAllocation().getMigrationSyncData()->setCurrentLocation(0);
     EXPECT_EQ(0u, pImage->getMultiGraphicsAllocation().getMigrationSyncData()->getCurrentLocation());
     MigrationController::handleMigration(context, *pCsr1, pImage.get());
@@ -93,8 +94,8 @@ HWTEST2_F(MigrationControllerTests, givenNotLockableImageAllocationWithDefinedLo
 
     EXPECT_EQ(0u, memoryManager->lockResourceCalled);
     EXPECT_EQ(0u, memoryManager->unlockResourceCalled);
-    EXPECT_EQ(1u, pCsr1->peekLatestFlushedTaskCount());
-    EXPECT_EQ(1u, pCsr0->peekLatestFlushedTaskCount());
+    EXPECT_EQ(csr0LatestFlushedTaskCountBefore + 1, pCsr0->peekLatestFlushedTaskCount());
+    EXPECT_EQ(csr1LatestFlushedTaskCountBefore + 1, pCsr1->peekLatestFlushedTaskCount());
 }
 
 HWTEST2_F(MigrationControllerTests, givenNotLockableBufferAllocationWithDefinedLocationWhenHandleMigrationToDifferentLocationThenMigrateMemoryViaReadWriteBuffer, MatchAny) {
@@ -162,7 +163,7 @@ HWTEST2_F(MigrationControllerTests, givenMultiGraphicsAllocationUsedInOneCsrWhen
         return new MockMigrationSyncData(size);
     };
 
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
 
     ASSERT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
@@ -188,7 +189,7 @@ HWTEST2_F(MigrationControllerTests, givenMultiGraphicsAllocationUsedInOneCsrWhen
         return new MockMigrationSyncData(size);
     };
 
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
 
     ASSERT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
@@ -217,7 +218,7 @@ HWTEST2_F(MigrationControllerTests, givenMultiGraphicsAllocationUsedInOneCsrWhen
         return new MockMigrationSyncData(size);
     };
 
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
 
     ASSERT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 
@@ -244,7 +245,7 @@ HWTEST2_F(MigrationControllerTests, whenHandleMigrationThenProperTagAddressAndTa
         return new MockMigrationSyncData(size);
     };
 
-    std::unique_ptr<Image> pImage(Image1dHelper<>::create(&context));
+    std::unique_ptr<Image> pImage(Image1dHelperUlt<>::create(&context));
 
     ASSERT_TRUE(pImage->getMultiGraphicsAllocation().requiresMigrations());
 

@@ -128,7 +128,10 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMap(cl_bool blockingMap,
         dc.direction = csrSelectionArgs.direction;
 
         MultiDispatchInfo dispatchInfo(dc);
-        const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, EBuiltInOps::copyBufferToBuffer, numEventsInWaitList, eventWaitList, event, blocking, csr);
+        const bool useStateless = forceStateless(svmData->size);
+        const bool useHeapless = this->getHeaplessModeEnabled();
+        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(useStateless, useHeapless);
+        const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, eBuiltInOps, numEventsInWaitList, eventWaitList, event, blocking, csr);
         if (dispatchResult != CL_SUCCESS) {
             return dispatchResult;
         }
@@ -216,7 +219,10 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMUnmap(void *svmPtr,
         dc.direction = csrSelectionArgs.direction;
 
         MultiDispatchInfo dispatchInfo(dc);
-        const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, EBuiltInOps::copyBufferToBuffer, numEventsInWaitList, eventWaitList, event, false, csr);
+        const bool useStateless = forceStateless(svmData->size);
+        const bool useHeapless = this->getHeaplessModeEnabled();
+        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(useStateless, useHeapless);
+        const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, eBuiltInOps, numEventsInWaitList, eventWaitList, event, false, csr);
         if (dispatchResult != CL_SUCCESS) {
             return dispatchResult;
         }
@@ -504,10 +510,12 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMemFill(void *svmPtr,
     }
 
     if (patternSize == 1) {
-        int patternInt = (uint32_t)((*(uint8_t *)pattern << 24) | (*(uint8_t *)pattern << 16) | (*(uint8_t *)pattern << 8) | *(uint8_t *)pattern);
+        auto patternValue = *reinterpret_cast<const uint8_t *>(pattern);
+        int patternInt = static_cast<uint32_t>((patternValue << 24) | (patternValue << 16) | (patternValue << 8) | patternValue);
         memcpy_s(patternAllocation->getUnderlyingBuffer(), sizeof(uint32_t), &patternInt, sizeof(uint32_t));
     } else if (patternSize == 2) {
-        int patternInt = (uint32_t)((*(uint16_t *)pattern << 16) | *(uint16_t *)pattern);
+        auto patternValue = *reinterpret_cast<const uint16_t *>(pattern);
+        int patternInt = static_cast<uint32_t>((patternValue << 16) | patternValue);
         memcpy_s(patternAllocation->getUnderlyingBuffer(), sizeof(uint32_t), &patternInt, sizeof(uint32_t));
     } else {
         memcpy_s(patternAllocation->getUnderlyingBuffer(), patternSize, pattern, patternSize);

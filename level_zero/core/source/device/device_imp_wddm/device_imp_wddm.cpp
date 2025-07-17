@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -32,13 +32,18 @@ ze_result_t DeviceImp::getExternalMemoryProperties(ze_device_external_memory_pro
     pExternalMemoryProperties->imageExportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32;
     pExternalMemoryProperties->imageImportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32 |
                                                   ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D12_HEAP |
-                                                  ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D12_RESOURCE;
+                                                  ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D12_RESOURCE |
+                                                  ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D11_TEXTURE;
     pExternalMemoryProperties->memoryAllocationExportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32;
     pExternalMemoryProperties->memoryAllocationImportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32 |
                                                              ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D12_HEAP |
                                                              ZE_EXTERNAL_MEMORY_TYPE_FLAG_D3D12_RESOURCE;
 
     return ZE_RESULT_SUCCESS;
+}
+
+ze_result_t DeviceImp::queryFabricStats(DeviceImp *pPeerDevice, uint32_t &latency, uint32_t &bandwidth) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
 }
 
 } // namespace L0

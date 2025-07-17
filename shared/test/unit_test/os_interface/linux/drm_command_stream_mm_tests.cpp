@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -40,6 +40,7 @@ struct DrmCommandStreamMemExecTest : public DrmCommandStreamEnhancedTemplate<Drm
 HWTEST_F(DrmCommandStreamMMTest, GivenForcePinThenMemoryManagerCreatesPinBb) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.EnableForcePin.set(true);
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
 
     MockExecutionEnvironment executionEnvironment;
     auto drm = DrmMockCustom::create(*executionEnvironment.rootDeviceEnvironments[0]).release();
@@ -49,7 +50,7 @@ HWTEST_F(DrmCommandStreamMMTest, GivenForcePinThenMemoryManagerCreatesPinBb) {
     executionEnvironment.rootDeviceEnvironments[0]->memoryOperationsInterface = DrmMemoryOperationsHandler::create(*drm, 0u, false);
     executionEnvironment.rootDeviceEnvironments[0]->initGmm();
 
-    DrmCommandStreamReceiver<FamilyType> csr(executionEnvironment, 0, 1, GemCloseWorkerMode::gemCloseWorkerInactive);
+    DrmCommandStreamReceiver<FamilyType> csr(executionEnvironment, 0, 1);
 
     auto memoryManager = new TestedDrmMemoryManager(false, true, false, executionEnvironment);
     executionEnvironment.memoryManager.reset(memoryManager);
@@ -60,6 +61,7 @@ HWTEST_F(DrmCommandStreamMMTest, GivenForcePinThenMemoryManagerCreatesPinBb) {
 HWTEST_F(DrmCommandStreamMMTest, givenForcePinDisabledWhenMemoryManagerIsCreatedThenPinBBIsCreated) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.EnableForcePin.set(false);
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
 
     MockExecutionEnvironment executionEnvironment;
     auto drm = DrmMockCustom::create(*executionEnvironment.rootDeviceEnvironments[0]).release();
@@ -69,7 +71,7 @@ HWTEST_F(DrmCommandStreamMMTest, givenForcePinDisabledWhenMemoryManagerIsCreated
     executionEnvironment.rootDeviceEnvironments[0]->osInterface->setDriverModel(std::unique_ptr<DriverModel>(drm));
     executionEnvironment.rootDeviceEnvironments[0]->initGmm();
 
-    DrmCommandStreamReceiver<FamilyType> csr(executionEnvironment, 0, 1, GemCloseWorkerMode::gemCloseWorkerInactive);
+    DrmCommandStreamReceiver<FamilyType> csr(executionEnvironment, 0, 1);
     auto memoryManager = new TestedDrmMemoryManager(false, true, false, executionEnvironment);
 
     executionEnvironment.memoryManager.reset(memoryManager);
@@ -104,6 +106,9 @@ HWTEST_TEMPLATED_F(DrmCommandStreamMemExecTest, GivenDrmSupportsVmBindAndComplet
     mock->isVmBindAvailableCall.callParent = false;
     mock->isVmBindAvailableCall.returnValue = true;
 
+    auto *testCsr = static_cast<TestedDrmCommandStreamReceiver<FamilyType> *>(csr);
+    *const_cast<bool *>(&testCsr->vmBindAvailable) = true;
+
     TestedBufferObject bo(rootDeviceIndex, mock, 128);
     MockDrmAllocation cmdBuffer(rootDeviceIndex, AllocationType::commandBuffer, MemoryPool::system4KBPages);
     cmdBuffer.bufferObjects[0] = &bo;
@@ -121,7 +126,6 @@ HWTEST_TEMPLATED_F(DrmCommandStreamMemExecTest, GivenDrmSupportsVmBindAndComplet
     csr->makeResident(*csr->getTagAllocation());
 
     uint64_t expectedCompletionGpuAddress = csr->getTagAllocation()->getGpuAddress() + TagAllocationLayout::completionFenceOffset;
-    auto *testCsr = static_cast<TestedDrmCommandStreamReceiver<FamilyType> *>(csr);
     testCsr->latestSentTaskCount = 2;
 
     int ret = testCsr->exec(batchBuffer, 1, 2, 0);

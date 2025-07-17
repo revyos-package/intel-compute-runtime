@@ -1,37 +1,21 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/built_ins/sip.h"
-#include "shared/source/command_stream/device_command_stream.h"
-#include "shared/source/command_stream/linear_stream.h"
-#include "shared/source/command_stream/preemption.h"
-#include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/ptr_math.h"
-#include "shared/source/helpers/timestamp_packet.h"
-#include "shared/source/os_interface/linux/allocator_helper.h"
 #include "shared/source/os_interface/linux/drm_allocation.h"
 #include "shared/source/os_interface/linux/drm_buffer_object.h"
-#include "shared/source/os_interface/linux/drm_command_stream.h"
-#include "shared/source/os_interface/linux/drm_memory_manager.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/helpers/gtest_helpers.h"
-#include "shared/test/common/helpers/unit_test_helper.h"
-#include "shared/test/common/libult/linux/drm_mock.h"
-#include "shared/test/common/mocks/linux/mock_drm_allocation.h"
-#include "shared/test/common/mocks/linux/mock_drm_command_stream_receiver.h"
 #include "shared/test/common/mocks/linux/mock_drm_memory_manager.h"
 #include "shared/test/common/mocks/mock_gmm.h"
 #include "shared/test/common/os_interface/linux/drm_memory_manager_fixture.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
-#include "opencl/source/command_queue/command_queue.h"
-#include "opencl/source/event/event.h"
 #include "opencl/source/helpers/cl_memory_properties_helpers.h"
 #include "opencl/source/mem_obj/buffer.h"
 #include "opencl/source/mem_obj/image.h"
@@ -48,23 +32,26 @@ using namespace NEO;
 using DrmMemoryManagerTest = Test<DrmMemoryManagerFixture>;
 
 struct ClDrmMemoryManagerTest : public DrmMemoryManagerTest {
-    void SetUp() override {
+    template <typename GfxFamily>
+    void setUpT() {
         MemoryManagementFixture::setUp();
 
         executionEnvironment = MockClDevice::prepareExecutionEnvironment(defaultHwInfo.get(), numRootDevices - 1);
-        DrmMemoryManagerFixture::setUp(DrmMockCustom::create(*executionEnvironment->rootDeviceEnvironments[0]).release(), false);
+        DrmMemoryManagerFixture::setUpT<GfxFamily>(DrmMockCustom::create(*executionEnvironment->rootDeviceEnvironments[0]).release(), false);
         pClDevice = new MockClDevice{device}; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
         device->incRefInternal();
     }
-    void TearDown() override {
+
+    template <typename GfxFamily>
+    void tearDownT() {
         delete pClDevice;
-        DrmMemoryManagerTest::TearDown();
+        DrmMemoryManagerFixture::tearDownT<GfxFamily>();
     }
 
     MockClDevice *pClDevice = nullptr;
 };
 
-TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferAllocationThen32BitBufferIsReturned) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferAllocationThen32BitBufferIsReturned) {
     DebugManagerStateRestore dbgRestorer;
     mock->ioctlExpected.gemUserptr = 1;
     mock->ioctlExpected.gemWait = 1;
@@ -94,7 +81,7 @@ TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferAllocationTh
     delete buffer;
 }
 
-TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFromHostPtrThen32BitBufferIsReturned) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFromHostPtrThen32BitBufferIsReturned) {
     DebugManagerStateRestore dbgRestorer;
     mock->ioctlExpected.gemUserptr = 1;
     mock->ioctlExpected.gemWait = 1;
@@ -150,7 +137,7 @@ TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFromH
     delete buffer;
 }
 
-TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFrom64BitHostPtrThen32BitBufferIsReturned) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFrom64BitHostPtrThen32BitBufferIsReturned) {
     DebugManagerStateRestore dbgRestorer;
     {
         if (is32bit) {
@@ -203,7 +190,7 @@ TEST_F(ClDrmMemoryManagerTest, Given32bitAllocatorWhenAskedForBufferCreatedFrom6
     }
 }
 
-TEST_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenUseHostPtrAndAllocHostPtrAreCreatedThenFirstSucceedsAndSecondFails) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenUseHostPtrAndAllocHostPtrAreCreatedThenFirstSucceedsAndSecondFails) {
     DebugManagerStateRestore dbgRestorer;
     mock->ioctlExpected.total = -1;
     debugManager.flags.Force32bitAddressing.set(true);
@@ -244,7 +231,7 @@ TEST_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenUseHostPtrAndAllocHostPtrAre
     delete buffer;
 }
 
-TEST_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenAllocHostPtrAndUseHostPtrAreCreatedThenFirstSucceedsAndSecondFails) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenAllocHostPtrAndUseHostPtrAreCreatedThenFirstSucceedsAndSecondFails) {
     DebugManagerStateRestore dbgRestorer;
     mock->ioctlExpected.total = -1;
     debugManager.flags.Force32bitAddressing.set(true);
@@ -285,7 +272,7 @@ TEST_F(ClDrmMemoryManagerTest, GivenSizeAbove2GBWhenAllocHostPtrAndUseHostPtrAre
     delete buffer;
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmBufferWhenItIsQueriedForInternalAllocationThenBoIsReturned) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmBufferWhenItIsQueriedForInternalAllocationThenBoIsReturned) {
     mock->ioctlExpected.total = -1;
     mock->outputFd = 1337;
     MockContext context(pClDevice);
@@ -310,7 +297,7 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmBufferWhenItIsQueriedForInternalAllocatio
     clReleaseMemObject(buffer);
 }
 
-HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCountZeroIsBeingCreatedThenallocateGraphicsMemoryForImageIsUsed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCountZeroIsBeingCreatedThenallocateGraphicsMemoryForImageIsUsed) {
     if (!defaultHwInfo->capabilityTable.supportsImages) {
         GTEST_SKIP();
     }
@@ -358,7 +345,7 @@ HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCount
     EXPECT_EQ(1u, this->mock->setTilingHandle);
 }
 
-HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCountNonZeroIsBeingCreatedThenallocateGraphicsMemoryForImageIsUsed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCountNonZeroIsBeingCreatedThenallocateGraphicsMemoryForImageIsUsed) {
     if (!defaultHwInfo->capabilityTable.supportsImages) {
         GTEST_SKIP();
     }
@@ -408,7 +395,7 @@ HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageWithMipCount
     EXPECT_EQ(1u, this->mock->setTilingHandle);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreatedAndAllocationFailsThenReturnNullptr) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreatedAndAllocationFailsThenReturnNullptr) {
     MockContext context(pClDevice);
 
     cl_image_format imageFormat;
@@ -440,22 +427,19 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreated
     mock->reset();
 }
 
-HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreatedFromHostPtrThenAllocateGraphicsMemoryForImageIsUsed) {
+HWTEST2_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreatedFromHostPtrThenAllocateGraphicsMemoryForImageIsUsed, IsAtMostXe3Core) {
     if (!defaultHwInfo->capabilityTable.supportsImages) {
         GTEST_SKIP();
     }
 
     device->setPreemptionMode(PreemptionMode::Disabled);
 
-    auto csr = static_cast<TestedDrmCommandStreamReceiver<DEFAULT_TEST_FAMILY_NAME> *>(device->getDefaultEngine().commandStreamReceiver);
-    csr->flushInternalCallBase = false;
-
     mock->ioctlExpected.gemCreate = 1;
     mock->ioctlExpected.gemSetTiling = 1;
     mock->ioctlExpected.gemWait = 2;
     mock->ioctlExpected.gemClose = 2;
     mock->ioctlExpected.gemUserptr = 1;
-    mock->ioctlExpected.execbuffer2 = 0;
+    mock->ioctlExpected.execbuffer2 = 1;
 
     // builtins kernels
     mock->ioctlExpected.gemUserptr += 7;
@@ -525,7 +509,7 @@ HWTEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenTiledImageIsBeingCreat
     alignedFree(data);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenMemoryAllocatedForImageThenUnmapSizeCorrectlySetWhenLimitedRangeAllocationUsedOrNotUsed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenMemoryAllocatedForImageThenUnmapSizeCorrectlySetWhenLimitedRangeAllocationUsedOrNotUsed) {
     mock->ioctlExpected.gemUserptr = 2;
     mock->ioctlExpected.gemWait = 2;
     mock->ioctlExpected.gemClose = 2;
@@ -558,7 +542,7 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenMemoryAllocatedForImageT
     alignedFree(data);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountZeroisBeingCreatedThenAllocateGraphicsMemoryIsUsed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountZeroisBeingCreatedThenAllocateGraphicsMemoryIsUsed) {
     mock->ioctlExpected.gemUserptr = 2;
     mock->ioctlExpected.gemWait = 2;
     mock->ioctlExpected.gemClose = 2;
@@ -605,7 +589,7 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountZ
     alignedFree(data);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountNonZeroisBeingCreatedThenAllocateGraphicsMemoryIsUsed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountNonZeroisBeingCreatedThenAllocateGraphicsMemoryIsUsed) {
     mock->ioctlExpected.gemUserptr = 1;
     mock->ioctlExpected.gemWait = 1;
     mock->ioctlExpected.gemClose = 1;
@@ -655,7 +639,7 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenNonTiledImgWithMipCountN
     alignedFree(data);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhen1DarrayImageIsBeingCreatedFromHostPtrThenTilingIsNotCalled) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhen1DarrayImageIsBeingCreatedFromHostPtrThenTilingIsNotCalled) {
     mock->ioctlExpected.gemUserptr = 2;
     mock->ioctlExpected.gemWait = 2;
     mock->ioctlExpected.gemClose = 2;
@@ -698,7 +682,7 @@ TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhen1DarrayImageIsBeingCreat
     alignedFree(data);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenHostPointerNotRequiringCopyWhenAllocateGraphicsMemoryForImageIsCalledThenGraphicsAllocationIsReturned) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenHostPointerNotRequiringCopyWhenAllocateGraphicsMemoryForImageIsCalledThenGraphicsAllocationIsReturned) {
     mock->ioctlExpected.gemUserptr = 1;
     mock->ioctlExpected.gemWait = 1;
     mock->ioctlExpected.gemClose = 1;
@@ -739,7 +723,7 @@ TEST_F(ClDrmMemoryManagerTest, givenHostPointerNotRequiringCopyWhenAllocateGraph
     alignedFree(hostPtr);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenOsHandleWithNonTiledObjectWhenCreateFromSharedHandleIsCalledThenNonTiledGmmIsCreatedAndSetInAllocation) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenOsHandleWithNonTiledObjectWhenCreateFromSharedHandleIsCalledThenNonTiledGmmIsCreatedAndSetInAllocation) {
     mock->ioctlExpected.primeFdToHandle = 1;
     mock->ioctlExpected.gemWait = 1;
     mock->ioctlExpected.gemClose = 1;
@@ -782,7 +766,7 @@ TEST_F(ClDrmMemoryManagerTest, givenOsHandleWithNonTiledObjectWhenCreateFromShar
     memoryManager->freeGraphicsMemory(graphicsAllocation);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenOsHandleWithTileYObjectWhenCreateFromSharedHandleIsCalledThenTileYGmmIsCreatedAndSetInAllocation) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenOsHandleWithTileYObjectWhenCreateFromSharedHandleIsCalledThenTileYGmmIsCreatedAndSetInAllocation) {
     mock->ioctlExpected.primeFdToHandle = 1;
     mock->ioctlExpected.gemWait = 1;
     mock->ioctlExpected.gemClose = 1;
@@ -824,7 +808,7 @@ TEST_F(ClDrmMemoryManagerTest, givenOsHandleWithTileYObjectWhenCreateFromSharedH
     memoryManager->freeGraphicsMemory(graphicsAllocation);
 }
 
-TEST_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenCreateFromSharedHandleFailsToCallGetTilingThenNonLinearStorageIsAssumed) {
+HWTEST_TEMPLATED_F(ClDrmMemoryManagerTest, givenDrmMemoryManagerWhenCreateFromSharedHandleFailsToCallGetTilingThenNonLinearStorageIsAssumed) {
     mock->ioctlExpected.primeFdToHandle = 1;
     mock->ioctlExpected.gemGetTiling = 1;
     mock->ioctlExpected.gemWait = 1;

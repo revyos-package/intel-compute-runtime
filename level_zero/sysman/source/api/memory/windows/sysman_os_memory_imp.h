@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -22,7 +22,7 @@ typedef PDH_STATUS(__stdcall *fn_PdhCloseQuery)(PDH_HQUERY hQuery);
 
 namespace L0 {
 namespace Sysman {
-class WddmMemoryImp : public OsMemory, NEO::NonCopyableOrMovableClass {
+class WddmMemoryImp : public OsMemory, NEO::NonCopyableAndNonMovableClass {
 
   public:
     ze_result_t getProperties(zes_mem_properties_t *pProperties) override;
@@ -48,7 +48,7 @@ class WddmMemoryImp : public OsMemory, NEO::NonCopyableOrMovableClass {
     bool pdhInitialized = false;
     bool pdhCounterAdded = false;
     PDH_HQUERY gpuQuery = nullptr;
-    PDH_HCOUNTER dedicatedUsage = nullptr;
+    PDH_HCOUNTER usage = nullptr;
     HINSTANCE hGetProcPDH = nullptr;
 };
 

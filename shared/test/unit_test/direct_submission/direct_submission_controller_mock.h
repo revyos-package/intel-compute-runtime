@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,7 +11,6 @@
 
 namespace NEO {
 struct DirectSubmissionControllerMock : public DirectSubmissionController {
-    using DirectSubmissionController::adjustTimeoutOnThrottleAndAcLineStatus;
     using DirectSubmissionController::bcsTimeoutDivisor;
     using DirectSubmissionController::checkNewSubmissions;
     using DirectSubmissionController::condVarMutex;
@@ -19,7 +18,6 @@ struct DirectSubmissionControllerMock : public DirectSubmissionController {
     using DirectSubmissionController::directSubmissions;
     using DirectSubmissionController::directSubmissionsMutex;
     using DirectSubmissionController::getSleepValue;
-    using DirectSubmissionController::getTimeoutParamsMapKey;
     using DirectSubmissionController::handlePagingFenceRequests;
     using DirectSubmissionController::keepControlling;
     using DirectSubmissionController::lastTerminateCpuTimestamp;
@@ -28,7 +26,6 @@ struct DirectSubmissionControllerMock : public DirectSubmissionController {
     using DirectSubmissionController::pagingFenceRequests;
     using DirectSubmissionController::timeout;
     using DirectSubmissionController::timeoutDivisor;
-    using DirectSubmissionController::timeoutParamsMap;
     using DirectSubmissionController::timeSinceLastCheck;
 
     bool sleep(std::unique_lock<std::mutex> &lock) override {

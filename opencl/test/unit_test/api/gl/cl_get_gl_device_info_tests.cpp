@@ -1,12 +1,9 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
-
-#include "shared/source/device/device.h"
-#include "shared/source/helpers/hw_info.h"
 
 #include "opencl/test/unit_test/api/cl_api_tests.h"
 
@@ -16,7 +13,6 @@ using namespace NEO;
 
 namespace ULT {
 
-//------------------------------------------------------------------------------
 struct GetDeviceInfoP : public ApiFixture<>, public ::testing::TestWithParam<uint32_t /*cl_device_info*/> {
     void SetUp() override {
         param = GetParam();
@@ -28,11 +24,13 @@ struct GetDeviceInfoP : public ApiFixture<>, public ::testing::TestWithParam<uin
     cl_device_info param;
 };
 
-typedef GetDeviceInfoP GetDeviceGlInfoStr;
+using GetDeviceGlInfoStr = GetDeviceInfoP;
 
 TEST_P(GetDeviceGlInfoStr, WhenGettingDeviceExtensionsThenExtensionsAreReportedCorrectly) {
     char *paramValue = nullptr;
     size_t paramRetSize = 0;
+    auto &productHelper = pDevice->getProductHelper();
+    bool clGLSharingAllowed = productHelper.isSharingWith3dOrMediaAllowed();
 
     cl_int retVal = clGetDeviceInfo(testedClDevice, param, 0, nullptr, &paramRetSize);
     EXPECT_EQ(CL_SUCCESS, retVal);
@@ -66,16 +64,26 @@ TEST_P(GetDeviceGlInfoStr, WhenGettingDeviceExtensionsThenExtensionsAreReportedC
             "cl_khr_priority_hints ",
             "cl_khr_throttle_hints ",
             "cl_khr_create_command_queue ",
-            "cl_khr_gl_depth_images",
-            "cl_khr_gl_event",
-            "cl_khr_gl_msaa_sharing",
         };
 
-        for (auto element = 0u; element < sizeof(supportedExtensions) / sizeof(supportedExtensions[0]); element++) {
-            auto foundOffset = extensionString.find(supportedExtensions[element]);
+        for (auto &element : supportedExtensions) {
+            auto foundOffset = extensionString.find(element);
             EXPECT_TRUE(foundOffset != std::string::npos);
             EXPECT_GE(foundOffset, currentOffset);
             currentOffset = foundOffset;
+        }
+
+        if (clGLSharingAllowed) {
+            std::string optionalSupportedExtensions[] = {
+                "cl_khr_gl_depth_images",
+                "cl_khr_gl_event",
+                "cl_khr_gl_msaa_sharing",
+            };
+
+            for (auto &element : optionalSupportedExtensions) {
+                auto foundOffset = extensionString.find(element);
+                EXPECT_TRUE(foundOffset != std::string::npos);
+            }
         }
     }
 

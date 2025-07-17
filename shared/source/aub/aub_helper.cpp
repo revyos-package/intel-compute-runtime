@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -43,7 +43,8 @@ bool AubHelper::isOneTimeAubWritableAllocationType(const AllocationType &type) {
     case AllocationType::syncDispatchToken:
         return true;
     case AllocationType::bufferHostMemory:
-        return NEO::debugManager.flags.SetBufferHostMemoryAlwaysAubWritable.get() ? false : true;
+        return NEO::debugManager.isTbxPageFaultManagerEnabled() ||
+               (NEO::debugManager.flags.SetBufferHostMemoryAlwaysAubWritable.get() == false);
     default:
         return false;
     }

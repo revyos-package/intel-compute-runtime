@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -19,15 +19,6 @@ namespace NEO {
 
 template <>
 void ProductHelperHw<IGFX_UNKNOWN>::adjustSamplerState(void *sampler, const HardwareInfo &hwInfo) const {
-}
-
-template <>
-const std::vector<uint32_t> ProductHelperHw<IGFX_UNKNOWN>::getSupportedLocalDispatchSizes(const HardwareInfo &hwInfo) const {
-    return {};
-}
-template <>
-uint32_t ProductHelperHw<IGFX_UNKNOWN>::getMaxLocalRegionSize(const HardwareInfo &hwInfo) const {
-    return 0;
 }
 
 template <>
@@ -59,7 +50,7 @@ uint64_t ProductHelperHw<IGFX_UNKNOWN>::getDeviceMemCapabilities() const {
 }
 
 template <>
-uint64_t ProductHelperHw<IGFX_UNKNOWN>::getSingleDeviceSharedMemCapabilities() const {
+uint64_t ProductHelperHw<IGFX_UNKNOWN>::getSingleDeviceSharedMemCapabilities(bool) const {
     return 0;
 }
 
@@ -163,11 +154,6 @@ bool ProductHelperHw<IGFX_UNKNOWN>::isDisableOverdispatchAvailable(const Hardwar
 }
 
 template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::allowCompression(const HardwareInfo &hwInfo) const {
-    return false;
-}
-
-template <>
 bool ProductHelperHw<IGFX_UNKNOWN>::isDirectSubmissionSupported(ReleaseHelper *releaseHelper) const {
     return false;
 }
@@ -198,7 +184,7 @@ bool ProductHelperHw<IGFX_UNKNOWN>::isNewResidencyModelSupported() const {
 }
 
 template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::deferMOCSToPatIndex() const {
+bool ProductHelperHw<IGFX_UNKNOWN>::deferMOCSToPatIndex(bool isWddmOnLinux) const {
     return false;
 }
 
@@ -282,36 +268,6 @@ bool ProductHelperHw<IGFX_UNKNOWN>::isDcFlushAllowed() const {
 }
 
 template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::isDcFlushMitigated() const {
-    return false;
-}
-
-template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::mitigateDcFlush() const {
-    return false;
-}
-
-template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::overridePatToUCAndTwoWayCohForDcFlushMitigation(AllocationType allocationType) const {
-    return false;
-}
-
-template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::overrideUsageForDcFlushMitigation(AllocationType allocationType) const {
-    return false;
-}
-
-template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::overridePatToUCAndOneWayCohForDcFlushMitigation(AllocationType allocationType) const {
-    return false;
-}
-
-template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::overrideCacheableForDcFlushMitigation(AllocationType allocationType) const {
-    return false;
-}
-
-template <>
 uint32_t ProductHelperHw<IGFX_UNKNOWN>::computeMaxNeededSubSliceSpace(const HardwareInfo &hwInfo) const {
     return hwInfo.gtSystemInfo.MaxSubSlicesSupported;
 }
@@ -322,17 +278,12 @@ bool ProductHelperHw<IGFX_UNKNOWN>::getUuid(NEO::DriverModel *driverModel, const
 }
 
 template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::isFlushTaskAllowed() const {
-    return false;
-}
-
-template <>
 bool ProductHelperHw<IGFX_UNKNOWN>::isCopyEngineSelectorEnabled(const HardwareInfo &hwInfo) const {
     return true;
 }
 
 template <>
-bool ProductHelperHw<IGFX_UNKNOWN>::isGlobalFenceInCommandStreamRequired(const HardwareInfo &hwInfo) const {
+bool ProductHelperHw<IGFX_UNKNOWN>::isReleaseGlobalFenceInCommandStreamRequired(const HardwareInfo &hwInfo) const {
     return false;
 }
 
@@ -353,10 +304,6 @@ bool ProductHelperHw<IGFX_UNKNOWN>::isVmBindPatIndexProgrammingSupported() const
 
 template <>
 void ProductHelperHw<IGFX_UNKNOWN>::updateScmCommand(void *const commandPtr, const StateComputeModeProperties &properties) const {
-}
-
-template <>
-void ProductHelperHw<IGFX_UNKNOWN>::enableCompression(HardwareInfo *hwInfo) const {
 }
 
 template <>
@@ -427,28 +374,33 @@ std::vector<uint32_t> ProductHelperHw<IGFX_UNKNOWN>::getSupportedNumGrfs(const R
     return {};
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isBufferPoolAllocatorSupported() const {
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isBufferPoolAllocatorSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isUsmPoolAllocatorSupported() const {
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isHostUsmPoolAllocatorSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isDeviceUsmAllocationReuseSupported() const {
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isDeviceUsmPoolAllocatorSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isHostUsmAllocationReuseSupported() const {
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isDeviceUsmAllocationReuseSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::useLocalPreferredForCacheableBuffers() const {
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isHostUsmAllocationReuseSupported() const {
+    return false;
+}
+
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::useLocalPreferredForCacheableBuffers() const {
     return false;
 }
 
@@ -511,6 +463,33 @@ uint32_t ProductHelperHw<IGFX_UNKNOWN>::getCacheLineSize() const {
 template <>
 bool ProductHelperHw<IGFX_UNKNOWN>::is48bResourceNeededForRayTracing() const {
     return true;
+}
+
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isCompressionForbidden(const HardwareInfo &hwInfo) const {
+    return false;
+}
+
+template <>
+void ProductHelperHw<IGFX_UNKNOWN>::setRenderCompressedFlags(HardwareInfo &hwInfo) const {}
+
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isResourceUncachedForCS(AllocationType allocationType) const {
+    return false;
+}
+
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isNonCoherentTimestampsModeEnabled() const {
+    return false;
+}
+
+template <>
+bool ProductHelperHw<IGFX_UNKNOWN>::isPidFdOrSocketForIpcSupported() const {
+    return false;
+}
+
+template <>
+void ProductHelperHw<IGFX_UNKNOWN>::overrideDirectSubmissionTimeouts(uint64_t &timeoutUs, uint64_t &maxTimeoutUs) const {
 }
 
 } // namespace NEO

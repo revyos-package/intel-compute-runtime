@@ -13,10 +13,11 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/affinity_mask.h
     ${CMAKE_CURRENT_SOURCE_DIR}/aligned_memory.h
     ${CMAKE_CURRENT_SOURCE_DIR}/api_gfx_core_helper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/api_specific_config.h
     ${CMAKE_CURRENT_SOURCE_DIR}/app_resource_defines.h
     ${CMAKE_CURRENT_SOURCE_DIR}/app_resource_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/app_resource_helper.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/api_specific_config.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/append_operations.h
     ${CMAKE_CURRENT_SOURCE_DIR}/array_count.h
     ${CMAKE_CURRENT_SOURCE_DIR}/aux_translation.h
     ${CMAKE_CURRENT_SOURCE_DIR}/basic_math.h
@@ -25,7 +26,6 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/bindless_heaps_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/bit_helpers.h
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_commands_helper_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/blit_commands_helper_bdw_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_commands_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_helper.h
@@ -42,7 +42,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/compiler_aot_config_bdw_and_later.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/compiler_aot_config_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper_before_xe_hp.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper_before_xe_hpc.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper_disable_subgroup_local_block_io.inl
@@ -68,8 +68,10 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/engine_node_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine_node_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/extendable_enum.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/fence_type.h
     ${CMAKE_CURRENT_SOURCE_DIR}/file_io_load.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/file_io.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/fill_pattern_tag_node.h
     ${CMAKE_CURRENT_SOURCE_DIR}/flat_batch_buffer_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/flat_batch_buffer_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flat_batch_buffer_helper_hw.h
@@ -88,7 +90,6 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_bdw_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_bdw_to_dg2.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_bdw_to_icllp.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_pvc_and_later.inl
@@ -144,7 +145,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address.h
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_base.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_bdw.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_bdw_and_later.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_icllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_skl.inl
@@ -167,6 +168,8 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/engine_group_types.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/command_encoder_args.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/indirect_detection_versions.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/image_helper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}${BRANCH_DIR_SUFFIX}image_helper.cpp
 )
 
 if(WIN32)
@@ -232,6 +235,12 @@ if(SUPPORT_XE3_AND_LATER)
   list(APPEND NEO_CORE_HELPERS
        ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_xe3_and_later.inl
        ${CMAKE_CURRENT_SOURCE_DIR}/preamble_xe3_and_later.inl
+  )
+endif()
+
+if(SUPPORT_XE3_AND_BEFORE)
+  list(APPEND NEO_CORE_HELPERS
+       ${CMAKE_CURRENT_SOURCE_DIR}/blit_commands_helper_from_gen12lp_to_xe3.inl
   )
 endif()
 

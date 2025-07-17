@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -21,7 +21,9 @@
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
+#include "shared/test/common/mocks/mock_release_helper.h"
 #include "shared/test/common/test_macros/hw_test.h"
+#include "shared/test/unit_test/fixtures/command_container_fixture.h"
 
 #include "level_zero/core/source/cmdlist/cmdlist_hw_immediate.h"
 #include "level_zero/core/source/event/event.h"
@@ -30,6 +32,10 @@
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdlist.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdqueue.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_module.h"
+
+#include "test_traits_common.h"
+using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 namespace L0 {
 namespace ult {
@@ -49,7 +55,7 @@ HWTEST_F(CommandListAppendLaunchKernelMockModule, givenKernelWithIndirectAllocat
     ze_result_t returnValue;
     CmdListKernelLaunchParams launchParams = {};
     {
-        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
         EXPECT_TRUE(commandList->hasIndirectAllocationsAllowed());
     }
@@ -61,7 +67,7 @@ HWTEST_F(CommandListAppendLaunchKernelMockModule, givenKernelWithIndirectAllocat
         kernel->unifiedMemoryControls.indirectSharedAllocationsAllowed = true;
         kernel->unifiedMemoryControls.indirectHostAllocationsAllowed = false;
 
-        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
         EXPECT_TRUE(commandList->hasIndirectAllocationsAllowed());
     }
@@ -73,7 +79,7 @@ HWTEST_F(CommandListAppendLaunchKernelMockModule, givenKernelWithIndirectAllocat
         kernel->unifiedMemoryControls.indirectSharedAllocationsAllowed = false;
         kernel->unifiedMemoryControls.indirectHostAllocationsAllowed = false;
 
-        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
         EXPECT_TRUE(commandList->hasIndirectAllocationsAllowed());
     }
@@ -90,7 +96,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithIndirectAllocationsNotAll
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     ASSERT_FALSE(commandList->hasIndirectAllocationsAllowed());
@@ -123,7 +129,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithStallRRThreadArbitrationP
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithThreadArbitrationPolicySetUsingSchedulingHintExtensionTheSameFlagIsUsedToSetCmdListThreadArbitrationPolicy) {
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    if (compilerProductHelper.isHeaplessModeEnabled()) {
+    if (compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo)) {
         GTEST_SKIP();
     }
 
@@ -140,14 +146,21 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithThreadArbitrationPolicySe
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     ASSERT_EQ(NEO::ThreadArbitrationPolicy::RoundRobin, commandList->getFinalStreamState().stateComputeMode.threadArbitrationPolicy.value);
     delete (pHint);
 }
 
-HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithThreadArbitrationPolicySetUsingSchedulingHintExtensionAndOverrideThreadArbitrationPolicyThenTheLatterIsUsedToSetCmdListThreadArbitrationPolicy) {
+struct CommandListAppendLaunchKernelNonHeapless {
+    template <PRODUCT_FAMILY productFamily>
+    static constexpr bool isMatched() {
+        return !(TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::heaplessRequired);
+    }
+};
+
+HWTEST2_F(CommandListAppendLaunchKernel, givenKernelWithThreadArbitrationPolicySetUsingSchedulingHintExtensionAndOverrideThreadArbitrationPolicyThenTheLatterIsUsedToSetCmdListThreadArbitrationPolicy, CommandListAppendLaunchKernelNonHeapless) {
     createKernel();
     ze_scheduling_hint_exp_desc_t *pHint = new ze_scheduling_hint_exp_desc_t;
     pHint->pNext = nullptr;
@@ -164,14 +177,14 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithThreadArbitrationPolicySe
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
 
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     ASSERT_EQ(NEO::ThreadArbitrationPolicy::AgeBased, commandList->getFinalStreamState().stateComputeMode.threadArbitrationPolicy.value);
     delete (pHint);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenNotEnoughSpaceInCommandStreamWhenAppendingKernelThenBbEndIsAddedAndNewCmdBufferAllocated, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenNotEnoughSpaceInCommandStreamWhenAppendingKernelThenBbEndIsAddedAndNewCmdBufferAllocated) {
     using MI_BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
 
@@ -195,46 +208,9 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenNotEnoughSpaceInCommandStreamWhenA
 
     const uint32_t threadGroupDimensions[3] = {1, 1, 1};
 
-    NEO::EncodeDispatchKernelArgs dispatchKernelArgs{
-        0,                                        // eventAddress
-        0,                                        // postSyncImmValue
-        0,                                        // inOrderCounterValue
-        device->getNEODevice(),                   // device
-        nullptr,                                  // inOrderExecInfo
-        kernel.get(),                             // dispatchInterface
-        nullptr,                                  // surfaceStateHeap
-        nullptr,                                  // dynamicStateHeap
-        threadGroupDimensions,                    // threadGroupDimensions
-        nullptr,                                  // outWalkerPtr
-        nullptr,                                  // cpuWalkerBuffer
-        nullptr,                                  // cpuPayloadBuffer
-        nullptr,                                  // outImplicitArgsPtr
-        nullptr,                                  // additionalCommands
-        PreemptionMode::MidBatch,                 // preemptionMode
-        NEO::RequiredPartitionDim::none,          // requiredPartitionDim
-        NEO::RequiredDispatchWalkOrder::none,     // requiredDispatchWalkOrder
-        NEO::localRegionSizeParamNotSet,          // localRegionSize
-        0,                                        // partitionCount
-        0,                                        // reserveExtraPayloadSpace
-        1,                                        // maxWgCountPerTile
-        NEO::ThreadArbitrationPolicy::NotPresent, // defaultPipelinedThreadArbitrationPolicy
-        false,                                    // isIndirect
-        false,                                    // isPredicate
-        false,                                    // isTimestampEvent
-        false,                                    // requiresUncachedMocs
-        false,                                    // isInternal
-        false,                                    // isCooperative
-        false,                                    // isHostScopeSignalEvent
-        false,                                    // isKernelUsingSystemAllocation
-        false,                                    // isKernelDispatchedFromImmediateCmdList
-        false,                                    // isRcs
-        commandList->getDcFlushRequired(true),    // dcFlushEnable
-        false,                                    // isHeaplessModeEnabled
-        false,                                    // isHeaplessStateInitEnabled
-        false,                                    // interruptEvent
-        false,                                    // immediateScratchAddressPatching
-        false,                                    // makeCommandView
-    };
+    auto dispatchKernelArgs = CommandEncodeStatesFixture::createDefaultDispatchKernelArgs(device->getNEODevice(), kernel.get(), threadGroupDimensions, false);
+    dispatchKernelArgs.postSyncArgs.dcFlushEnable = commandList->getDcFlushRequired(true);
+
     NEO::EncodeDispatchKernel<FamilyType>::template encode<DefaultWalkerType>(commandContainer, dispatchKernelArgs);
 
     auto usedSpaceAfter = commandContainer.getCommandStream()->getUsed();
@@ -265,7 +241,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfUsedWhenAppendedToC
     static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer().push_back(std::shared_ptr<Kernel>{kernel});
 
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
 
     EXPECT_EQ(1u, commandList->getPrintfKernelContainer().size());
     EXPECT_EQ(kernel, commandList->getPrintfKernelContainer()[0].lock().get());
@@ -283,19 +259,16 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfUsedWhenAppendedToC
     static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer().push_back(std::shared_ptr<Kernel>{kernel});
 
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
 
     EXPECT_EQ(1u, commandList->getPrintfKernelContainer().size());
     EXPECT_EQ(kernel, commandList->getPrintfKernelContainer()[0].lock().get());
 
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(1u, commandList->getPrintfKernelContainer().size());
 }
 
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendedToSynchronousImmCommandListThenPrintfBufferIsPrinted) {
-    DebugManagerStateRestore dbgRestorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t returnValue;
     ze_command_queue_desc_t queueDesc = {};
     queueDesc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
@@ -311,21 +284,18 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendedToSynch
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_FALSE(kernel->hangDetectedPassedToPrintfOutput);
     EXPECT_EQ(0u, commandList->getPrintfKernelContainer().size());
 
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(2u, kernel->printPrintfOutputCalledTimes);
     EXPECT_FALSE(kernel->hangDetectedPassedToPrintfOutput);
     EXPECT_EQ(0u, commandList->getPrintfKernelContainer().size());
 }
 
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendedToAsynchronousImmCommandListThenPrintfBufferIsNotPrintedUntilHostSync) {
-    DebugManagerStateRestore dbgRestorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t returnValue;
     ze_command_queue_desc_t queueDesc = {};
     queueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
@@ -340,14 +310,14 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendedToAsync
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_FALSE(kernel->hangDetectedPassedToPrintfOutput);
     EXPECT_EQ(0u, commandList->getPrintfKernelContainer().size());
 
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
     EXPECT_EQ(2u, kernel->printPrintfOutputCalledTimes);
@@ -356,9 +326,6 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendedToAsync
 }
 
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendToSynchronousImmCommandListHangsThenPrintfBufferIsPrinted) {
-    DebugManagerStateRestore dbgRestorer;
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t returnValue;
     ze_command_queue_desc_t queueDesc = {};
     queueDesc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
@@ -379,12 +346,12 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfWhenAppendToSynchro
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_ERROR_DEVICE_LOST, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_ERROR_DEVICE_LOST, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_TRUE(kernel->hangDetectedPassedToPrintfOutput);
     EXPECT_EQ(0u, commandList->getPrintfKernelContainer().size());
 
-    EXPECT_EQ(ZE_RESULT_ERROR_DEVICE_LOST, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_ERROR_DEVICE_LOST, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(2u, kernel->printPrintfOutputCalledTimes);
     EXPECT_TRUE(kernel->hangDetectedPassedToPrintfOutput);
     EXPECT_EQ(0u, commandList->getPrintfKernelContainer().size());
@@ -415,14 +382,14 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAppendedToCommandLi
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->close());
     EXPECT_EQ(1u, commandList->getPrintfKernelContainer().size());
     EXPECT_EQ(kernel, commandList->getPrintfKernelContainer()[0].lock().get());
 
     auto commandListHandle = commandList->toHandle();
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr, nullptr));
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->synchronize(std::numeric_limits<uint64_t>::max()));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->destroy());
@@ -475,7 +442,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToC
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams));
     EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
     EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->close());
@@ -484,7 +451,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToC
 
     auto commandListHandle = commandList->toHandle();
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr, nullptr));
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->synchronize(std::numeric_limits<uint64_t>::max()));
     *reinterpret_cast<uint32_t *>(event->getHostAddress()) = Event::STATE_SIGNALED;
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
@@ -542,7 +509,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToC
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams));
     EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
     EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->close());
@@ -551,7 +518,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToC
 
     auto commandListHandle = commandList->toHandle();
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr, nullptr));
     *reinterpret_cast<uint32_t *>(event->getHostAddress()) = Event::STATE_SIGNALED;
     EXPECT_EQ(ZE_RESULT_SUCCESS, event->hostSynchronize(std::numeric_limits<uint64_t>::max()));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
@@ -568,147 +535,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToC
     commandQueue->destroy();
 }
 
-HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAppendedToImmCommandListWithoutFlushTaskSubmissionAndDestroyKernelAfterListSyncThenSuccessIsReturned) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(0);
-
-    ze_result_t result;
-    ze_command_queue_desc_t queueDesc{};
-    queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
-    queueDesc.pNext = nullptr;
-    queueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
-    queueDesc.ordinal = 0u;
-    queueDesc.index = 0u;
-    std::unique_ptr<L0::CommandList> commandList(CommandList::createImmediate(productFamily, device, &queueDesc, false, NEO::EngineGroupType::renderCompute, result));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-
-    auto kernel = new Mock<KernelImp>{};
-    kernel->module = module.get();
-    kernel->descriptor.kernelAttributes.flags.usesPrintf = true;
-    kernel->createPrintfBuffer();
-    static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer().push_back(std::shared_ptr<Kernel>{kernel});
-
-    EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    ze_group_count_t groupCount{1, 1, 1};
-    CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
-    EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->destroy());
-    EXPECT_EQ(nullptr, static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer()[0].get());
-}
-
-HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToImmCommandListWithoutFlushTaskSubmissionAndDestroyKernelAfterListSyncThenSuccessIsReturnedAndEventSyncDoesNotAccessKernel) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(0);
-
-    ze_result_t result;
-    ze_command_queue_desc_t queueDesc{};
-    queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
-    queueDesc.pNext = nullptr;
-    queueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
-    queueDesc.ordinal = 0u;
-    queueDesc.index = 0u;
-    std::unique_ptr<L0::CommandList> commandList(CommandList::createImmediate(productFamily, device, &queueDesc, false, NEO::EngineGroupType::renderCompute, result));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-
-    auto kernel = new Mock<KernelImp>{};
-    kernel->module = module.get();
-    kernel->descriptor.kernelAttributes.flags.usesPrintf = true;
-    kernel->createPrintfBuffer();
-    static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer().push_back(std::shared_ptr<Kernel>{kernel});
-
-    ze_event_pool_desc_t eventPoolDesc{};
-    eventPoolDesc.stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC;
-    eventPoolDesc.pNext = nullptr;
-    eventPoolDesc.count = 1;
-    eventPoolDesc.flags = ZE_EVENT_POOL_FLAG_HOST_VISIBLE;
-    auto eventPool = std::unique_ptr<::L0::EventPool>(::L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-
-    ze_event_desc_t eventDesc{};
-    eventDesc.stype = ZE_STRUCTURE_TYPE_EVENT_DESC;
-    eventDesc.pNext = nullptr;
-    eventDesc.index = 0;
-    eventDesc.signal = ZE_EVENT_SCOPE_FLAG_HOST;
-    eventDesc.wait = ZE_EVENT_SCOPE_FLAG_HOST;
-    auto event = std::unique_ptr<::L0::Event>(::L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
-    auto hEventHandle = event->toHandle();
-
-    EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    ze_group_count_t groupCount{1, 1, 1};
-    CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
-    EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
-    EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
-    *reinterpret_cast<uint32_t *>(event->getHostAddress()) = Event::STATE_SIGNALED;
-    EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->destroy());
-    EXPECT_EQ(nullptr, static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer()[0].get());
-    EXPECT_EQ(nullptr, event->getKernelForPrintf().lock().get());
-    EXPECT_EQ(ZE_RESULT_SUCCESS, event->queryStatus());
-    EXPECT_EQ(ZE_RESULT_SUCCESS, event->hostSynchronize(std::numeric_limits<uint64_t>::max()));
-    EXPECT_EQ(nullptr, event->getKernelWithPrintfDeviceMutex());
-}
-
-HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToImmCommandListWithoutFlushTaskSubmissionAndDestroyKernelAfterEventSyncThenSuccessIsReturnedAndListSyncDoesNotAccessKernel) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(0);
-
-    ze_result_t result;
-    ze_command_queue_desc_t queueDesc{};
-    queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
-    queueDesc.pNext = nullptr;
-    queueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
-    queueDesc.ordinal = 0u;
-    queueDesc.index = 0u;
-    std::unique_ptr<L0::CommandList> commandList(CommandList::createImmediate(productFamily, device, &queueDesc, false, NEO::EngineGroupType::renderCompute, result));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-
-    auto kernel = new Mock<KernelImp>{};
-    kernel->module = module.get();
-    kernel->descriptor.kernelAttributes.flags.usesPrintf = true;
-    kernel->createPrintfBuffer();
-    static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer().push_back(std::shared_ptr<Kernel>{kernel});
-
-    ze_event_pool_desc_t eventPoolDesc{};
-    eventPoolDesc.stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC;
-    eventPoolDesc.pNext = nullptr;
-    eventPoolDesc.count = 1;
-    eventPoolDesc.flags = ZE_EVENT_POOL_FLAG_HOST_VISIBLE;
-    auto eventPool = std::unique_ptr<::L0::EventPool>(::L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
-    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-
-    ze_event_desc_t eventDesc{};
-    eventDesc.stype = ZE_STRUCTURE_TYPE_EVENT_DESC;
-    eventDesc.pNext = nullptr;
-    eventDesc.index = 0;
-    eventDesc.signal = ZE_EVENT_SCOPE_FLAG_HOST;
-    eventDesc.wait = ZE_EVENT_SCOPE_FLAG_HOST;
-    auto event = std::unique_ptr<::L0::Event>(::L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
-    auto hEventHandle = event->toHandle();
-
-    EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
-    ze_group_count_t groupCount{1, 1, 1};
-    CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
-    EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
-    EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
-    *reinterpret_cast<uint32_t *>(event->getHostAddress()) = Event::STATE_SIGNALED;
-    EXPECT_EQ(ZE_RESULT_SUCCESS, event->hostSynchronize(std::numeric_limits<uint64_t>::max()));
-    EXPECT_EQ(2u, kernel->printPrintfOutputCalledTimes);
-    EXPECT_EQ(nullptr, event->getKernelForPrintf().lock().get());
-    EXPECT_EQ(nullptr, event->getKernelWithPrintfDeviceMutex());
-    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->destroy());
-    EXPECT_EQ(nullptr, static_cast<ModuleImp *>(module.get())->getPrintfKernelContainer()[0].get());
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
-}
-
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAppendedToImmCommandListWithFlushTaskSubmissionAndDestroyKernelAfterListSyncThenSuccessIsReturned) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t result;
     ze_command_queue_desc_t queueDesc{};
     queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
@@ -728,7 +555,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAppendedToImmComman
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams));
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
     EXPECT_EQ(1u, kernel->printPrintfOutputCalledTimes);
     EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->destroy());
@@ -736,9 +563,6 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAppendedToImmComman
 }
 
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToImmCommandListWithFlushTaskSubmissionAndDestroyKernelAfterListSyncThenSuccessIsReturnedAndEventSyncDoesNotAccessKernel) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t result;
     ze_command_queue_desc_t queueDesc{};
     queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
@@ -775,7 +599,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToI
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams));
     EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
     EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
     EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->hostSynchronize(std::numeric_limits<uint64_t>::max()));
@@ -790,9 +614,6 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToI
 }
 
 HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToImmCommandListWithFlushTaskSubmissionAndDestroyKernelAfterEventSyncThenSuccessIsReturnedAndListSyncDoesNotAccessKernel) {
-    DebugManagerStateRestore restorer;
-    NEO::debugManager.flags.EnableFlushTaskSubmission.set(1);
-
     ze_result_t result;
     ze_command_queue_desc_t queueDesc{};
     queueDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
@@ -829,7 +650,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToI
     EXPECT_EQ(0u, kernel->printPrintfOutputCalledTimes);
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams));
     EXPECT_EQ(kernel, event->getKernelForPrintf().lock().get());
     EXPECT_NE(nullptr, event->getKernelWithPrintfDeviceMutex());
     *reinterpret_cast<uint32_t *>(event->getHostAddress()) = Event::STATE_SIGNALED;
@@ -845,6 +666,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithPrintfAndEventAppendedToI
 HWTEST_F(CommandListAppendLaunchKernel, WhenAppendingMultipleTimesThenSshIsNotDepletedButReallocated) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.UseBindlessMode.set(0);
+    UnitTestSetter::disableHeapless(dbgRestorer);
     debugManager.flags.UseExternalAllocatorForSshAndDsh.set(0);
     neoDevice->getExecutionEnvironment()->rootDeviceEnvironments[neoDevice->getRootDeviceIndex()]->bindlessHeapsHelper.reset();
 
@@ -862,7 +684,7 @@ HWTEST_F(CommandListAppendLaunchKernel, WhenAppendingMultipleTimesThenSshIsNotDe
     const_cast<KernelDescriptor::AddressingMode &>(kernel->getKernelDescriptor().kernelAttributes.bufferAddressingMode) = KernelDescriptor::BindfulAndStateless;
     CmdListKernelLaunchParams launchParams = {};
     for (size_t i = 0; i < sshHeapSize / kernelSshSize + 1; i++) {
-        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     }
 
@@ -901,7 +723,7 @@ HWTEST_F(CommandListAppendLaunchKernel, WhenAppendingMultipleTimesThenDshIsNotDe
     const_cast<KernelDescriptor::AddressingMode &>(kernel->getKernelDescriptor().kernelAttributes.bufferAddressingMode) = KernelDescriptor::BindfulAndStateless;
     CmdListKernelLaunchParams launchParams = {};
     for (size_t i = 0; i < dshHeapSize / kernelDshSize + 1; i++) {
-        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     }
 
@@ -910,7 +732,7 @@ HWTEST_F(CommandListAppendLaunchKernel, WhenAppendingMultipleTimesThenDshIsNotDe
     EXPECT_NE(initialAllocation, reallocatedAllocation);
 }
 
-using TimestampEventSupport = IsWithinProducts<IGFX_SKYLAKE, IGFX_TIGERLAKE_LP>;
+using TimestampEventSupport = IsGen12LP;
 HWTEST2_F(CommandListAppendLaunchKernel, givenTimestampEventsWhenAppendingKernelThenSRMAndPCEncoded, TimestampEventSupport) {
     using GPGPU_WALKER = typename FamilyType::GPGPU_WALKER;
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
@@ -938,7 +760,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenTimestampEventsWhenAppendingKernel
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     auto result = commandList->appendLaunchKernel(
-        kernel.toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams, false);
+        kernel.toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
@@ -1032,7 +854,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenKernelLaunchWithTSEventAndScopeFla
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     auto result = commandList->appendLaunchKernel(
-        kernel.toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams, false);
+        kernel.toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
@@ -1050,7 +872,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenKernelLaunchWithTSEventAndScopeFla
     EXPECT_TRUE(cmd->getDcFlushEnable());
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyThenAdditionalPCIsAdded, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyThenAdditionalPCIsAdded, IsAtLeastXeCore) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
 
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::builtin);
@@ -1063,7 +885,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyTh
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandListBase->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandListBase->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = commandListBase->getCmdContainer().getCommandStream()->getUsed();
@@ -1084,7 +906,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyTh
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     usedSpaceBefore = commandListWithDebugKey->getCmdContainer().getCommandStream()->getUsed();
 
-    result = commandListWithDebugKey->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandListWithDebugKey->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     usedSpaceAfter = commandListWithDebugKey->getCmdContainer().getCommandStream()->getUsed();
@@ -1101,7 +923,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyTh
     EXPECT_EQ(numberOfPCsWithDebugKey, numberOfPCsBase + 1);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyAndNoSpaceThenNewBatchBufferAllocationIsUsed, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyAndNoSpaceThenNewBatchBufferAllocationIsUsed, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.ForcePipeControlPriorToWalker.set(1);
 
@@ -1122,7 +944,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyAn
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto secondBatchBufferAllocation = commandList->getCmdContainer().getCommandStream()->getGraphicsAllocation();
@@ -1130,8 +952,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenForcePipeControlPriorToWalkerKeyAn
     EXPECT_NE(firstBatchBufferAllocation, secondBatchBufferAllocation);
 }
 
-using SupportedPlatforms = IsWithinProducts<IGFX_SKYLAKE, IGFX_DG1>;
-HWTEST2_F(CommandListAppendLaunchKernel, givenCommandListWhenAppendLaunchKernelSeveralTimesThenAlwaysFirstEventPacketIsUsed, SupportedPlatforms) {
+HWTEST2_F(CommandListAppendLaunchKernel, givenCommandListWhenAppendLaunchKernelSeveralTimesThenAlwaysFirstEventPacketIsUsed, IsGen12LP) {
     createKernel();
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(L0::CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
@@ -1153,7 +974,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenCommandListWhenAppendLaunchKernelS
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     for (uint32_t i = 0; i < NEO::TimestampPacketConstants::preferredPacketCount + 4; i++) {
-        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams, false);
+        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event->toHandle(), 0, nullptr, launchParams);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     }
     EXPECT_EQ(1u, event->getPacketsInUse());
@@ -1280,7 +1101,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenCommandListWhenResetCalledThenState
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     auto result = commandList->appendLaunchKernel(
-        kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
     result = commandList->close();
@@ -1325,7 +1146,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenCommandListWhenResetCalledThenState
     }
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
     auto heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(heaplessEnabled);
 
     if (!heaplessStateInitEnabled) {
@@ -1349,7 +1170,7 @@ HWTEST_F(CommandListAppendLaunchKernel, WhenAddingKernelsThenResidencyContainerD
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     for (int i = 0; i < 4; ++i) {
-        auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     }
 
@@ -1389,7 +1210,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSingleValidWaitEventsThenAddSemapho
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 1, &hEventHandle, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 1, &hEventHandle, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
@@ -1449,7 +1270,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenMultipleValidWaitEventsThenAddSemap
 
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 2, waitEvents, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 2, waitEvents, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
@@ -1473,18 +1294,17 @@ HWTEST_F(CommandListAppendLaunchKernel, givenInvalidEventListWhenAppendLaunchCoo
     ze_group_count_t groupCount{1, 1, 1};
     ze_result_t returnValue;
     std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 1, nullptr, cooperativeParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 1, nullptr, cooperativeParams);
 
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, returnValue);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenImmediateCommandListWhenAppendLaunchCooperativeKernelUsingFlushTaskThenExpectCorrectExecuteCall, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenImmediateCommandListWhenAppendLaunchCooperativeKernelUsingFlushTaskThenExpectCorrectExecuteCall) {
     createKernel();
     ze_command_queue_desc_t queueDesc = {};
     auto queue = std::make_unique<Mock<CommandQueue>>(device, device->getNEODevice()->getDefaultEngine().commandStreamReceiver, &queueDesc);
 
-    MockCommandListImmediateHw<gfxCoreFamily> cmdList;
-    cmdList.isFlushTaskSubmissionEnabled = true;
+    MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
     cmdList.cmdListType = CommandList::CommandListType::typeImmediate;
     cmdList.cmdQImmediate = queue.get();
 
@@ -1496,36 +1316,196 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenImmediateCommandListWhenAppendLaun
     CmdListKernelLaunchParams cooperativeParams = {};
     cooperativeParams.isCooperative = true;
 
-    returnValue = cmdList.appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams, false);
-    EXPECT_EQ(0u, cmdList.executeCommandListImmediateCalledCount);
+    returnValue = cmdList.appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams);
+
     EXPECT_EQ(1u, cmdList.executeCommandListImmediateWithFlushTaskCalledCount);
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenImmediateCommandListWhenAppendLaunchCooperativeKernelNotUsingFlushTaskThenExpectCorrectExecuteCall, MatchAny) {
-    createKernel();
+HWTEST2_F(CommandListAppendLaunchKernel, GivenImmCmdListAndKernelWithImageWriteArgAndPlatformRequiresFlushWhenLaunchingKernelThenPipeControlWithTextureCacheInvalidationIsAdded, IsAtLeastXeCore) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    auto releaseHelper = std::make_unique<MockReleaseHelper>();
+    releaseHelper->isPostImageWriteFlushRequiredResult = true;
+    device->getNEODevice()->getRootDeviceEnvironmentRef().releaseHelper = std::move(releaseHelper);
+
+    auto kernel = std::make_unique<Mock<KernelImp>>();
+    kernel->module = module.get();
+    kernel->immutableData.kernelInfo->kernelDescriptor.kernelAttributes.hasImageWriteArg = true;
+
     ze_command_queue_desc_t queueDesc = {};
     auto queue = std::make_unique<Mock<CommandQueue>>(device, device->getNEODevice()->getDefaultEngine().commandStreamReceiver, &queueDesc);
 
-    MockCommandListImmediateHw<gfxCoreFamily> cmdList;
-    cmdList.isFlushTaskSubmissionEnabled = false;
-    cmdList.cmdListType = CommandList::CommandListType::typeImmediate;
-    cmdList.cmdQImmediate = queue.get();
-    cmdList.initialize(device, NEO::EngineGroupType::renderCompute, 0u);
-    cmdList.commandContainer.setImmediateCmdListCsr(device->getNEODevice()->getDefaultEngine().commandStreamReceiver);
+    MockCommandListImmediateHw<FamilyType::gfxCoreFamily> commandList;
+    commandList.cmdListType = CommandList::CommandListType::typeImmediate;
+    commandList.cmdQImmediate = queue.get();
+    commandList.initialize(device, NEO::EngineGroupType::renderCompute, 0u);
+    commandList.commandContainer.setImmediateCmdListCsr(device->getNEODevice()->getDefaultEngine().commandStreamReceiver);
+
+    auto usedSpaceBefore = commandList.getCmdContainer().getCommandStream()->getUsed();
+
     ze_group_count_t groupCount{1, 1, 1};
     ze_result_t returnValue;
 
-    CmdListKernelLaunchParams cooperativeParams = {};
-    cooperativeParams.isCooperative = true;
-
-    returnValue = cmdList.appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, cooperativeParams, false);
-    EXPECT_EQ(1u, cmdList.executeCommandListImmediateCalledCount);
-    EXPECT_EQ(0u, cmdList.executeCommandListImmediateWithFlushTaskCalledCount);
+    CmdListKernelLaunchParams launchParams = {};
+    returnValue = commandList.appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+    EXPECT_EQ(1u, commandList.executeCommandListImmediateWithFlushTaskCalledCount);
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
+
+    auto usedSpaceAfter = commandList.getCmdContainer().getCommandStream()->getUsed();
+    EXPECT_GT(usedSpaceAfter, usedSpaceBefore);
+
+    GenCmdList cmdList;
+    EXPECT_TRUE(FamilyType::Parse::parseCommandBuffer(
+        cmdList, ptrOffset(commandList.getCmdContainer().getCommandStream()->getCpuBase(), 0), usedSpaceAfter));
+
+    auto itorPC = findAll<PIPE_CONTROL *>(cmdList.begin(), cmdList.end());
+    ASSERT_NE(0u, itorPC.size());
+
+    PIPE_CONTROL *cmd = genCmdCast<PIPE_CONTROL *>(*itorPC[itorPC.size() - 1]);
+    EXPECT_TRUE(cmd->getTextureCacheInvalidationEnable());
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, whenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, MatchAny) {
+HWTEST2_F(CommandListAppendLaunchKernel, GivenRegularCommandListAndOutOfOrderExecutionWhenKernelWithImageWriteIsAppendedThenBarrierContainsTextureCacheFlush, IsAtLeastXeCore) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    auto kernel = std::make_unique<Mock<KernelImp>>();
+    kernel->module = module.get();
+    kernel->immutableData.kernelInfo->kernelDescriptor.kernelAttributes.hasImageWriteArg = true;
+
+    auto releaseHelper = std::make_unique<MockReleaseHelper>();
+    releaseHelper->isPostImageWriteFlushRequiredResult = true;
+    device->getNEODevice()->getRootDeviceEnvironmentRef().releaseHelper = std::move(releaseHelper);
+
+    ze_group_count_t groupCount{1, 1, 1};
+    ze_result_t returnValue;
+    ze_command_list_flags_t flags = ZE_COMMAND_LIST_FLAG_RELAXED_ORDERING;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, flags, returnValue, false));
+
+    auto usedSpaceBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
+
+    CmdListKernelLaunchParams launchParams = {};
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+    ASSERT_EQ(ZE_RESULT_SUCCESS, result);
+    EXPECT_TRUE(commandList->isTextureCacheFlushPending());
+
+    auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
+    EXPECT_GT(usedSpaceAfter, usedSpaceBefore);
+
+    usedSpaceBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
+    result = commandList->appendBarrier(nullptr, 0, nullptr, false);
+    ASSERT_EQ(ZE_RESULT_SUCCESS, result);
+    EXPECT_FALSE(commandList->isTextureCacheFlushPending());
+
+    usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
+    EXPECT_GT(usedSpaceAfter, usedSpaceBefore);
+
+    GenCmdList cmdList;
+    EXPECT_TRUE(FamilyType::Parse::parseCommandBuffer(
+        cmdList, ptrOffset(commandList->getCmdContainer().getCommandStream()->getCpuBase(), 0), usedSpaceAfter));
+
+    auto itorPC = findAll<PIPE_CONTROL *>(cmdList.begin(), cmdList.end());
+    ASSERT_NE(0u, itorPC.size());
+
+    PIPE_CONTROL *cmd = genCmdCast<PIPE_CONTROL *>(*itorPC[itorPC.size() - 1]);
+    EXPECT_TRUE(cmd->getTextureCacheInvalidationEnable());
+}
+
+HWTEST2_F(CommandListAppendLaunchKernel, GivenKernelWithImageWriteArgWhenAppendingTwiceThenPipeControlWithTextureCacheInvalidationIsProgrammedBetweenWalkers, IsAtLeastXeCore) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using COMPUTE_WALKER = typename FamilyType::DefaultWalkerType;
+
+    StackVec<ze_command_list_flags_t, 2> testedCmdListFlags = {ZE_COMMAND_LIST_FLAG_IN_ORDER,
+                                                               ZE_COMMAND_LIST_FLAG_RELAXED_ORDERING};
+
+    auto releaseHelper = std::make_unique<MockReleaseHelper>();
+    releaseHelper->isPostImageWriteFlushRequiredResult = true;
+    device->getNEODevice()->getRootDeviceEnvironmentRef().releaseHelper = std::move(releaseHelper);
+    for (auto cmdListFlags : testedCmdListFlags) {
+        auto kernel = std::make_unique<Mock<KernelImp>>();
+        kernel->module = module.get();
+        kernel->immutableData.kernelInfo->kernelDescriptor.kernelAttributes.hasImageWriteArg = true;
+
+        ze_group_count_t groupCount{1, 1, 1};
+        ze_result_t returnValue;
+        ze_command_list_flags_t flags = cmdListFlags;
+        std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, flags, returnValue, false));
+
+        auto usedSpaceBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
+
+        CmdListKernelLaunchParams launchParams = {};
+        auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+        ASSERT_EQ(ZE_RESULT_SUCCESS, result);
+        EXPECT_TRUE(commandList->isTextureCacheFlushPending());
+
+        auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
+        EXPECT_GT(usedSpaceAfter, usedSpaceBefore);
+
+        usedSpaceBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
+        result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+        ASSERT_EQ(ZE_RESULT_SUCCESS, result);
+
+        usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
+        EXPECT_GT(usedSpaceAfter, usedSpaceBefore);
+
+        GenCmdList cmdList;
+        EXPECT_TRUE(FamilyType::Parse::parseCommandBuffer(
+            cmdList, ptrOffset(commandList->getCmdContainer().getCommandStream()->getCpuBase(), 0), usedSpaceAfter));
+
+        auto itorCW = findAll<COMPUTE_WALKER *>(
+            cmdList.begin(), cmdList.end());
+        ASSERT_EQ(2u, itorCW.size());
+
+        auto firstCW = itorCW[0];
+        auto secondCW = itorCW[1];
+
+        auto pcBetweenCW =
+            findAll<PIPE_CONTROL *>(firstCW, secondCW);
+
+        bool foundTextureCacheInvalidation = false;
+        for (auto itorPC : pcBetweenCW) {
+            auto pcCmd = genCmdCast<PIPE_CONTROL *>(*itorPC);
+            if (pcCmd->getTextureCacheInvalidationEnable()) {
+                foundTextureCacheInvalidation = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(foundTextureCacheInvalidation);
+    }
+}
+
+HWTEST2_F(CommandListAppendLaunchKernel, whenResettingRegularCommandListThenTextureCacheFlushPendingStateIsCleared, IsXeHpgCore) {
+    auto kernel = std::make_unique<Mock<KernelImp>>();
+    kernel->module = module.get();
+    kernel->immutableData.kernelInfo->kernelDescriptor.kernelAttributes.hasImageWriteArg = true;
+
+    auto releaseHelper = std::make_unique<MockReleaseHelper>();
+    releaseHelper->isPostImageWriteFlushRequiredResult = true;
+    device->getNEODevice()->getRootDeviceEnvironmentRef().releaseHelper = std::move(releaseHelper);
+    ze_group_count_t groupCount{1, 1, 1};
+    ze_result_t returnValue;
+    ze_command_list_flags_t flags = ZE_COMMAND_LIST_FLAG_RELAXED_ORDERING;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, flags, returnValue, false));
+    CmdListKernelLaunchParams launchParams = {};
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+    ASSERT_EQ(ZE_RESULT_SUCCESS, result);
+    EXPECT_TRUE(commandList->isTextureCacheFlushPending());
+    commandList->reset();
+    EXPECT_FALSE(commandList->isTextureCacheFlushPending());
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+struct MockCommandListCoreFamilyWithoutHeapSupport : public WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>> {
+    using BaseClass = WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>;
+    using BaseClass::appendVfeStateCmdToPatch;
+    using BaseClass::BaseClass;
+};
+
+HWTEST2_F(CommandListAppendLaunchKernel, whenAppendVfeStateCmdPatchIsCalledAndHeaplessRequiredThenDoNothing, IsHeaplessRequired) {
+    auto commandList = std::make_unique<MockCommandListCoreFamilyWithoutHeapSupport<FamilyType::gfxCoreFamily>>();
+    commandList->appendVfeStateCmdToPatch();
+}
+
+HWTEST2_F(CommandListAppendLaunchKernel, whenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, IsHeapfulSupported) {
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(1);
 
@@ -1539,7 +1519,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, whenUpdateStreamPropertiesIsCalledThenC
     auto mockModule = std::unique_ptr<Module>(new Mock<Module>(device, nullptr));
     kernel.module = mockModule.get();
 
-    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     auto result = commandList->initialize(device, NEO::EngineGroupType::compute, 0u);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
@@ -1560,7 +1540,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, whenUpdateStreamPropertiesIsCalledThenC
 
 HWTEST2_F(CommandListAppendLaunchKernelMockModule,
           givenFlagOmitKernelArgumentResourcePassToCmdlistResidencyWhenAppendingKernelThenExpectNoKernelArgumentsInCmdlistResidency,
-          IsAtLeastXeHpCore) {
+          IsAtLeastXeCore) {
     NEO::MockGraphicsAllocation mockAllocation;
     NEO::GraphicsAllocation *allocation = &mockAllocation;
     kernel->argumentsResidencyContainer.push_back(allocation);
@@ -1569,7 +1549,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     ze_result_t returnValue;
     CmdListKernelLaunchParams launchParams = {};
     launchParams.omitAddingKernelArgumentResidency = true;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     auto &cmdlistResidency = commandList->getCmdContainer().getResidencyContainer();
@@ -1578,7 +1558,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     EXPECT_EQ(kernelAllocationIt, cmdlistResidency.end());
 
     launchParams.omitAddingKernelArgumentResidency = false;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     kernelAllocationIt = std::find(cmdlistResidency.begin(), cmdlistResidency.end(), allocation);
@@ -1587,7 +1567,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
 
 HWTEST2_F(CommandListAppendLaunchKernelMockModule,
           givenFlagOmitKernelInternalResourcePassToCmdlistResidencyWhenAppendingKernelThenExpectNoKernelInternalsInCmdlistResidency,
-          IsAtLeastXeHpCore) {
+          IsAtLeastXeCore) {
     NEO::MockGraphicsAllocation mockAllocation;
     NEO::GraphicsAllocation *allocation = &mockAllocation;
     kernel->internalResidencyContainer.push_back(allocation);
@@ -1598,7 +1578,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     ze_result_t returnValue;
     CmdListKernelLaunchParams launchParams = {};
     launchParams.omitAddingKernelInternalResidency = true;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     auto &cmdlistResidency = commandList->getCmdContainer().getResidencyContainer();
@@ -1609,7 +1589,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     EXPECT_EQ(kernelAllocationIt, cmdlistResidency.end());
 
     launchParams.omitAddingKernelInternalResidency = false;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     kernelAllocationIt = std::find(cmdlistResidency.begin(), cmdlistResidency.end(), allocation);
@@ -1620,12 +1600,12 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
 
 HWTEST2_F(CommandListAppendLaunchKernelMockModule,
           givenOutWalkerPtrDispatchParamWhenAppendingKernelThenSetPtrToWalkerCmd,
-          IsAtLeastXeHpCore) {
+          IsAtLeastXeCore) {
 
     ze_group_count_t groupCount{1, 1, 1};
     ze_result_t returnValue;
     CmdListKernelLaunchParams launchParams = {};
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
     auto usedSpaceAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
 
@@ -1645,7 +1625,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
 
 HWTEST2_F(CommandListAppendLaunchKernelMockModule,
           givenFlagOmitEventResourcePassToCmdlistResidencyWhenAppendingKernelThenExpectNoEventInCmdlistResidency,
-          IsAtLeastXeHpCore) {
+          IsAtLeastXeCore) {
     ze_result_t returnValue;
 
     ze_event_pool_desc_t eventPoolDesc = {ZE_STRUCTURE_TYPE_EVENT_POOL_DESC};
@@ -1665,7 +1645,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     ze_group_count_t groupCount{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
     launchParams.omitAddingEventResidency = true;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     auto &cmdlistResidency = commandList->getCmdContainer().getResidencyContainer();
@@ -1674,7 +1654,7 @@ HWTEST2_F(CommandListAppendLaunchKernelMockModule,
     EXPECT_EQ(eventAllocationIt, cmdlistResidency.end());
 
     launchParams.omitAddingEventResidency = false;
-    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event, 0, nullptr, launchParams, false);
+    returnValue = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, event, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
     eventAllocationIt = std::find(cmdlistResidency.begin(), cmdlistResidency.end(), eventAllocation);

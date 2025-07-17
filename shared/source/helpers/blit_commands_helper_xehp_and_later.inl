@@ -60,7 +60,7 @@ void BlitCommandsHelper<GfxFamily>::appendBlitMemoryOptionsForFillBuffer(NEO::Gr
 
     appendExtraMemoryProperties(blitCmd, rootDeviceEnvironment);
 
-    auto mocs = rootDeviceEnvironment.getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED);
+    auto mocs = rootDeviceEnvironment.getGmmHelper()->getUncachedMOCS();
     if (debugManager.flags.OverrideBlitterMocs.get() != -1) {
         mocs = static_cast<uint32_t>(debugManager.flags.OverrideBlitterMocs.get());
     }
@@ -84,9 +84,10 @@ void BlitCommandsHelper<GfxFamily>::appendSurfaceType(const BlitProperties &blit
         auto resInfo = blitProperties.srcAllocation->getDefaultGmm()->gmmResourceInfo.get();
         auto resourceType = resInfo->getResourceType();
         auto isArray = resInfo->getArraySize() > 1;
+        auto isTiled = resInfo->getResourceFlags()->Info.Tile4 || resInfo->getResourceFlags()->Info.Tile64;
 
         if (resourceType == GMM_RESOURCE_TYPE::RESOURCE_1D) {
-            if (isArray) {
+            if (isArray || isTiled) {
                 blitCmd.setSourceSurfaceType(XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
             } else {
                 blitCmd.setSourceSurfaceType(XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_1D);
@@ -103,9 +104,10 @@ void BlitCommandsHelper<GfxFamily>::appendSurfaceType(const BlitProperties &blit
         auto resInfo = blitProperties.dstAllocation->getDefaultGmm()->gmmResourceInfo.get();
         auto resourceType = resInfo->getResourceType();
         auto isArray = resInfo->getArraySize() > 1;
+        auto isTiled = resInfo->getResourceFlags()->Info.Tile4 || resInfo->getResourceFlags()->Info.Tile64;
 
         if (resourceType == GMM_RESOURCE_TYPE::RESOURCE_1D) {
-            if (isArray) {
+            if (isArray || isTiled) {
                 blitCmd.setDestinationSurfaceType(XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
             } else {
                 blitCmd.setDestinationSurfaceType(XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_1D);
@@ -367,7 +369,11 @@ void BlitCommandsHelper<GfxFamily>::dispatchDummyBlit(LinearStream &linearStream
 
         appendTilingEnable(blitCmd);
         appendBlitMemoryOptionsForFillBuffer(dummyAllocation, blitCmd, *rootDeviceEnvironment);
-        appendBlitFillCommand(blitCmd);
+
+        BlitProperties blitProperties = {};
+        blitProperties.dstAllocation = dummyAllocation;
+
+        appendBlitFillCommand(blitProperties, blitCmd);
 
         auto cmd = linearStream.getSpaceForCmd<XY_COLOR_BLT>();
         *cmd = blitCmd;

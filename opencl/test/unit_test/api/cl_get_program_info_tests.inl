@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -43,6 +43,8 @@ void verifyDevices(cl_program pProgram, size_t expectedNumDevices, cl_device_id 
 }
 
 TEST_F(ClGetProgramInfoTests, GivenSourceWhenBuildingProgramThenGetProgramInfoReturnsCorrectInfo) {
+    USE_REAL_FILE_SYSTEM();
+
     cl_program pProgram = nullptr;
     std::unique_ptr<char[]> pSource = nullptr;
     size_t sourceSize = 0;
@@ -172,6 +174,8 @@ TEST_F(ClGetProgramInfoTests, GivenIlWhenBuildingProgramThenGetProgramInfoReturn
 }
 
 TEST(clGetProgramInfoTest, GivenMultiDeviceProgramCreatedWithBinaryWhenGettingDevicesThenCorrectDevicesAreReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     MockUnrestrictiveContextMultiGPU context;
 
     auto numDevicesForProgram = 2u;
@@ -227,6 +231,8 @@ TEST(clGetProgramInfoTest, GivenMultiDeviceProgramCreatedWithBinaryWhenGettingDe
 }
 
 TEST(clGetProgramInfoTest, GivenMultiDeviceProgramCreatedWithBinaryWhenGettingBinariesThenCorrectBinariesAreReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     MockUnrestrictiveContextMultiGPU context;
 
     auto numDevicesForProgram = 2u;
@@ -368,45 +374,9 @@ TEST(clGetProgramInfoTest, GivenMultiDeviceProgramCreatedWithILWhenGettingDevice
     EXPECT_EQ(CL_SUCCESS, retVal);
 }
 
-TEST(clGetProgramInfoTest, GivenMultiDeviceProgramCreatedWithBuiltInKernelsWhenGettingDevicesThenCorrectDevicesAreReturned) {
-    if (!defaultHwInfo->capabilityTable.supportsVme) {
-        GTEST_SKIP();
-    }
-    MockUnrestrictiveContextMultiGPU context;
-
-    auto numDevicesForProgram = 2u;
-    cl_device_id devicesForProgram[] = {context.getDevice(1), context.getDevice(3)};
-
-    overwriteBuiltInBinaryName("media_kernels_frontend");
-
-    const char *kernelNamesString = {
-        "block_advanced_motion_estimate_bidirectional_check_intel;"
-        "block_motion_estimate_intel;"
-        "block_advanced_motion_estimate_check_intel;"};
-
-    cl_program pProgram = nullptr;
-
-    cl_int retVal = CL_INVALID_PROGRAM;
-
-    pProgram = clCreateProgramWithBuiltInKernels(
-        &context,
-        numDevicesForProgram,
-        devicesForProgram,
-        kernelNamesString,
-        &retVal);
-
-    EXPECT_NE(nullptr, pProgram);
-    EXPECT_EQ(CL_SUCCESS, retVal);
-
-    restoreBuiltInBinaryName();
-
-    verifyDevices(pProgram, numDevicesForProgram, devicesForProgram);
-
-    retVal = clReleaseProgram(pProgram);
-    EXPECT_EQ(CL_SUCCESS, retVal);
-}
-
 TEST(clGetProgramInfoTest, GivenMultiDeviceBuiltInProgramCreatedWithGenBinaryWhenGettingDevicesThenCorrectDevicesAreReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     MockUnrestrictiveContextMultiGPU context;
 
     auto expectedNumDevices = context.getNumDevices();
@@ -444,6 +414,8 @@ TEST(clGetProgramInfoTest, GivenMultiDeviceBuiltInProgramCreatedWithGenBinaryWhe
 }
 
 TEST(clGetProgramInfoTest, GivenMultiDeviceBuiltInProgramCreatedWithGenBinaryWhenGettingDevicesThenCorrectBinariesAreReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     MockUnrestrictiveContextMultiGPU context;
 
     auto expectedNumDevices = context.getNumDevices();

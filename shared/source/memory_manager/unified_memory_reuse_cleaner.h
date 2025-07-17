@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/memory_manager/unified_memory_manager.h"
 
 #include <chrono>
@@ -15,13 +16,14 @@
 #include <vector>
 namespace NEO {
 class Thread;
-class UnifiedMemoryReuseCleaner {
+class UnifiedMemoryReuseCleaner : NEO::NonCopyableAndNonMovableClass {
     using SvmAllocationCache = SVMAllocsManager::SvmAllocationCache;
 
   public:
-    static constexpr auto sleepTime = std::chrono::seconds(2u);
-    static constexpr auto maxHoldTime = sleepTime;
-    UnifiedMemoryReuseCleaner();
+    static constexpr auto sleepTime = std::chrono::milliseconds(15u);
+    static constexpr auto maxHoldTime = std::chrono::seconds(10u);
+    static constexpr auto limitedHoldTime = std::chrono::seconds(2u);
+    UnifiedMemoryReuseCleaner(bool trimAllAllocations);
     virtual ~UnifiedMemoryReuseCleaner();
 
     MOCKABLE_VIRTUAL void startThread();
@@ -43,5 +45,10 @@ class UnifiedMemoryReuseCleaner {
 
     std::atomic_bool runCleaning = false;
     std::atomic_bool keepCleaning = true;
+
+    bool trimAllAllocations = false;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<UnifiedMemoryReuseCleaner>);
+
 } // namespace NEO

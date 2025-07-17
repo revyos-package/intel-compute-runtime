@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -86,6 +86,8 @@ class MockAllocateGraphicsMemoryWithAlignmentWddm : public MemoryManagerCreate<W
 
 class WddmMemoryManagerTests : public ::testing::Test {
   public:
+    static constexpr uint32_t rootDeviceIndex{0U};
+
     std::unique_ptr<VariableBackup<bool>> returnEmptyFilesVectorBackup;
 
     MockAllocateGraphicsMemoryWithAlignmentWddm *memoryManager = nullptr;
@@ -99,13 +101,26 @@ class WddmMemoryManagerTests : public ::testing::Test {
 
         memoryManager = new MockAllocateGraphicsMemoryWithAlignmentWddm(*executionEnvironment);
         executionEnvironment->memoryManager.reset(memoryManager);
-        wddm = static_cast<WddmMock *>(executionEnvironment->rootDeviceEnvironments[0]->osInterface->getDriverModel()->as<Wddm>());
+        wddm = static_cast<WddmMock *>(executionEnvironment->rootDeviceEnvironments[rootDeviceIndex]->osInterface->getDriverModel()->as<Wddm>());
     }
 
     void TearDown() override {
         delete executionEnvironment;
     }
 };
+
+TEST_F(WddmMemoryManagerTests, GivenLocalMemoryAllocationModeReleaseKeyWhenWddmMemoryManagerConstructedThenUsmDeviceAllocationModeProperlySet) {
+    DebugManagerStateRestore restorer;
+
+    for (const int32_t releaseKeyVal : std::array{0, 1, 2}) {
+        debugManager.flags.NEO_LOCAL_MEMORY_ALLOCATION_MODE.set(releaseKeyVal);
+        WddmMemoryManager memoryManager{*executionEnvironment};
+        EXPECT_EQ(memoryManager.usmDeviceAllocationMode, toLocalMemAllocationMode(releaseKeyVal));
+        EXPECT_EQ(memoryManager.isLocalOnlyAllocationMode(), memoryManager.getGmmHelper(rootDeviceIndex)->isLocalOnlyAllocationMode());
+
+        memoryManager.getGmmHelper(rootDeviceIndex)->setLocalOnlyAllocationMode(false);
+    }
+}
 
 TEST_F(WddmMemoryManagerTests, GivenAllocDataWithSVMCPUSetWhenAllocateGraphicsMemoryWithAlignmentThenProperFunctionIsUsed) {
     AllocationProperties allocationProperties{0u, 0u, NEO::AllocationType::svmCpu, {}};
@@ -142,11 +157,11 @@ TEST_F(WddmMemoryManagerTests, GivenNotCompressedAndNotLockableAllocationTypeWhe
     memoryManager->freeGraphicsMemory(graphicsAllocation);
 }
 
-TEST_F(WddmMemoryManagerTests, GivenOverrideAllocationCacheableWhenAllocateUsingKmdAndMapToCpuVaThenOverrideAllocationCacheable) {
+TEST_F(WddmMemoryManagerTests, GivenoverrideAllocationCpuCacheableWhenAllocateUsingKmdAndMapToCpuVaThenoverrideAllocationCpuCacheable) {
     NEO::AllocationData allocData = {};
     allocData.type = NEO::AllocationType::commandBuffer;
     auto mockProductHelper = std::make_unique<MockProductHelper>();
-    mockProductHelper->overrideAllocationCacheableResult = true;
+    mockProductHelper->overrideAllocationCpuCacheableResult = true;
     executionEnvironment->rootDeviceEnvironments[0]->productHelper.reset(mockProductHelper.release());
 
     memoryManager->callBaseAllocateGraphicsMemoryUsingKmdAndMapItToCpuVA = true;
@@ -1050,7 +1065,7 @@ TEST_F(WddmMemoryManagerSimpleTest, whenCreateAllocationFromHandleAndMapCallFail
     EXPECT_EQ(1u, memoryManager->freeGraphicsMemoryImplCalled);
 }
 
-TEST_F(WddmMemoryManagerSimpleTest, givenAllocateGraphicsMemoryForNonSvmHostPtrIsCalledWhenNotAlignedPtrIsPassedThenAlignedGraphicsAllocationIsCreated) {
+TEST_F(WddmMemoryManagerSimpleTest, givenAllocateGraphicsMemoryForNonSvmHostPtrIsCalledWhenNotAlignedPtrIsPassedAndFlushL3RequiredThenSetCorrectGmmResource) {
     memoryManager.reset(new MockWddmMemoryManager(false, false, executionEnvironment));
     auto size = 13u;
     auto hostPtr = reinterpret_cast<const void *>(0x10001);
@@ -1058,11 +1073,36 @@ TEST_F(WddmMemoryManagerSimpleTest, givenAllocateGraphicsMemoryForNonSvmHostPtrI
     AllocationData allocationData;
     allocationData.size = size;
     allocationData.hostPtr = hostPtr;
+    allocationData.flags.flushL3 = true;
     auto allocation = memoryManager->allocateGraphicsMemoryForNonSvmHostPtr(allocationData);
     EXPECT_NE(nullptr, allocation);
     EXPECT_EQ(hostPtr, allocation->getUnderlyingBuffer());
     EXPECT_EQ(size, allocation->getUnderlyingBufferSize());
     EXPECT_EQ(1u, allocation->getAllocationOffset());
+
+    const auto &productHelper = rootDeviceEnvironment->getHelper<ProductHelper>();
+    auto expectedUsage = GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
+    if (productHelper.isMisalignedUserPtr2WayCoherent()) {
+        expectedUsage = GMM_RESOURCE_USAGE_HW_CONTEXT;
+    }
+    EXPECT_EQ(expectedUsage, allocation->getGmm(0)->resourceParams.Usage);
+
+    memoryManager->freeGraphicsMemory(allocation);
+}
+
+TEST_F(WddmMemoryManagerSimpleTest, givenAllocateGraphicsMemoryForNonSvmHostPtrIsCalledWhenNotAlignedPtrIsPassedAndFlushL3NotRequiredThenSetCorrectGmmResource) {
+    memoryManager.reset(new MockWddmMemoryManager(false, false, executionEnvironment));
+    auto size = 13u;
+    auto hostPtr = reinterpret_cast<const void *>(0x10001);
+
+    AllocationData allocationData;
+    allocationData.size = size;
+    allocationData.hostPtr = hostPtr;
+    allocationData.flags.flushL3 = false;
+    auto allocation = memoryManager->allocateGraphicsMemoryForNonSvmHostPtr(allocationData);
+    EXPECT_NE(nullptr, allocation);
+
+    EXPECT_EQ(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER, allocation->getGmm(0)->resourceParams.Usage);
     memoryManager->freeGraphicsMemory(allocation);
 }
 
@@ -1074,6 +1114,7 @@ TEST_F(WddmMemoryManagerSimpleTest, givenAllocateGraphicsMemoryForNonSvmHostPtrI
     AllocationData allocationData;
     allocationData.size = size;
     allocationData.hostPtr = hostPtr;
+    allocationData.flags.flushL3 = true;
     auto allocation = memoryManager->allocateGraphicsMemoryForNonSvmHostPtr(allocationData);
     EXPECT_NE(nullptr, allocation);
     EXPECT_EQ(hostPtr, allocation->getUnderlyingBuffer());
@@ -1418,10 +1459,11 @@ TEST_F(WddmMemoryManagerSimpleTest, givenLocalMemoryKernelIsaWithMemoryCopiedWhe
     memoryManager->freeGraphicsMemory(allocation);
     if (makeResidentPriorToLockRequired) {
         EXPECT_EQ(1u, mockTemporaryResources->removeResourceResult.called);
+        EXPECT_EQ(1u, mockTemporaryResources->evictResourceResult.called);
     } else {
         EXPECT_EQ(0u, mockTemporaryResources->removeResourceResult.called);
+        EXPECT_EQ(0u, mockTemporaryResources->evictResourceResult.called);
     }
-    EXPECT_EQ(0u, mockTemporaryResources->evictResourceResult.called);
 }
 TEST_F(WddmMemoryManagerSimpleTest, whenDestroyingNotLockedAllocationThatDoesntNeedMakeResidentBeforeLockThenDontEvictAllocationFromWddmTemporaryResources) {
     DebugManagerStateRestore restorer;
@@ -1935,12 +1977,14 @@ TEST_F(WddmMemoryManagerSimpleTest, givenShareableAllocationWhenAllocateInDevice
     allocData.flags.shareable = true;
     allocData.storageInfo.memoryBanks = 2;
     allocData.storageInfo.systemMemoryPlacement = false;
+    allocData.alignment = MemoryConstants::pageSize64k;
 
     auto allocation = memoryManager->allocateGraphicsMemoryInDevicePool(allocData, status);
     EXPECT_NE(nullptr, allocation);
     EXPECT_EQ(MemoryManager::AllocationStatus::Success, status);
     EXPECT_EQ(MemoryPool::localMemory, allocation->getMemoryPool());
     EXPECT_EQ(0u, allocation->getDefaultGmm()->resourceParams.Flags.Info.NonLocalOnly);
+    EXPECT_TRUE(isAligned<MemoryConstants::pageSize64k>(allocation->getUnderlyingBufferSize()));
     uint64_t handle = 0;
     allocation->peekInternalHandle(memoryManager.get(), handle);
     EXPECT_NE(handle, 0u);
@@ -2906,6 +2950,29 @@ TEST_F(WddmMemoryManagerTest, givenWddmMemoryManagerSizeZeroWhenCreateFromShared
     memoryManager->freeGraphicsMemory(gpuAllocation);
 }
 
+TEST_F(WddmMemoryManagerTest, whenOpenSharedHandleThenRegisterAllocationSize) {
+    MockWddmMemoryManager::OsHandleData osHandleData{1u};
+    auto size = 4096u;
+    void *pSysMem = reinterpret_cast<void *>(0x1000);
+    GmmRequirements gmmRequirements{};
+    gmmRequirements.allowLargePages = true;
+    gmmRequirements.preferCompressed = false;
+    std::unique_ptr<Gmm> gmm(new Gmm(rootDeviceEnvironment->getGmmHelper(), pSysMem, size, 0, GMM_RESOURCE_USAGE_OCL_BUFFER, {}, gmmRequirements));
+    void *gmmPtrArray[]{gmm->gmmResourceInfo.get()};
+    setSizesFcn(gmmPtrArray, 1u, 1024u, 1u);
+
+    auto usedSystemMemorySize = memoryManager->getUsedSystemMemorySize();
+    AllocationProperties properties(0, false, size, AllocationType::sharedBuffer, false, false, 0);
+
+    auto *gpuAllocation = memoryManager->createGraphicsAllocationFromSharedHandle(osHandleData, properties, false, false, true, nullptr);
+
+    ASSERT_NE(nullptr, gpuAllocation);
+    EXPECT_EQ(size, gpuAllocation->getUnderlyingBufferSize());
+    EXPECT_EQ(usedSystemMemorySize + size, memoryManager->getUsedSystemMemorySize());
+
+    memoryManager->freeGraphicsMemory(gpuAllocation);
+}
+
 HWTEST_F(WddmMemoryManagerTest, givenWddmMemoryManagerWhenAllocateGraphicsMemoryWithSetAllocattionPropertisWithAllocationTypeBufferCompressedIsCalledThenIsRendeCompressedTrueAndGpuMappingIsSetWithGoodAddressRange) {
     void *ptr = reinterpret_cast<void *>(0x1001);
     auto size = MemoryConstants::pageSize;
@@ -2949,12 +3016,7 @@ HWTEST_F(WddmMemoryManagerTest, givenInternalHeapOrLinearStreamTypeWhenAllocatin
         auto allocation = memoryManager->allocateGraphicsMemoryWithProperties(properties, nullptr);
 
         ASSERT_NE(nullptr, allocation);
-
-        if (rootDeviceEnvironment->getProductHelper().isDcFlushMitigated()) {
-            EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED);
-        } else {
-            EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
-        }
+        EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
 
         memoryManager->freeGraphicsMemory(allocation);
     }
@@ -2965,12 +3027,7 @@ HWTEST_F(WddmMemoryManagerTest, givenInternalHeapOrLinearStreamTypeWhenAllocatin
         auto allocation = memoryManager->allocateGraphicsMemoryWithProperties(properties, nullptr);
 
         ASSERT_NE(nullptr, allocation);
-
-        if (rootDeviceEnvironment->getProductHelper().isDcFlushMitigated()) {
-            EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED);
-        } else {
-            EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
-        }
+        EXPECT_TRUE(allocation->getDefaultGmm()->resourceParams.Usage == GMM_RESOURCE_USAGE_TYPE::GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
 
         memoryManager->freeGraphicsMemory(allocation);
     }

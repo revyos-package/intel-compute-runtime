@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <functional>
+#include <mutex>
 
 namespace NEO {
 struct SvmAllocationData;
@@ -22,6 +23,8 @@ class LinearStream;
 } // namespace NEO
 
 namespace L0 {
+using CsrMutex = std::recursive_mutex;
+using MutexLock = std::unique_lock<CsrMutex>;
 
 struct EventPool;
 struct Event;
@@ -43,17 +46,20 @@ template <GFXCORE_FAMILY gfxCoreFamily>
 struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFamily> {
     using GfxFamily = typename NEO::GfxFamilyMapper<gfxCoreFamily>::GfxFamily;
     using BaseClass = CommandListCoreFamily<gfxCoreFamily>;
+    using BaseClass::assignInOrderExecInfoToEvent;
     using BaseClass::BaseClass;
     using BaseClass::copyThroughLockedPtrEnabled;
-    using BaseClass::executeCommandListImmediate;
+    using BaseClass::getCopyOffloadModeForOperation;
     using BaseClass::getCsr;
     using BaseClass::isCopyOffloadEnabled;
     using BaseClass::isCopyOnly;
+    using BaseClass::isDualStreamCopyOffloadOperation;
     using BaseClass::isInOrderExecutionEnabled;
     using BaseClass::isSkippingInOrderBarrierAllowed;
     using BaseClass::isTbxMode;
+    using BaseClass::patternAllocations;
 
-    using ComputeFlushMethodType = NEO::CompletionStamp (CommandListCoreFamilyImmediate<gfxCoreFamily>::*)(NEO::LinearStream &, size_t, bool, bool, bool, bool);
+    using ComputeFlushMethodType = NEO::CompletionStamp (CommandListCoreFamilyImmediate<gfxCoreFamily>::*)(NEO::LinearStream &, size_t, bool, bool, NEO::AppendOperations, bool);
 
     CommandListCoreFamilyImmediate(uint32_t numIddsPerBlock);
 
@@ -61,7 +67,7 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                    const ze_group_count_t &threadGroupDimensions,
                                    ze_event_handle_t hEvent, uint32_t numWaitEvents,
                                    ze_event_handle_t *phWaitEvents,
-                                   CmdListKernelLaunchParams &launchParams, bool relaxedOrderingDispatch) override;
+                                   CmdListKernelLaunchParams &launchParams) override;
 
     ze_result_t appendLaunchKernelIndirect(ze_kernel_handle_t kernelHandle,
                                            const ze_group_count_t &pDispatchArgumentsBuffer,
@@ -95,7 +101,7 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                  size_t patternSize, size_t size,
                                  ze_event_handle_t hSignalEvent,
                                  uint32_t numWaitEvents,
-                                 ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                 ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendSignalEvent(ze_event_handle_t hEvent, bool relaxedOrderingDispatch) override;
 
@@ -120,14 +126,14 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                           const ze_image_region_t *pDstRegion,
                                           ze_event_handle_t hEvent,
                                           uint32_t numWaitEvents,
-                                          ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                          ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendImageCopyToMemory(void *dstPtr,
                                         ze_image_handle_t hSrcImage,
                                         const ze_image_region_t *pSrcRegion,
                                         ze_event_handle_t hEvent,
                                         uint32_t numWaitEvents,
-                                        ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                        ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendImageCopyFromMemoryExt(ze_image_handle_t hDstImage,
                                              const void *srcPtr,
@@ -136,7 +142,7 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                              uint32_t srcSlicePitch,
                                              ze_event_handle_t hEvent,
                                              uint32_t numWaitEvents,
-                                             ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                             ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendImageCopyToMemoryExt(void *dstPtr,
                                            ze_image_handle_t hSrcImage,
@@ -145,13 +151,12 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                            uint32_t destSlicePitch,
                                            ze_event_handle_t hEvent,
                                            uint32_t numWaitEvents,
-                                           ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                           ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
-    ze_result_t appendImageCopy(
-        ze_image_handle_t dst, ze_image_handle_t src,
-        ze_event_handle_t hEvent,
-        uint32_t numWaitEvents,
-        ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+    ze_result_t appendImageCopy(ze_image_handle_t dst, ze_image_handle_t src,
+                                ze_event_handle_t hEvent,
+                                uint32_t numWaitEvents,
+                                ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendImageCopyRegion(ze_image_handle_t hDstImage,
                                       ze_image_handle_t hSrcImage,
@@ -159,7 +164,7 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                       const ze_image_region_t *pSrcRegion,
                                       ze_event_handle_t hEvent,
                                       uint32_t numWaitEvents,
-                                      ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override;
+                                      ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
 
     ze_result_t appendMemoryRangesBarrier(uint32_t numRanges,
                                           const size_t *pRangeSizes,
@@ -173,11 +178,11 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
     ze_result_t appendWriteToMemory(void *desc, void *ptr,
                                     uint64_t data) override;
 
-    ze_result_t appendWaitExternalSemaphores(uint32_t numExternalSemaphores, const ze_intel_external_semaphore_exp_handle_t *hSemaphores,
-                                             const ze_intel_external_semaphore_wait_params_exp_t *params, ze_event_handle_t hSignalEvent,
+    ze_result_t appendWaitExternalSemaphores(uint32_t numExternalSemaphores, const ze_external_semaphore_ext_handle_t *hSemaphores,
+                                             const ze_external_semaphore_wait_params_ext_t *params, ze_event_handle_t hSignalEvent,
                                              uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
-    ze_result_t appendSignalExternalSemaphores(size_t numExternalSemaphores, const ze_intel_external_semaphore_exp_handle_t *hSemaphores,
-                                               const ze_intel_external_semaphore_signal_params_exp_t *params, ze_event_handle_t hSignalEvent,
+    ze_result_t appendSignalExternalSemaphores(size_t numExternalSemaphores, const ze_external_semaphore_ext_handle_t *hSemaphores,
+                                               const ze_external_semaphore_signal_params_ext_t *params, ze_event_handle_t hSignalEvent,
                                                uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
 
     ze_result_t hostSynchronize(uint64_t timeout) override;
@@ -186,24 +191,34 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
         return ZE_RESULT_SUCCESS;
     }
 
-    MOCKABLE_VIRTUAL ze_result_t executeCommandListImmediateWithFlushTask(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool copyOffloadSubmission, bool requireTaskCountUpdate);
-    ze_result_t executeCommandListImmediateWithFlushTaskImpl(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool requireTaskCountUpdate, CommandQueue *cmdQ);
+    MOCKABLE_VIRTUAL ze_result_t executeCommandListImmediateWithFlushTask(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation,
+                                                                          bool copyOffloadSubmission, bool requireTaskCountUpdate,
+                                                                          MutexLock *outerLock,
+                                                                          std::unique_lock<std::mutex> *outerLockForIndirect);
+    ze_result_t executeCommandListImmediateWithFlushTaskImpl(bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation,
+                                                             bool requireTaskCountUpdate,
+                                                             CommandQueue *cmdQ,
+                                                             MutexLock *outerLock,
+                                                             std::unique_lock<std::mutex> *outerLockForIndirect);
     ze_result_t appendCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *phCommandLists,
                                    ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
 
-    NEO::CompletionStamp flushRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool requireTaskCountUpdate);
-    NEO::CompletionStamp flushImmediateRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool requireTaskCountUpdate);
-    NEO::CompletionStamp flushImmediateRegularTaskStateless(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool requireTaskCountUpdate);
-    NEO::CompletionStamp flushBcsTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::CommandStreamReceiver *csr);
+    NEO::CompletionStamp flushRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation, bool requireTaskCountUpdate);
+    NEO::CompletionStamp flushImmediateRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation, bool requireTaskCountUpdate);
+    NEO::CompletionStamp flushImmediateRegularTaskStateless(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation, bool requireTaskCountUpdate);
+    NEO::CompletionStamp flushBcsTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool requireTaskCountUpdate, NEO::AppendOperations appendOperation, NEO::CommandStreamReceiver *csr);
 
     template <bool streamStatesSupported>
     void handleHeapsAndResidencyForImmediateRegularTask(void *&sshCpuBaseAddress);
     void handleDebugSurfaceStateUpdate(NEO::IndirectHeap *ssh);
 
-    void checkAvailableSpace(uint32_t numEvents, bool hasRelaxedOrderingDependencies, size_t commandSize);
+    void checkAvailableSpace(uint32_t numEvents, bool hasRelaxedOrderingDependencies, size_t commandSize, bool requestCommandBufferInLocalMem);
     void updateDispatchFlagsWithRequiredStreamState(NEO::DispatchFlags &dispatchFlags);
 
-    MOCKABLE_VIRTUAL ze_result_t flushImmediate(ze_result_t inputRet, bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, bool kernelOperation, bool copyOffloadSubmission, ze_event_handle_t hSignalEvent, bool requireTaskCountUpdate);
+    MOCKABLE_VIRTUAL ze_result_t flushImmediate(ze_result_t inputRet, bool performMigration, bool hasStallingCmds, bool hasRelaxedOrderingDependencies,
+                                                NEO::AppendOperations appendOperation, bool copyOffloadSubmission, ze_event_handle_t hSignalEvent, bool requireTaskCountUpdate,
+                                                MutexLock *outerLock,
+                                                std::unique_lock<std::mutex> *outerLockForIndirect);
 
     bool preferCopyThroughLockedPtr(CpuMemCopyInfo &cpuMemCopyInfo, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents);
     bool isSuitableUSMHostAlloc(NEO::SvmAllocationData *alloc);
@@ -211,7 +226,6 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
     bool isSuitableUSMSharedAlloc(NEO::SvmAllocationData *alloc);
     ze_result_t performCpuMemcpy(const CpuMemCopyInfo &cpuMemCopyInfo, ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents);
     void *obtainLockedPtrFromDevice(NEO::SvmAllocationData *alloc, void *ptr, bool &lockingFailed);
-    bool waitForEventsFromHost();
     TransferType getTransferType(const CpuMemCopyInfo &cpuMemCopyInfo);
     size_t getTransferThreshold(TransferType transferType);
     bool isBarrierRequired();
@@ -222,20 +236,22 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
     using BaseClass::inOrderExecInfo;
 
     void printKernelsPrintfOutput(bool hangDetected);
+    ze_result_t flushInOrderCounterSignal(bool waitOnInOrderCounterRequired) override;
     MOCKABLE_VIRTUAL ze_result_t synchronizeInOrderExecution(uint64_t timeout, bool copyOffloadSync) const;
     ze_result_t hostSynchronize(uint64_t timeout, bool handlePostWaitOperations);
     bool hasStallingCmdsForRelaxedOrdering(uint32_t numWaitEvents, bool relaxedOrderingDispatch) const;
     void setupFlushMethod(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) override;
     void allocateOrReuseKernelPrivateMemoryIfNeeded(Kernel *kernel, uint32_t sizePerHwThread) override;
     void handleInOrderNonWalkerSignaling(Event *event, bool &hasStallingCmds, bool &relaxedOrderingDispatch, ze_result_t &result);
-    CommandQueue *getCmdQImmediate(bool copyOffloadOperation) const;
+    CommandQueue *getCmdQImmediate(CopyOffloadMode copyOffloadMode) const;
+    NEO::LinearStream *getOptionalEpilogueCmdStream(NEO::LinearStream *taskCmdStream, NEO::AppendOperations appendOperation);
 
     MOCKABLE_VIRTUAL void checkAssert();
     ComputeFlushMethodType computeFlushMethod = nullptr;
     uint64_t relaxedOrderingCounter = 0;
     std::atomic<bool> dependenciesPresent{false};
     bool latestFlushIsHostVisible = false;
-    bool latestFlushIsCopyOffload = false;
+    bool latestFlushIsDualCopyOffload = false;
     bool keepRelaxedOrderingEnabled = false;
 };
 

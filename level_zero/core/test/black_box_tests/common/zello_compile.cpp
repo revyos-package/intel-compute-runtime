@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -15,14 +15,24 @@
 namespace LevelZeroBlackBoxTests {
 
 std::vector<uint8_t> compileToSpirV(const std::string &src, const std::string &options, std::string &outCompilerLog) {
+    return compileToSpirV(src, options, {}, outCompilerLog);
+}
+
+std::vector<uint8_t> compileToSpirV(const std::string &src, const std::string &options, const std::string &device, std::string &outCompilerLog) {
     std::vector<uint8_t> ret;
 
     const char *mainFileName = "main.cl";
-    const char *argv[] = {"ocloc", "-q", "-spv_only", "-file", mainFileName, "", ""};
-    uint32_t numArgs = sizeof(argv) / sizeof(argv[0]) - 2;
+    const char *argv[] = {"ocloc", "-q", "-spv_only", "-file", mainFileName, "", "", "", ""};
+    uint32_t numArgs = sizeof(argv) / sizeof(argv[0]) - 4;
+    uint32_t nextArgIndex = 5;
+    if (device.size() > 0) {
+        argv[nextArgIndex++] = "-device";
+        argv[nextArgIndex++] = device.c_str();
+        numArgs += 2;
+    }
     if (options.size() > 0) {
-        argv[5] = "-options";
-        argv[6] = options.c_str();
+        argv[nextArgIndex++] = "-options";
+        argv[nextArgIndex++] = options.c_str();
         numArgs += 2;
     }
     const unsigned char *sources[] = {reinterpret_cast<const unsigned char *>(src.c_str())};
@@ -191,6 +201,12 @@ scratch_kernel(__global int *resIdx, global TYPE *src, global TYPE *dst) {
 const char *scratchKernelBuildOptions = "-igc_opts 'VISAOptions=-forcespills' ";
 
 const char *printfKernelSource = R"===(
+
+#define MACRO_STR1 "string with tab(\\t) new line(\\n):"
+#define MACRO_STR2 "using tab \tand new line \nin this string"
+
+void printf_function();
+
 __kernel void printf_kernel(char byteValue, short shortValue, int intValue, long longValue) {
     printf("byte = %hhd\nshort = %hd\nint = %d\nlong = %ld", byteValue, shortValue, intValue, longValue);
 }
@@ -202,6 +218,27 @@ __kernel void printf_kernel1() {
         printf("id == %d\n", 0);
     }
 }
+
+__kernel void print_string() {
+    printf("%s\n%s", "string with tab(\\t) new line(\\n):", "using tab \tand new line \nin this string");
+}
+
+__kernel void print_macros() {
+    printf("%s\n%s", MACRO_STR1, MACRO_STR2);
+}
+
+__kernel void print_from_function_kernel() {
+    printf_function();
+}
+
+)===";
+
+const char *printfFunctionSource = R"===(
+
+void printf_function() {
+     printf("test function\n");
+}
+
 )===";
 
 const char *readNV12Module = R"===(

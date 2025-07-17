@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -132,11 +132,11 @@ struct DeviceExtensionTest : public ::testing::Test {
     const uint32_t rootDeviceIndex = 0u;
 };
 
-TEST_F(DeviceExtensionTest, whenGetExternalMemoryPropertiesWithoutOsInterfaceIsCalledThenUnitializedIsReturnedAndNoPropertiesAreSet) {
+TEST_F(DeviceExtensionTest, whenGetExternalMemoryPropertiesWithoutOsInterfaceIsCalledThenSuccessIsReturnedAndNoPropertiesAreSet) {
     ze_device_external_memory_properties_t externalMemoryProperties{};
 
     ze_result_t result = device->getExternalMemoryProperties(&externalMemoryProperties);
-    EXPECT_EQ(ZE_RESULT_ERROR_UNINITIALIZED, result);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     EXPECT_FALSE(externalMemoryProperties.imageExportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32);
     EXPECT_FALSE(externalMemoryProperties.imageExportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF);
     EXPECT_FALSE(externalMemoryProperties.imageImportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32);
@@ -145,6 +145,20 @@ TEST_F(DeviceExtensionTest, whenGetExternalMemoryPropertiesWithoutOsInterfaceIsC
     EXPECT_FALSE(externalMemoryProperties.memoryAllocationExportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF);
     EXPECT_FALSE(externalMemoryProperties.memoryAllocationImportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32);
     EXPECT_FALSE(externalMemoryProperties.memoryAllocationImportTypes & ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF);
+}
+
+TEST_F(DeviceExtensionTest, givenDeviceCacheLineSizeExtensionThenGetCachePropertiesReturnsDeviceCachLineSizeGreaterThanZero) {
+    ze_device_cache_line_size_ext_t cacheLineSizeExtDesc = {};
+    cacheLineSizeExtDesc.stype = ZE_STRUCTURE_TYPE_DEVICE_CACHELINE_SIZE_EXT;
+
+    ze_device_cache_properties_t deviceCacheProperties = {};
+    deviceCacheProperties.pNext = &cacheLineSizeExtDesc;
+
+    uint32_t count = 1;
+    ze_result_t res = device->getCacheProperties(&count, &deviceCacheProperties);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+
+    EXPECT_NE(0u, cacheLineSizeExtDesc.cacheLineSize);
 }
 
 class MockCacheReservation : public CacheReservation {
@@ -160,7 +174,7 @@ class MockCacheReservation : public CacheReservation {
         receivedCacheRegion = cacheRegion;
         return isInitialized;
     }
-    size_t getMaxCacheReservationSize() override {
+    size_t getMaxCacheReservationSize(size_t cacheLevel) override {
         return maxCacheReservationSize;
     }
 

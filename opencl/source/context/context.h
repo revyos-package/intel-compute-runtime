@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -37,6 +37,7 @@ class Kernel;
 class MemoryManager;
 class SharingFunctions;
 class SVMAllocsManager;
+class ProductHelper;
 class Program;
 class Platform;
 class TagAllocatorBase;
@@ -67,9 +68,14 @@ class Context : public BaseObject<_cl_context> {
 
         const StackVec<NEO::GraphicsAllocation *, 1> &getAllocationsVector();
     };
+    static_assert(NEO::NonCopyable<AbstractBuffersPool<BufferPool, Buffer, MemObj>>);
 
     class BufferPoolAllocator : public AbstractBuffersAllocator<BufferPool, Buffer, MemObj> {
+        using BaseType = AbstractBuffersAllocator<BufferPool, Buffer, MemObj>;
+
       public:
+        BufferPoolAllocator() = default;
+
         bool isAggregatedSmallBuffersEnabled(Context *context) const;
         void initAggregatedSmallBuffers(Context *context);
         Buffer *allocateBufferFromPool(const MemoryProperties &memoryProperties,
@@ -79,8 +85,8 @@ class Context : public BaseObject<_cl_context> {
                                        void *hostPtr,
                                        cl_int &errcodeRet);
         bool flagsAllowBufferFromPool(const cl_mem_flags &flags, const cl_mem_flags_intel &flagsIntel) const;
-        static inline uint32_t calculateMaxPoolCount(uint64_t totalMemory, size_t percentOfMemory) {
-            const auto maxPoolCount = static_cast<uint32_t>(totalMemory * (percentOfMemory / 100.0) / BufferPoolAllocator::aggregatedSmallBuffersPoolSize);
+        static inline uint32_t calculateMaxPoolCount(SmallBuffersParams smallBuffersParams, uint64_t totalMemory, size_t percentOfMemory) {
+            const auto maxPoolCount = static_cast<uint32_t>(totalMemory * (percentOfMemory / 100.0) / (smallBuffersParams.aggregatedSmallBuffersPoolSize));
             return maxPoolCount ? maxPoolCount : 1u;
         }
 
@@ -121,9 +127,6 @@ class Context : public BaseObject<_cl_context> {
         gtpinNotifyContextCreate(pContext);
         return pContext;
     }
-
-    Context &operator=(const Context &) = delete;
-    Context(const Context &) = delete;
 
     ~Context() override;
 
@@ -182,7 +185,7 @@ class Context : public BaseObject<_cl_context> {
     void registerSharing(Sharing *sharing);
 
     template <typename... Args>
-    void providePerformanceHint(cl_diagnostics_verbose_level flags, PerformanceHints performanceHint, Args &&...args) {
+    void providePerformanceHint(cl_diagnostic_verbose_level_intel flags, PerformanceHints performanceHint, Args &&...args) {
         DEBUG_BREAK_IF(contextCallback == nullptr);
         DEBUG_BREAK_IF(driverDiagnostics == nullptr);
         char hint[DriverDiagnostics::maxHintStringSize];
@@ -199,8 +202,8 @@ class Context : public BaseObject<_cl_context> {
 
     template <typename... Args>
     void providePerformanceHintForMemoryTransfer(cl_command_type commandType, bool transferRequired, Args &&...args) {
-        cl_diagnostics_verbose_level verboseLevel = transferRequired ? CL_CONTEXT_DIAGNOSTICS_LEVEL_BAD_INTEL
-                                                                     : CL_CONTEXT_DIAGNOSTICS_LEVEL_GOOD_INTEL;
+        cl_diagnostic_verbose_level_intel verboseLevel = transferRequired ? CL_CONTEXT_DIAGNOSTICS_LEVEL_BAD_INTEL
+                                                                          : CL_CONTEXT_DIAGNOSTICS_LEVEL_GOOD_INTEL;
         PerformanceHints hint = driverDiagnostics->obtainHintForTransferOperation(commandType, transferRequired);
 
         providePerformanceHint(verboseLevel, hint, args...);
@@ -267,6 +270,15 @@ class Context : public BaseObject<_cl_context> {
         }
     };
 
+    struct UsmPoolParams {
+        size_t poolSize{0};
+        size_t minServicedSize{0};
+        size_t maxServicedSize{0};
+    };
+
+    UsmPoolParams getUsmHostPoolParams() const;
+    UsmPoolParams getUsmDevicePoolParams() const;
+
     Context(void(CL_CALLBACK *pfnNotify)(const char *, const void *, size_t, void *) = nullptr,
             void *userData = nullptr);
 
@@ -307,4 +319,7 @@ class Context : public BaseObject<_cl_context> {
     bool nonZebinContext = false;
     bool usmPoolInitialized = false;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<Context>);
+
 } // namespace NEO

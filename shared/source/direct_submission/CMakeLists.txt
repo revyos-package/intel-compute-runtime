@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2020-2023 Intel Corporation
+# Copyright (C) 2020-2025 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 #
@@ -13,10 +13,9 @@ set(NEO_CORE_DIRECT_SUBMISSION
     ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_hw.h
     ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_hw.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_bdw_and_later.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_hw_diagnostic_mode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_hw_diagnostic_mode.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_properties.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/direct_submission_relaxed_ordering.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/relaxed_ordering_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/relaxed_ordering_helper.h
 )

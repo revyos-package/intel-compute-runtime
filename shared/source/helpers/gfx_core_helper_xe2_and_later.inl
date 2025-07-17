@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Intel Corporation
+ * Copyright (C) 2024-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -15,6 +15,7 @@ void GfxCoreHelperHw<Family>::applyAdditionalCompressionSettings(Gmm &gmm, bool 
     gmm.resourceParams.Flags.Info.NotCompressed = isNotCompressed;
     if (!isNotCompressed) {
         gmm.resourceParams.Flags.Info.Cacheable = 0;
+        gmm.applyExtraAuxInitFlag();
     }
 
     if (debugManager.flags.PrintGmmCompressionParams.get()) {
@@ -80,6 +81,20 @@ template <>
 void MemorySynchronizationCommands<Family>::encodeAdditionalTimestampOffsets(LinearStream &commandStream, uint64_t contextAddress, uint64_t globalAddress, bool isBcs) {
     EncodeStoreMMIO<Family>::encode(commandStream, RegisterOffsets::gpThreadTimeRegAddressOffsetHigh, contextAddress + sizeof(uint32_t), false, nullptr, isBcs);
     EncodeStoreMMIO<Family>::encode(commandStream, RegisterOffsets::globalTimestampUn, globalAddress + sizeof(uint32_t), false, nullptr, isBcs);
+}
+
+template <>
+bool GfxCoreHelperHw<Family>::usmCompressionSupported(const NEO::HardwareInfo &hwInfo) const {
+    if (NEO::debugManager.flags.RenderCompressedBuffersEnabled.get() != -1) {
+        return !!NEO::debugManager.flags.RenderCompressedBuffersEnabled.get();
+    }
+
+    return hwInfo.capabilityTable.ftrRenderCompressedBuffers;
+}
+
+template <>
+bool GfxCoreHelperHw<Family>::isCacheFlushPriorImageReadRequired() const {
+    return true;
 }
 
 } // namespace NEO

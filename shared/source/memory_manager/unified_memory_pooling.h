@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -26,11 +26,12 @@ class UsmMemAllocPool {
     using AllocationsInfoStorage = BaseSortedPointerWithValueVector<AllocationInfo>;
 
     UsmMemAllocPool() = default;
+    virtual ~UsmMemAllocPool() = default;
     bool initialize(SVMAllocsManager *svmMemoryManager, const UnifiedMemoryProperties &memoryProperties, size_t poolSize, size_t minServicedSize, size_t maxServicedSize);
     bool initialize(SVMAllocsManager *svmMemoryManager, void *ptr, SvmAllocationData *svmData, size_t minServicedSize, size_t maxServicedSize);
     bool isInitialized() const;
     size_t getPoolSize() const;
-    void cleanup();
+    MOCKABLE_VIRTUAL void cleanup();
     static bool alignmentIsAllowed(size_t alignment);
     static bool flagsAreAllowed(const UnifiedMemoryProperties &memoryProperties);
     static double getPercentOfFreeMemoryForRecycling(InternalMemoryType memoryType);
@@ -43,18 +44,23 @@ class UsmMemAllocPool {
     size_t getPooledAllocationSize(const void *ptr);
     void *getPooledAllocationBasePtr(const void *ptr);
     size_t getOffsetInPool(const void *ptr) const;
+    uint64_t getPoolAddress() const;
 
     static constexpr auto chunkAlignment = 512u;
+    static constexpr auto poolAlignment = MemoryConstants::pageSize2M;
 
   protected:
-    size_t poolSize{};
     std::unique_ptr<HeapAllocator> chunkAllocator;
     void *pool{};
     void *poolEnd{};
     SVMAllocsManager *svmMemoryManager{};
     AllocationsInfoStorage allocations;
     std::mutex mtx;
+    RootDeviceIndicesContainer rootDeviceIndices;
+    std::map<uint32_t, NEO::DeviceBitfield> deviceBitFields;
+    Device *device;
     InternalMemoryType poolMemoryType;
+    size_t poolSize{};
     size_t minServicedSize;
     size_t maxServicedSize;
 };
@@ -79,7 +85,7 @@ class UsmMemAllocPoolsManager {
         PoolInfo{16 * MB+1,  64 * MB,  0},
         PoolInfo{64 * MB+1, 256 * MB,  0}};
     // clang-format on
-    const size_t firstNonPreallocatedIndex = 3u;
+    static constexpr size_t firstNonPreallocatedIndex = 3u;
 
     using UnifiedMemoryProperties = SVMAllocsManager::UnifiedMemoryProperties;
     static constexpr uint64_t KB = MemoryConstants::kiloByte; // NOLINT(readability-identifier-naming)
@@ -103,6 +109,7 @@ class UsmMemAllocPoolsManager {
     size_t getPooledAllocationSize(const void *ptr);
     void *getPooledAllocationBasePtr(const void *ptr);
     size_t getOffsetInPool(const void *ptr);
+    UsmMemAllocPool *getPoolContainingAlloc(const void *ptr);
 
   protected:
     static bool canBePooled(size_t size, const UnifiedMemoryProperties &memoryProperties) {
@@ -113,8 +120,6 @@ class UsmMemAllocPoolsManager {
     bool belongsInPreallocatedPool(size_t size) {
         return size <= poolInfos[firstNonPreallocatedIndex - 1].maxServicedSize;
     }
-
-    UsmMemAllocPool *getPoolContainingAlloc(const void *ptr);
 
     SVMAllocsManager *svmMemoryManager{};
     MemoryManager *memoryManager;

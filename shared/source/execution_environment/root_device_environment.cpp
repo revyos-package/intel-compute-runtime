@@ -33,8 +33,11 @@
 #include "shared/source/os_interface/os_interface.h"
 #include "shared/source/os_interface/os_time.h"
 #include "shared/source/os_interface/product_helper.h"
+#include "shared/source/program/print_formatter.h"
 #include "shared/source/release_helper/release_helper.h"
+#include "shared/source/sip_external_lib/sip_external_lib.h"
 #include "shared/source/utilities/software_tags_manager.h"
+#include "shared/source/utilities/wait_util.h"
 
 namespace NEO {
 
@@ -53,6 +56,10 @@ void RootDeviceEnvironment::initAubCenter(bool localMemoryEnabled, const std::st
         UNRECOVERABLE_IF(!getGmmHelper());
         aubCenter.reset(new AubCenter(*this, localMemoryEnabled, aubFileName, csrType));
     }
+    if (debugManager.flags.UseAubStream.get() && aubCenter->getAubManager() == nullptr) {
+        printToStderr("ERROR: Simulation mode detected but Aubstream is not available.\n");
+        UNRECOVERABLE_IF(true);
+    }
 }
 
 void RootDeviceEnvironment::initDebuggerL0(Device *neoDevice) {
@@ -64,6 +71,10 @@ void RootDeviceEnvironment::initDebuggerL0(Device *neoDevice) {
     this->getMutableHardwareInfo()->capabilityTable.ftrRenderCompressedImages = false;
 
     this->debugger = DebuggerL0::create(neoDevice);
+}
+
+void RootDeviceEnvironment::initWaitUtils() {
+    WaitUtils::init(WaitUtils::WaitpkgUse::tpause, *hwInfo);
 }
 
 const HardwareInfo *RootDeviceEnvironment::getHardwareInfo() const {
@@ -128,7 +139,6 @@ void RootDeviceEnvironment::initOsTime() {
     if (!osTime) {
         osTime = OSTime::create(osInterface.get());
         osTime->setDeviceTimerResolution();
-        osTime->setDeviceTimestampWidth(gfxCoreHelper->getDeviceTimestampWidth());
     }
 }
 
@@ -155,6 +165,16 @@ CompilerInterface *RootDeviceEnvironment::getCompilerInterface() {
     return this->compilerInterface.get();
 }
 
+SipExternalLib *RootDeviceEnvironment::getSipExternalLibInterface() {
+    if (sipExternalLib.get() == nullptr) {
+        if (gfxCoreHelper->getSipBinaryFromExternalLib()) {
+            std::lock_guard<std::mutex> autolock(this->mtx);
+            sipExternalLib.reset(SipExternalLib::getSipExternalLibInstance());
+        }
+    }
+    return sipExternalLib.get();
+}
+
 void RootDeviceEnvironment::initHelpers() {
     initProductHelper();
     initGfxCoreHelper();
@@ -164,6 +184,7 @@ void RootDeviceEnvironment::initHelpers() {
     initCompilerProductHelper();
     initReleaseHelper();
     initAilConfigurationHelper();
+    initWaitUtils();
 }
 
 void RootDeviceEnvironment::initializeGfxCoreHelperFromHwInfo() {
@@ -225,7 +246,7 @@ BuiltIns *RootDeviceEnvironment::getBuiltIns() {
     return this->builtins.get();
 }
 
-void RootDeviceEnvironment::limitNumberOfCcs(uint32_t numberOfCcs) {
+void RootDeviceEnvironment::setNumberOfCcs(uint32_t numberOfCcs) {
 
     hwInfo->gtSystemInfo.CCSInfo.NumberOfCCSEnabled = std::min(hwInfo->gtSystemInfo.CCSInfo.NumberOfCCSEnabled, numberOfCcs);
     limitedNumberOfCcs = true;

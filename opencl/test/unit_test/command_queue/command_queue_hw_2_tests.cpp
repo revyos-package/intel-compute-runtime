@@ -182,7 +182,7 @@ struct BuiltinParamsCommandQueueHwTests : public CommandQueueHwTest {
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadWriteBufferCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
 
     auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-    auto builtIn = compilerProductHelper.isHeaplessModeEnabled() ? EBuiltInOps::copyBufferToBufferStatelessHeapless : EBuiltInOps::copyBufferToBuffer;
+    auto builtIn = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo) ? EBuiltInOps::copyBufferToBufferStatelessHeapless : EBuiltInOps::copyBufferToBuffer;
     setUpImpl(builtIn);
     BufferDefaults::context = context;
     auto buffer = clUniquePtr(BufferHelper<>::create());
@@ -216,22 +216,22 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadWriteBufferCallWhenBu
 }
 
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueWriteImageCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
+    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
+
     DebugManagerStateRestore restorer;
     debugManager.flags.EnableCopyWithStagingBuffers.set(0);
 
     bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
 
-    for (auto useHeapless : {false, true}) {
-
+    for (auto useHeapless : {false, heaplessAllowed}) {
         if (useHeapless && !heaplessAllowed) {
             continue;
         }
+
         reinterpret_cast<MockCommandQueueHw<FamilyType> *>(pCmdQ)->heaplessModeEnabled = useHeapless;
-        auto builtInType = EBuiltInOps::adjustImageBuiltinType<EBuiltInOps::copyBufferToImage3d>(useHeapless);
+        setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToImage3d>(false, useHeapless));
 
-        setUpImpl(builtInType);
-
-        std::unique_ptr<Image> dstImage(ImageHelper<ImageUseHostPtr<Image2dDefaults>>::create(context));
+        std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
 
         auto imageDesc = dstImage->getImageDesc();
         size_t origin[] = {0, 0, 0};
@@ -271,9 +271,10 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueWriteImageCallWhenBuiltin
 
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadImageCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
 
-    setUpImpl(EBuiltInOps::copyImage3dToBuffer);
+    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
+    setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyImage3dToBuffer>(false, pCmdQ->getHeaplessModeEnabled()));
 
-    std::unique_ptr<Image> dstImage(ImageHelper<ImageUseHostPtr<Image2dDefaults>>::create(context));
+    std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
 
     auto imageDesc = dstImage->getImageDesc();
     size_t origin[] = {0, 0, 0};
@@ -313,7 +314,7 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadImageCallWhenBuiltinP
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadWriteBufferRectCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
 
     auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-    auto builtIn = compilerProductHelper.isHeaplessModeEnabled() ? EBuiltInOps::copyBufferRectStatelessHeapless : EBuiltInOps::copyBufferRect;
+    auto builtIn = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo) ? EBuiltInOps::copyBufferRectStatelessHeapless : EBuiltInOps::copyBufferRect;
     setUpImpl(builtIn);
 
     BufferDefaults::context = context;
@@ -348,12 +349,27 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadWriteBufferRectCallWh
     EXPECT_EQ(ptrOffset, builtinParams.srcOffset.x);
 }
 
-HWTEST_F(OOQueueHwTest, givenBlockedOutOfOrderCmdQueueAndAsynchronouslyCompletedEventWhenEnqueueCompletesVirtualEventThenUpdatedTaskLevelIsPassedToEnqueueAndFlushTask) {
+struct OOQueueHwTestWithMockCsr : public OOQueueHwTest {
+    void SetUp() override {}
+    void TearDown() override {}
+
+    template <typename FamilyType>
+    void setUpT() {
+        EnvironmentWithCsrWrapper environment;
+        environment.setCsrType<MockCsr<FamilyType>>();
+        OOQueueHwTest::SetUp();
+    }
+
+    template <typename FamilyType>
+    void tearDownT() {
+        OOQueueHwTest::TearDown();
+    }
+};
+
+HWTEST_TEMPLATED_F(OOQueueHwTestWithMockCsr, givenBlockedOutOfOrderCmdQueueAndAsynchronouslyCompletedEventWhenEnqueueCompletesVirtualEventThenUpdatedTaskLevelIsPassedToEnqueueAndFlushTask) {
     CommandQueueHw<FamilyType> *cmdQHw = static_cast<CommandQueueHw<FamilyType> *>(this->pCmdQ);
 
-    int32_t executionStamp = 0;
-    auto mockCSR = new MockCsr<FamilyType>(executionStamp, *pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCSR);
+    auto mockCSR = static_cast<MockCsr<FamilyType> *>(&pDevice->getUltCommandStreamReceiver<FamilyType>());
 
     MockKernelWithInternals mockKernelWithInternals(*pClDevice);
     auto mockKernel = mockKernelWithInternals.mockKernel;
@@ -513,6 +529,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadThenEnqueueB
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -520,15 +539,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadThenEnqueueB
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 1u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(cmdQHw->kernelParams.size.x, 8 * MemoryConstants::megaByte);
 
@@ -587,6 +606,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWithEventWhenEnqueueReadThe
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -594,8 +616,8 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWithEventWhenEnqueueReadThe
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     cl_event event = nullptr;
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, &event));
@@ -641,6 +663,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyAndD2HMaskWhenEnqueueReadTh
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -648,15 +673,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyAndD2HMaskWhenEnqueueReadTh
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(cmdQHw->kernelParams.size.x, 16 * MemoryConstants::megaByte);
 
@@ -694,6 +719,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyAndD2HMaskGreaterThanAvaila
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -701,15 +729,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyAndD2HMaskGreaterThanAvaila
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 1u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(cmdQHw->kernelParams.size.x, 8 * MemoryConstants::megaByte);
 
@@ -746,6 +774,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueWriteThenEnqueue
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -753,15 +784,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueWriteThenEnqueue
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueWriteBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 1u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(cmdQHw->kernelParams.size.x, 8 * MemoryConstants::megaByte);
 
@@ -797,6 +828,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueWriteH2HThenEnqu
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::system64KBPages;
@@ -804,15 +838,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueWriteH2HThenEnqu
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueWriteBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 1u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(cmdQHw->kernelParams.size.x, 8 * MemoryConstants::megaByte);
 
@@ -851,6 +885,9 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithRequeste
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -858,15 +895,15 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithRequeste
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 4u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore + 4u);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
     EXPECT_FALSE(cmdQHw->splitBarrierRequired);
 
     pCmdQ->release();
@@ -904,6 +941,9 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueBarrierNonSplitC
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -911,15 +951,15 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueBarrierNonSplitC
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 2u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore + 2u);
     EXPECT_TRUE(cmdQHw->splitBarrierRequired);
 
     debugManager.flags.SplitBcsCopy.set(1);
@@ -928,8 +968,8 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueBarrierNonSplitC
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 4u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 2u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore + 4u);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore + 2u);
     EXPECT_FALSE(cmdQHw->splitBarrierRequired);
 
     pCmdQ->release();
@@ -966,6 +1006,9 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadThenDoNotEnq
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -973,15 +1016,15 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadThenDoNotEnq
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     pCmdQ->release();
     pCmdQ = nullptr;
@@ -1020,6 +1063,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithRequeste
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -1027,15 +1073,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithRequeste
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore + 2u);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
     EXPECT_FALSE(cmdQHw->splitBarrierRequired);
 
     pCmdQ->release();
@@ -1074,6 +1120,9 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithNoReques
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -1081,15 +1130,15 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithNoReques
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 4u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore + 4u);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
     EXPECT_FALSE(cmdQHw->splitBarrierRequired);
 
     pCmdQ->release();
@@ -1126,6 +1175,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueBlockingReadThen
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -1133,15 +1185,15 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueBlockingReadThen
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_TRUE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, nullptr));
 
     EXPECT_EQ(csr1->peekTaskCount(), 2u);
     EXPECT_EQ(csr2->peekTaskCount(), 2u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     pCmdQ->release();
     pCmdQ = nullptr;
@@ -1177,6 +1229,9 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithEventThe
     cmdQHw->bcsEngines[1] = &control1;
     cmdQHw->bcsEngines[3] = &control2;
 
+    const auto gpgpuTaskCountBefore = cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount();
+    const auto bcsTaskCountBefore = cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount();
+
     BcsSplitBufferTraits::context = context;
     auto buffer = clUniquePtr(BufferHelper<BcsSplitBufferTraits>::create());
     static_cast<MockGraphicsAllocation *>(buffer->getGraphicsAllocation(0u))->memoryPool = MemoryPool::localMemory;
@@ -1184,16 +1239,16 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithEventThe
 
     EXPECT_EQ(csr1->peekTaskCount(), 0u);
     EXPECT_EQ(csr2->peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     cl_event event;
     EXPECT_EQ(CL_SUCCESS, cmdQHw->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, 16 * MemoryConstants::megaByte, ptr, nullptr, 0, nullptr, &event));
 
     EXPECT_EQ(csr1->peekTaskCount(), 1u);
     EXPECT_EQ(csr2->peekTaskCount(), 1u);
-    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), 0u);
-    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), 0u);
+    EXPECT_EQ(cmdQHw->getGpgpuCommandStreamReceiver().peekTaskCount(), gpgpuTaskCountBefore);
+    EXPECT_EQ(cmdQHw->getBcsCommandStreamReceiver(aub_stream::EngineType::ENGINE_BCS)->peekTaskCount(), bcsTaskCountBefore);
 
     EXPECT_NE(event, nullptr);
     auto pEvent = castToObject<Event>(event);
@@ -1205,6 +1260,10 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenSplitBcsCopyWhenEnqueueReadWithEventThe
 }
 
 HWTEST_F(IoqCommandQueueHwBlitTest, givenGpgpuCsrWhenEnqueueingSubsequentBlitsThenGpgpuCommandStreamIsNotObtained) {
+    if (pDevice->getCompilerProductHelper().isHeaplessModeEnabled(*defaultHwInfo)) {
+        GTEST_SKIP();
+    }
+
     auto &gpgpuCsr = pDevice->getUltCommandStreamReceiver<FamilyType>();
     auto srcBuffer = std::unique_ptr<Buffer>{BufferHelper<>::create(pContext)};
     auto dstBuffer = std::unique_ptr<Buffer>{BufferHelper<>::create(pContext)};
@@ -1351,7 +1410,6 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenBlitBeforeBarrierWhenEnqueueingCommandT
     using MI_SEMAPHORE_WAIT = typename FamilyType::MI_SEMAPHORE_WAIT;
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     using XY_COPY_BLT = typename FamilyType::XY_COPY_BLT;
-    using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
 
     if (pCmdQ->getTimestampPacketContainer() == nullptr) {
         GTEST_SKIP();
@@ -1405,10 +1463,10 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenBlitBeforeBarrierWhenEnqueueingCommandT
             if (semaphore) {
                 semaphoreIndex = index;
             }
-            const auto computeWalker = genCmdCast<DefaultWalkerType *>(*itor);
-            if (computeWalker) {
+            if (NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(itor, queueHwParser.cmdList.end()) != queueHwParser.cmdList.end()) {
                 lastComputeWalkerIndex = index;
             }
+
             ++itor;
             ++index;
         }
@@ -1538,6 +1596,166 @@ HWTEST_F(CommandQueueHwTest, GivenBuiltinKernelWhenBuiltinDispatchInfoBuilderIsP
     EXPECT_EQ(builder.paramsToUse.kernel, dispatchInfo->getKernel());
 }
 
+struct ImageTextureCacheFlushTest : public CommandQueueHwBlitTest<false> {
+    void SetUp() override {
+        REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
+        MockExecutionEnvironment mockExecutionEnvironment{};
+        auto &productHelper = mockExecutionEnvironment.rootDeviceEnvironments[rootDeviceIndex]->getHelper<ProductHelper>();
+        if (!productHelper.isBlitterForImagesSupported() || !productHelper.blitEnqueuePreferred(false)) {
+            GTEST_SKIP();
+        }
+
+        CommandQueueHwBlitTest<false>::SetUp();
+        debugManager.flags.ForceCacheFlushForBcs.set(0);
+    }
+
+    void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
+
+        CommandQueueHwBlitTest<false>::TearDown();
+    }
+
+    template <typename FamilyType>
+    void submitKernel(bool usingImages) {
+        MockKernelWithInternals kernelInternals(*pClDevice, context);
+        kernelInternals.mockKernel->usingImages = usingImages;
+        Kernel *kernel = kernelInternals.mockKernel;
+        MockMultiDispatchInfo multiDispatchInfo(pClDevice, kernel);
+        auto mockCmdQ = static_cast<MockCommandQueueHw<FamilyType> *>(this->pCmdQ);
+        auto enqueueResult = mockCmdQ->template enqueueHandler<CL_COMMAND_NDRANGE_KERNEL>(nullptr, 0, false, multiDispatchInfo, 0, nullptr, nullptr);
+        EXPECT_EQ(CL_SUCCESS, enqueueResult);
+    }
+
+    DebugManagerStateRestore restorer;
+};
+
+HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushNotRequiredWhenEnqueueWriteImageThenNoCacheFlushSubmitted) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    if (pCmdQ->getTimestampPacketContainer() == nullptr) {
+        GTEST_SKIP();
+    }
+
+    std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
+    auto imageDesc = dstImage->getImageDesc();
+    size_t origin[] = {0, 0, 0};
+    size_t region[] = {imageDesc.image_width, imageDesc.image_height, 0};
+    char ptr[1] = {};
+
+    submitKernel<FamilyType>(false);
+
+    auto cmdQStart = pCmdQ->getCS(0).getUsed();
+    auto status = pCmdQ->enqueueWriteImage(dstImage.get(),
+                                           CL_FALSE,
+                                           origin,
+                                           region,
+                                           0,
+                                           0,
+                                           ptr,
+                                           nullptr,
+                                           0,
+                                           0,
+                                           nullptr);
+    EXPECT_EQ(CL_SUCCESS, status);
+
+    LinearStream &cmdQStream = pCmdQ->getCS(0);
+    HardwareParse ccsHwParser;
+    ccsHwParser.parseCommands<FamilyType>(cmdQStream, cmdQStart);
+
+    auto pipeControls = findAll<PIPE_CONTROL *>(ccsHwParser.cmdList.begin(), ccsHwParser.cmdList.end());
+    EXPECT_TRUE(pipeControls.empty());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+}
+
+HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueReadImageThenNoCacheFlushSubmitted) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    if (pCmdQ->getTimestampPacketContainer() == nullptr) {
+        GTEST_SKIP();
+    }
+
+    std::unique_ptr<Image> srcImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
+    auto imageDesc = srcImage->getImageDesc();
+    size_t origin[] = {0, 0, 0};
+    size_t region[] = {imageDesc.image_width, imageDesc.image_height, 0};
+    char ptr[1] = {};
+
+    submitKernel<FamilyType>(true);
+
+    auto cmdQStart = pCmdQ->getCS(0).getUsed();
+    auto status = pCmdQ->enqueueReadImage(srcImage.get(),
+                                          CL_FALSE,
+                                          origin,
+                                          region,
+                                          0,
+                                          0,
+                                          ptr,
+                                          nullptr,
+                                          0,
+                                          0,
+                                          nullptr);
+    EXPECT_EQ(CL_SUCCESS, status);
+
+    LinearStream &cmdQStream = pCmdQ->getCS(0);
+    HardwareParse ccsHwParser;
+    ccsHwParser.parseCommands<FamilyType>(cmdQStream, cmdQStart);
+
+    auto pipeControls = findAll<PIPE_CONTROL *>(ccsHwParser.cmdList.begin(), ccsHwParser.cmdList.end());
+    EXPECT_TRUE(pipeControls.empty());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+}
+
+HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueWriteImageThenCacheFlushSubmitted) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    if (pCmdQ->getTimestampPacketContainer() == nullptr) {
+        GTEST_SKIP();
+    }
+
+    std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
+    auto imageDesc = dstImage->getImageDesc();
+    size_t origin[] = {0, 0, 0};
+    size_t region[] = {imageDesc.image_width, imageDesc.image_height, 0};
+    char ptr[1] = {};
+
+    submitKernel<FamilyType>(true);
+
+    auto cmdQStart = pCmdQ->getCS(0).getUsed();
+    auto status = pCmdQ->enqueueWriteImage(dstImage.get(),
+                                           CL_FALSE,
+                                           origin,
+                                           region,
+                                           0,
+                                           0,
+                                           ptr,
+                                           nullptr,
+                                           0,
+                                           0,
+                                           nullptr);
+    EXPECT_EQ(CL_SUCCESS, status);
+
+    LinearStream &cmdQStream = pCmdQ->getCS(0);
+    HardwareParse ccsHwParser;
+    ccsHwParser.parseCommands<FamilyType>(cmdQStream, cmdQStart);
+
+    bool isPipeControlWithTextureCacheFlush = false;
+    auto pipeControls = findAll<PIPE_CONTROL *>(ccsHwParser.cmdList.begin(), ccsHwParser.cmdList.end());
+    EXPECT_FALSE(pipeControls.empty());
+    for (auto pipeControlIter : pipeControls) {
+        auto pipeControlCmd = genCmdCast<PIPE_CONTROL *>(*pipeControlIter);
+        if (0u == pipeControlCmd->getImmediateData() &&
+            PIPE_CONTROL::POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA == pipeControlCmd->getPostSyncOperation() &&
+            pipeControlCmd->getTextureCacheInvalidationEnable()) {
+            isPipeControlWithTextureCacheFlush = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(isPipeControlWithTextureCacheFlush);
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+}
+
 HWTEST_F(IoqCommandQueueHwBlitTest, givenImageWithHostPtrWhenCreateImageThenStopRegularBcs) {
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
     auto &engine = pDevice->getEngine(aub_stream::EngineType::ENGINE_BCS, EngineUsage::regular);
@@ -1548,7 +1766,7 @@ HWTEST_F(IoqCommandQueueHwBlitTest, givenImageWithHostPtrWhenCreateImageThenStop
     directSubmission->initialize(true);
 
     EXPECT_TRUE(directSubmission->ringStart);
-    std::unique_ptr<Image> image(ImageHelper<ImageUseHostPtr<Image2dDefaults>>::create(context));
+    std::unique_ptr<Image> image(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
     EXPECT_FALSE(directSubmission->ringStart);
 }
 

@@ -144,6 +144,21 @@ cl_mem Buffer::validateInputAndCreateBuffer(cl_context context,
         return nullptr;
     }
 
+    if (expectHostPtr) {
+        auto svmAlloc = pContext->getSVMAllocsManager()->getSVMAlloc(hostPtr);
+
+        if (svmAlloc) {
+            auto rootDeviceIndex = pDevice->getRootDeviceIndex();
+            auto allocationEndAddress = svmAlloc->gpuAllocations.getGraphicsAllocation(rootDeviceIndex)->getGpuAddress() + svmAlloc->size;
+            auto bufferEndAddress = castToUint64(hostPtr) + size;
+
+            if ((size > svmAlloc->size) || (bufferEndAddress > allocationEndAddress)) {
+                retVal = CL_INVALID_BUFFER_SIZE;
+                return nullptr;
+            }
+        }
+    }
+
     // create the buffer
 
     Buffer *pBuffer = nullptr;
@@ -189,8 +204,6 @@ Buffer *Buffer::create(Context *context,
                   flags, 0, size, hostPtr, bufferCreateArgs, errcodeRet);
 }
 
-extern bool checkIsGpuCopyRequiredForDcFlushMitigation(AllocationType type);
-
 bool inline copyHostPointer(Buffer *buffer,
                             Device &device,
                             size_t size,
@@ -202,8 +215,7 @@ bool inline copyHostPointer(Buffer *buffer,
     auto memory = buffer->getGraphicsAllocation(rootDeviceIndex);
     auto isCompressionEnabled = memory->isCompressionEnabled();
     const bool isLocalMemory = !MemoryPoolHelper::isSystemMemoryPool(memory->getMemoryPool());
-    const bool isGpuCopyRequiredForDcFlushMitigation = productHelper.isDcFlushMitigated() && checkIsGpuCopyRequiredForDcFlushMitigation(memory->getAllocationType());
-    const bool gpuCopyRequired = isCompressionEnabled || isLocalMemory || isGpuCopyRequiredForDcFlushMitigation;
+    const bool gpuCopyRequired = isCompressionEnabled || isLocalMemory;
     if (gpuCopyRequired) {
         auto &hwInfo = device.getHardwareInfo();
 
@@ -226,14 +238,11 @@ bool inline copyHostPointer(Buffer *buffer,
             memory->setAubWritable(true, GraphicsAllocation::defaultBank);
             memory->setTbxWritable(true, GraphicsAllocation::defaultBank);
             memcpy_s(ptrOffset(lockedPointer, buffer->getOffset()), size, hostPtr, size);
-            if (isGpuCopyRequiredForDcFlushMitigation) {
-                CpuIntrinsics::sfence();
-            }
             return true;
         } else {
             auto blitMemoryToAllocationResult = BlitOperationResult::unsupported;
 
-            if (productHelper.isBlitterFullySupported(hwInfo) && (isLocalMemory || isGpuCopyRequiredForDcFlushMitigation)) {
+            if (productHelper.isBlitterFullySupported(hwInfo) && isLocalMemory) {
                 device.stopDirectSubmissionForCopyEngine();
                 blitMemoryToAllocationResult = BlitHelperFunctions::blitMemoryToAllocation(device, memory, buffer->getOffset(), hostPtr, {size, 1, 1});
             }
@@ -349,8 +358,10 @@ Buffer *Buffer::create(Context *context,
         auto &rootDeviceEnvironment = *executionEnvironment.rootDeviceEnvironments[rootDeviceIndex];
         auto hwInfo = rootDeviceEnvironment.getHardwareInfo();
         auto &gfxCoreHelper = rootDeviceEnvironment.getHelper<GfxCoreHelper>();
+        auto &defaultProductHelper = defaultDevice->getProductHelper();
+        bool compressionSupported = GfxCoreHelper::compressedBuffersSupported(*hwInfo) && !defaultProductHelper.isCompressionForbidden(*hwInfo);
 
-        bool compressionEnabled = MemObjHelper::isSuitableForCompression(GfxCoreHelper::compressedBuffersSupported(*hwInfo), memoryProperties, *context,
+        bool compressionEnabled = MemObjHelper::isSuitableForCompression(compressionSupported, memoryProperties, *context,
                                                                          gfxCoreHelper.isBufferSizeSuitableForCompression(size));
 
         allocationInfo.allocationType = getGraphicsAllocationTypeAndCompressionPreference(memoryProperties, compressionEnabled,
@@ -881,9 +892,9 @@ uint32_t Buffer::getMocsValue(bool disableL3Cache, bool isReadOnlyArgument, uint
 
     auto gmmHelper = executionEnvironment->rootDeviceEnvironments[rootDeviceIndex]->getGmmHelper();
     if (!disableL3Cache && !isMemObjUncacheableForSurfaceState() && (alignedMemObj || readOnlyMemObj || !isMemObjZeroCopy())) {
-        return gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER);
+        return gmmHelper->getL3EnabledMOCS();
     } else {
-        return gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED);
+        return gmmHelper->getUncachedMOCS();
     }
 }
 

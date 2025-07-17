@@ -20,11 +20,17 @@
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
+#include "level_zero/core/source/cmdlist/cmdlist_memory_copy_params.h"
 #include "level_zero/core/source/event/event.h"
 #include "level_zero/core/test/unit_tests/fixtures/module_fixture.h"
 #include "level_zero/core/test/unit_tests/fixtures/multi_tile_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdlist.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_module.h"
+
+#include "test_traits_common.h"
+
+using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 namespace L0 {
 namespace ult {
@@ -322,7 +328,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandListDualStorage, givenIndirectDispatchWithSh
     groupCountStoreRegisterMemCmd.setRegisterAddress(RegisterOffsets::gpgpuDispatchDimX);
     auto &compilerProductHelper = device->getCompilerProductHelper();
 
-    bool heapless = compilerProductHelper.isHeaplessModeEnabled();
+    bool heapless = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
     auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(heapless);
 
     groupCountStoreRegisterMemCmd.setMemoryAddress(commandList->getCmdContainer().getIndirectHeap(HeapType::indirectObject)->getGraphicsAllocation()->getGpuAddress() + numWorkGroupXOffset - inlineDataSize);
@@ -411,7 +417,7 @@ HWTEST_F(CommandListAppendLaunchKernelSWTags, givenEnableSWTagsWhenAppendLaunchK
     auto usedSpaceBefore = cmdStream->getUsed();
 
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto usedSpaceAfter = cmdStream->getUsed();
@@ -819,8 +825,10 @@ struct CmdlistAppendLaunchKernelWithImplicitArgsTests : CmdlistAppendLaunchKerne
 
     void SetUp() override {
         CmdlistAppendLaunchKernelTests::SetUp();
-        memset(&expectedImplicitArgs, 0, sizeof(ImplicitArgs));
-        expectedImplicitArgs.structSize = ImplicitArgs::getSize();
+        memset(&expectedImplicitArgs, 0, sizeof(expectedImplicitArgs));
+
+        expectedImplicitArgs.header.structSize = ImplicitArgsV0::getSize();
+        expectedImplicitArgs.header.structVersion = 0;
 
         expectedImplicitArgs.numWorkDim = 3;
         expectedImplicitArgs.simdWidth = 32;
@@ -881,11 +889,11 @@ struct CmdlistAppendLaunchKernelWithImplicitArgsTests : CmdlistAppendLaunchKerne
 
         ze_group_count_t groupCount{expectedImplicitArgs.groupCountX, expectedImplicitArgs.groupCountY, expectedImplicitArgs.groupCountZ};
         CmdListKernelLaunchParams launchParams = {};
-        result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+        result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
         const auto &rootDeviceEnvironment = device->getNEODevice()->getRootDeviceEnvironment();
-        implicitArgsProgrammingSize = ImplicitArgsHelper::getSizeForImplicitArgsPatching(&expectedImplicitArgs, *kernelDescriptor, !kernelRequiresGenerationOfLocalIdsByRuntime, rootDeviceEnvironment);
+        implicitArgsProgrammingSize = ImplicitArgsHelper::getSizeForImplicitArgsPatching(reinterpret_cast<const ImplicitArgs *>(&expectedImplicitArgs), *kernelDescriptor, !kernelRequiresGenerationOfLocalIdsByRuntime, rootDeviceEnvironment);
         auto sizeCrossThreadData = kernel->getCrossThreadDataSize();
         auto sizePerThreadDataForWholeGroup = kernel->getPerThreadDataSizeForWholeThreadGroup();
         EXPECT_EQ(indirectHeap->getUsed(), alignUp(sizeCrossThreadData + sizePerThreadDataForWholeGroup + implicitArgsProgrammingSize, NEO::EncodeDispatchKernel<FamilyType>::getDefaultIOHAlignment()));
@@ -897,7 +905,7 @@ struct CmdlistAppendLaunchKernelWithImplicitArgsTests : CmdlistAppendLaunchKerne
     }
     std::unique_ptr<L0::CommandList> commandList;
     GraphicsAllocation *indirectHeapAllocation = nullptr;
-    ImplicitArgs expectedImplicitArgs = {ImplicitArgs::getSize()};
+    ImplicitArgsV0 expectedImplicitArgs = {};
     std::array<uint8_t, 3> workgroupDimOrder{0, 1, 2};
     uint32_t implicitArgsProgrammingSize = 0u;
 
@@ -917,27 +925,27 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CmdlistAppendLaunchKernelWithImplicitArgsTests, giv
 
     auto grfSize = ImplicitArgsHelper::getGrfSize(expectedImplicitArgs.simdWidth);
     auto numGrf = GrfConfig::defaultGrfNumber;
-    auto expectedLocalIds = alignedMalloc(implicitArgsProgrammingSize - ImplicitArgs::getSize(), MemoryConstants::cacheLineSize);
+    auto expectedLocalIds = alignedMalloc(implicitArgsProgrammingSize - ImplicitArgsV0::getAlignedSize(), MemoryConstants::cacheLineSize);
     const auto &rootDeviceEnvironment = device->getNEODevice()->getRootDeviceEnvironment();
     generateLocalIDs(expectedLocalIds, expectedImplicitArgs.simdWidth, localSize, workgroupDimOrder, false, grfSize, numGrf, rootDeviceEnvironment);
 
-    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgs::getSize();
-    size_t sizeForLocalIds = NEO::PerThreadDataHelper::getPerThreadDataSizeTotal(expectedImplicitArgs.simdWidth, grfSize, numGrf, 3u, totalLocalSize, !kernelRequiresGenerationOfLocalIdsByRuntime, rootDeviceEnvironment);
+    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgsV0::getAlignedSize();
+    size_t sizeForLocalIds = NEO::PerThreadDataHelper::getPerThreadDataSizeTotal(expectedImplicitArgs.simdWidth, grfSize, numGrf, 3u, totalLocalSize, rootDeviceEnvironment);
 
     EXPECT_EQ(0, memcmp(expectedLocalIds, indirectHeapAllocation->getUnderlyingBuffer(), sizeForLocalIds));
     alignedFree(expectedLocalIds);
 
     auto implicitArgsInIndirectData = ptrOffset(indirectHeapAllocation->getUnderlyingBuffer(), localIdsProgrammingSize);
-    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgs::getSize()));
+    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgsV0::getSize()));
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, CmdlistAppendLaunchKernelWithImplicitArgsTests, givenPreXeHpPlatformWhenAppendLaunchKernelWithImplicitArgsThenImplicitArgsAreSentToIndirectHeapWithoutLocalIds) {
     dispatchKernelWithImplicitArgs<FamilyType>();
 
     auto implicitArgsInIndirectData = indirectHeapAllocation->getUnderlyingBuffer();
-    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgs::getSize()));
+    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgsV0::getSize()));
 
-    auto crossThreadDataInIndirectData = ptrOffset(indirectHeapAllocation->getUnderlyingBuffer(), alignUp(ImplicitArgs::getSize(), 64));
+    auto crossThreadDataInIndirectData = ptrOffset(indirectHeapAllocation->getUnderlyingBuffer(), ImplicitArgsV0::getAlignedSize());
 
     auto programmedImplicitArgsGpuVA = reinterpret_cast<uint64_t *>(crossThreadDataInIndirectData)[0];
     EXPECT_EQ(indirectHeapAllocation->getGpuAddress(), programmedImplicitArgsGpuVA);
@@ -964,18 +972,18 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CmdlistAppendLaunchKernelWithImplicitArgsTests, giv
 
     auto grfSize = ImplicitArgsHelper::getGrfSize(expectedImplicitArgs.simdWidth);
     auto numGrf = GrfConfig::defaultGrfNumber;
-    auto expectedLocalIds = alignedMalloc(implicitArgsProgrammingSize - ImplicitArgs::getSize(), MemoryConstants::cacheLineSize);
+    auto expectedLocalIds = alignedMalloc(implicitArgsProgrammingSize - ImplicitArgsV0::getSize(), MemoryConstants::cacheLineSize);
     const auto &rootDeviceEnvironment = device->getNEODevice()->getRootDeviceEnvironment();
     generateLocalIDs(expectedLocalIds, expectedImplicitArgs.simdWidth, localSize, expectedDimOrder, false, grfSize, numGrf, rootDeviceEnvironment);
 
-    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgs::getSize();
-    size_t sizeForLocalIds = NEO::PerThreadDataHelper::getPerThreadDataSizeTotal(expectedImplicitArgs.simdWidth, grfSize, numGrf, 3u, totalLocalSize, !kernelRequiresGenerationOfLocalIdsByRuntime, rootDeviceEnvironment);
+    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgsV0::getAlignedSize();
+    size_t sizeForLocalIds = NEO::PerThreadDataHelper::getPerThreadDataSizeTotal(expectedImplicitArgs.simdWidth, grfSize, numGrf, 3u, totalLocalSize, rootDeviceEnvironment);
 
     EXPECT_EQ(0, memcmp(expectedLocalIds, indirectHeapAllocation->getUnderlyingBuffer(), sizeForLocalIds));
     alignedFree(expectedLocalIds);
 
     auto implicitArgsInIndirectData = ptrOffset(indirectHeapAllocation->getUnderlyingBuffer(), localIdsProgrammingSize);
-    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgs::getSize()));
+    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgsV0::getSize()));
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CmdlistAppendLaunchKernelWithImplicitArgsTests, givenXeHpAndLaterPlatformWhenAppendLaunchKernelWithImplicitArgsAndSimd1ThenLocalIdsAreGeneratedCorrectly) {
@@ -997,12 +1005,12 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CmdlistAppendLaunchKernelWithImplicitArgsTests, giv
 
     EXPECT_EQ(0, memcmp(expectedLocalIds, indirectHeapAllocation->getUnderlyingBuffer(), sizeof(expectedLocalIds)));
 
-    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgs::getSize();
+    auto localIdsProgrammingSize = implicitArgsProgrammingSize - ImplicitArgsV0::getAlignedSize();
 
     EXPECT_EQ(alignUp(sizeof(expectedLocalIds), MemoryConstants::cacheLineSize), localIdsProgrammingSize);
 
     auto implicitArgsInIndirectData = ptrOffset(indirectHeapAllocation->getUnderlyingBuffer(), localIdsProgrammingSize);
-    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgs::getSize()));
+    EXPECT_EQ(0, memcmp(implicitArgsInIndirectData, &expectedImplicitArgs, ImplicitArgsV0::getSize()));
 }
 
 HWTEST_F(CmdlistAppendLaunchKernelTests, givenKernelWithoutImplicitArgsWhenAppendLaunchKernelThenImplicitArgsAreNotSentToIndirectHeap) {
@@ -1031,7 +1039,7 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, givenKernelWithoutImplicitArgsWhenAppen
 
     ze_group_count_t groupCount = {3, 2, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto indirectHeap = commandList->getCmdContainer().getIndirectHeap(NEO::HeapType::indirectObject);
@@ -1041,7 +1049,7 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, givenKernelWithoutImplicitArgsWhenAppen
     EXPECT_EQ(indirectHeap->getUsed(), sizeCrossThreadData + sizePerThreadDataForWholeGroup);
 }
 
-HWTEST2_F(CmdlistAppendLaunchKernelTests, givenKernelWithScratchAndPrivateWhenAppendLaunchKernelThenCmdListHasCorrectPrivateAndScratchSizesSet, IsAtLeastXeHpCore) {
+HWTEST2_F(CmdlistAppendLaunchKernelTests, givenKernelWithScratchAndPrivateWhenAppendLaunchKernelThenCmdListHasCorrectPrivateAndScratchSizesSet, IsAtLeastXeCore) {
     std::unique_ptr<MockImmutableData> mockKernelImmData = std::make_unique<MockImmutableData>(0u);
     auto kernelDescriptor = mockKernelImmData->kernelDescriptor;
     kernelDescriptor->kernelAttributes.flags.requiresImplicitArgs = false;
@@ -1069,14 +1077,21 @@ HWTEST2_F(CmdlistAppendLaunchKernelTests, givenKernelWithScratchAndPrivateWhenAp
 
     ze_group_count_t groupCount = {3, 2, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     EXPECT_EQ(commandList->getCommandListPerThreadScratchSize(1u), static_cast<uint32_t>(0x100));
     EXPECT_EQ(commandList->getCommandListPerThreadScratchSize(0u), static_cast<uint32_t>(0x200));
 }
 
-HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelWithPrivateScratchWhenAppendLaunchKernelThenCmdContainerHasBindfulSSHAllocated, IsAtLeastXeHpCore) {
+struct CmdlistAppendLaunchKernelTestsWithoutHeaplessMatcher {
+    template <PRODUCT_FAMILY productFamily>
+    static constexpr bool isMatched() {
+        return IsAtLeastXeCore::isMatched<productFamily>() && !(TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::heaplessRequired);
+    }
+};
+
+HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelWithPrivateScratchWhenAppendLaunchKernelThenCmdContainerHasBindfulSSHAllocated, CmdlistAppendLaunchKernelTestsWithoutHeaplessMatcher) {
     DebugManagerStateRestore restorer;
     debugManager.flags.UseExternalAllocatorForSshAndDsh.set(1);
     UnitTestSetter::disableHeapless(restorer);
@@ -1112,13 +1127,13 @@ HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelW
 
     ze_group_count_t groupCount = {3, 2, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     EXPECT_NE(nullptr, commandList->getCmdContainer().getIndirectHeap(HeapType::surfaceState));
 }
 
-HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelWithScratchWhenAppendLaunchKernelThenCmdContainerHasBindfulSSHAllocated, IsAtLeastXeHpCore) {
+HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelWithScratchWhenAppendLaunchKernelThenCmdContainerHasBindfulSSHAllocated, CmdlistAppendLaunchKernelTestsWithoutHeaplessMatcher) {
     DebugManagerStateRestore restorer;
     debugManager.flags.UseExternalAllocatorForSshAndDsh.set(1);
     UnitTestSetter::disableHeapless(restorer);
@@ -1153,7 +1168,7 @@ HWTEST2_F(CmdlistAppendLaunchKernelTests, givenGlobalBindlessAllocatorAndKernelW
 
     ze_group_count_t groupCount = {3, 2, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     EXPECT_NE(nullptr, commandList->getCmdContainer().getIndirectHeap(HeapType::surfaceState));
@@ -1169,7 +1184,7 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, whenEncodingWorkDimForIndirectDispatchT
         uint32_t groupSize[] = {1, 1, 1};
         auto estimate = EncodeIndirectParams<FamilyType>::getCmdsSizeForSetWorkDimIndirect(groupSize, false);
         auto sizeBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
-        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x4, 0u, groupSize);
+        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x4, 0u, groupSize, nullptr);
         auto sizeAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
         EXPECT_LE(sizeAfter - sizeBefore, estimate);
     }
@@ -1177,7 +1192,7 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, whenEncodingWorkDimForIndirectDispatchT
         uint32_t groupSize[] = {1, 1, 2};
         auto estimate = EncodeIndirectParams<FamilyType>::getCmdsSizeForSetWorkDimIndirect(groupSize, false);
         auto sizeBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
-        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x4, 0u, groupSize);
+        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x4, 0u, groupSize, nullptr);
         auto sizeAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
         EXPECT_LE(sizeAfter - sizeBefore, estimate);
     }
@@ -1185,7 +1200,7 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, whenEncodingWorkDimForIndirectDispatchT
         uint32_t groupSize[] = {1, 1, 1};
         auto estimate = EncodeIndirectParams<FamilyType>::getCmdsSizeForSetWorkDimIndirect(groupSize, true);
         auto sizeBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
-        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x2, 0u, groupSize);
+        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x2, 0u, groupSize, nullptr);
         auto sizeAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
         EXPECT_LE(sizeAfter - sizeBefore, estimate);
     }
@@ -1193,14 +1208,14 @@ HWTEST_F(CmdlistAppendLaunchKernelTests, whenEncodingWorkDimForIndirectDispatchT
         uint32_t groupSize[] = {1, 1, 2};
         auto estimate = EncodeIndirectParams<FamilyType>::getCmdsSizeForSetWorkDimIndirect(groupSize, true);
         auto sizeBefore = commandList->getCmdContainer().getCommandStream()->getUsed();
-        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x2, 0u, groupSize);
+        EncodeIndirectParams<FamilyType>::setWorkDimIndirect(commandList->getCmdContainer(), 0x2, 0u, groupSize, nullptr);
         auto sizeAfter = commandList->getCmdContainer().getCommandStream()->getUsed();
         EXPECT_LE(sizeAfter - sizeBefore, estimate);
     }
 }
 
 using CommandListAppendLaunchKernel = Test<ModuleFixture>;
-HWTEST2_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernelsWhenAppendLaunchCooperativeKernelIsCalledThenReturnSuccess, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernelsWhenAppendLaunchCooperativeKernelIsCalledThenReturnSuccess) {
     Mock<::L0::KernelImp> kernel;
     std::unique_ptr<Module> pMockModule = std::make_unique<Mock<Module>>(device, nullptr);
     kernel.module = pMockModule.get();
@@ -1208,7 +1223,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernel
     kernel.setGroupSize(4, 1, 1);
     ze_group_count_t groupCount{8, 1, 1};
 
-    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     pCommandList->initialize(device, NEO::EngineGroupType::compute, 0u);
     CmdListKernelLaunchParams launchParams = {};
     launchParams.isCooperative = false;
@@ -1218,7 +1233,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernel
     result = pCommandList->appendLaunchKernelWithParams(&kernel, groupCount, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
-    pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     pCommandList->initialize(device, NEO::EngineGroupType::compute, 0u);
     launchParams.isCooperative = true;
     result = pCommandList->appendLaunchKernelWithParams(&kernel, groupCount, nullptr, launchParams);
@@ -1228,7 +1243,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernel
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenKernelWithSlmSizeExceedingLocalMemorySizeWhenAppendLaunchKernelWithParamsIsCalledThenDebugMsgErrIsPrintedAndOutOfDeviceMemoryIsReturned, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithSlmSizeExceedingLocalMemorySizeWhenAppendLaunchKernelWithParamsIsCalledThenDebugMsgErrIsPrintedAndOutOfDeviceMemoryIsReturned) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.PrintDebugMessages.set(true);
 
@@ -1239,7 +1254,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenKernelWithSlmSizeExceedingLocalMem
     kernel.setGroupSize(4, 1, 1);
     ze_group_count_t groupCount{8, 1, 1};
 
-    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     pCommandList->initialize(device, NEO::EngineGroupType::compute, 0u);
     CmdListKernelLaunchParams launchParams = {};
 
@@ -1269,7 +1284,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenKernelWithSlmSizeExceedingLocalMem
     EXPECT_EQ(expectedOutput, output);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichTogetherExceedGlobalMemSizeWhenAppendLaunchKernelWithParamsIsCalledOnlyThenAllocationHappens, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichTogetherExceedGlobalMemSizeWhenAppendLaunchKernelWithParamsIsCalledOnlyThenAllocationHappens) {
 
     auto devInfo = device->getNEODevice()->getDeviceInfo();
     auto kernelsNb = 2u;
@@ -1289,7 +1304,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichTogethe
     this->module->checkIfPrivateMemoryPerDispatchIsNeeded();
     EXPECT_TRUE(this->module->shouldAllocatePrivateMemoryPerDispatch());
 
-    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     pCommandList->device = this->module->getDevice();
     auto memoryMgr = static_cast<OsAgnosticMemoryManager *>(pCommandList->device->getNEODevice()->getExecutionEnvironment()->memoryManager.get());
     memoryMgr->turnOnFakingBigAllocations();
@@ -1305,7 +1320,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichTogethe
     }
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExceedGlobalMemSizeWhenAppendLaunchKernelWithParamsIsCalledThenNoAllocationIsDone, MatchAny) {
+HWTEST_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExceedGlobalMemSizeWhenAppendLaunchKernelWithParamsIsCalledThenNoAllocationIsDone) {
 
     auto devInfo = device->getNEODevice()->getDeviceInfo();
     auto kernelsNb = 2u;
@@ -1325,7 +1340,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExc
     this->module->checkIfPrivateMemoryPerDispatchIsNeeded();
     EXPECT_FALSE(this->module->shouldAllocatePrivateMemoryPerDispatch());
 
-    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     pCommandList->device = this->module->getDevice();
     auto memoryMgr = static_cast<OsAgnosticMemoryManager *>(pCommandList->device->getNEODevice()->getExecutionEnvironment()->memoryManager.get());
     memoryMgr->turnOnFakingBigAllocations();
@@ -1340,7 +1355,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExc
         EXPECT_EQ(pCommandList->getOwnedPrivateAllocationsSize(), 0u);
     }
 }
-HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, MatchAny) {
+HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, IsHeapfulSupported) {
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(1);
 
@@ -1352,7 +1367,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamProp
     std::unique_ptr<Module> pMockModule = std::make_unique<Mock<Module>>(device, nullptr);
     kernel.module = pMockModule.get();
 
-    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     auto result = pCommandList->initialize(device, NEO::EngineGroupType::compute, 0u);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
 
@@ -1397,7 +1412,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
 
     ze_group_count_t groupCount{256, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     EXPECT_EQ(4u, event->getPacketsInUse());
 
@@ -1405,7 +1420,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest, givenDebugVariableSetWhenUsingNonTimestampEventThenDontOverridePostSyncMode) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
+    using POSTSYN_DATA = decltype(FamilyType::template getPostSyncType<WalkerType>());
 
     ze_event_pool_desc_t eventPoolDesc = {};
     eventPoolDesc.stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC;
@@ -1428,7 +1444,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
 
     ze_group_count_t groupCount{256, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
-    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams, false);
+    result = commandList->appendLaunchKernel(kernel->toHandle(), groupCount, hEventHandle, 0, nullptr, launchParams);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     EXPECT_EQ(4u, event->getPacketsInUse());
     EXPECT_EQ(4u, commandList->partitionCount);
@@ -1438,26 +1454,21 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
         cmdList, commandList->getCmdContainer().getCommandStream()->getCpuBase(), commandList->getCmdContainer().getCommandStream()->getUsed()));
 
     auto it = NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(cmdList.begin(), cmdList.end());
-    WalkerVariant walkerCmd = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*it);
+    ASSERT_NE(it, cmdList.end());
+    auto walker = genCmdCast<WalkerType *>(*it);
 
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-        using PostSyncType = decltype(FamilyType::template getPostSyncType<WalkerType>());
-
-        EXPECT_TRUE(walker->getWorkloadPartitionEnable());
-        auto &postSync = walker->getPostSync();
-        EXPECT_EQ(PostSyncType::OPERATION_WRITE_IMMEDIATE_DATA, postSync.getOperation());
-    },
-               walkerCmd);
+    EXPECT_TRUE(walker->getWorkloadPartitionEnable());
+    auto &postSync = walker->getPostSync();
+    EXPECT_EQ(POSTSYN_DATA::OPERATION_WRITE_IMMEDIATE_DATA, postSync.getOperation());
 }
 
-HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest, givenCooperativeKernelWhenAppendingKernelsThenSetProperPartitionSize, IsAtLeastXeHpCore) {
+HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest, givenCooperativeKernelWhenAppendingKernelsThenSetProperPartitionSize, IsAtLeastXeCore) {
 
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     ze_group_count_t groupCount{16, 1, 1};
 
-    auto commandListWithNonCooperativeKernel = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto commandListWithNonCooperativeKernel = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     auto result = commandListWithNonCooperativeKernel->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     auto sizeBefore = commandListWithNonCooperativeKernel->getCmdContainer().getCommandStream()->getUsed();
@@ -1469,16 +1480,14 @@ HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest, givenCooperativeKe
     ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(
         cmdList, ptrOffset(commandListWithNonCooperativeKernel->getCmdContainer().getCommandStream()->getCpuBase(), sizeBefore), sizeAfter - sizeBefore));
     auto itorWalker = NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(cmdList.begin(), cmdList.end());
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*itorWalker);
-    std::visit([](auto &&walker) {
-        ASSERT_NE(nullptr, walker);
+    ASSERT_NE(itorWalker, cmdList.end());
+    auto walker = genCmdCast<WalkerType *>(*itorWalker);
+    ASSERT_NE(nullptr, walker);
 
-        EXPECT_TRUE(walker->getWorkloadPartitionEnable());
-        EXPECT_EQ(4u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    EXPECT_TRUE(walker->getWorkloadPartitionEnable());
+    EXPECT_EQ(4u, walker->getPartitionSize());
 
-    auto commandListWithCooperativeKernel = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<gfxCoreFamily>>>();
+    auto commandListWithCooperativeKernel = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     result = commandListWithCooperativeKernel->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     sizeBefore = commandListWithCooperativeKernel->getCmdContainer().getCommandStream()->getUsed();
@@ -1493,23 +1502,21 @@ HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest, givenCooperativeKe
     const auto &gfxCoreHelper = device->getGfxCoreHelper();
     bool singleTileExecImplicitScalingRequired = gfxCoreHelper.singleTileExecImplicitScalingRequired(true);
     itorWalker = NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(cmdList.begin(), cmdList.end());
+    ASSERT_NE(itorWalker, cmdList.end());
 
-    WalkerVariant walkerVariant2 = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*itorWalker);
-    std::visit([singleTileExecImplicitScalingRequired](auto &&walker) {
-        ASSERT_NE(nullptr, walker);
-        EXPECT_TRUE(walker->getWorkloadPartitionEnable());
-        if (singleTileExecImplicitScalingRequired) {
-            EXPECT_EQ(16u, walker->getPartitionSize());
-        } else {
-            EXPECT_EQ(4u, walker->getPartitionSize());
-        }
-    },
-               walkerVariant2);
+    auto walker2 = genCmdCast<WalkerType *>(*itorWalker);
+    ASSERT_NE(nullptr, walker2);
+    EXPECT_TRUE(walker2->getWorkloadPartitionEnable());
+    if (singleTileExecImplicitScalingRequired) {
+        EXPECT_EQ(16u, walker2->getPartitionSize());
+    } else {
+        EXPECT_EQ(4u, walker2->getPartitionSize());
+    }
 }
 
 HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
-          givenRegularCommandListWhenSynchronizationRequiredThenExpectJumpingBbStartCommandToSecondary, IsAtLeastXeHpCore) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+          givenRegularCommandListWhenSynchronizationRequiredThenExpectJumpingBbStartCommandToSecondary, IsAtLeastXeCore) {
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     using MI_BATCH_BUFFER_START = typename FamilyType::MI_BATCH_BUFFER_START;
     debugManager.flags.UsePipeControlAfterPartitionedWalker.set(1);
@@ -1520,7 +1527,7 @@ HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
 
     auto sizeBefore = cmdStream->getUsed();
     CmdListKernelLaunchParams launchParams = {};
-    auto result = commandList->appendLaunchKernel(kernel.get(), groupCount, nullptr, 0, nullptr, launchParams, false);
+    auto result = commandList->appendLaunchKernel(kernel.get(), groupCount, nullptr, 0, nullptr, launchParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, result);
     auto sizeAfter = cmdStream->getUsed();
 
@@ -1531,12 +1538,10 @@ HWTEST2_F(MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
         sizeAfter - sizeBefore));
 
     auto it = NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(cmdList.begin(), cmdList.end());
-    WalkerVariant walkerCmd = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*it);
+    ASSERT_NE(it, cmdList.end());
 
-    std::visit([](auto &&walker) {
-        EXPECT_TRUE(walker->getWorkloadPartitionEnable());
-    },
-               walkerCmd);
+    auto walker = genCmdCast<WalkerType *>(*it);
+    EXPECT_TRUE(walker->getWorkloadPartitionEnable());
 
     auto itorBbStart = find<MI_BATCH_BUFFER_START *>(cmdList.begin(), cmdList.end());
     ASSERT_NE(cmdList.end(), itorBbStart);

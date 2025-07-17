@@ -7,16 +7,12 @@
 
 #pragma once
 #include "shared/source/gmm_helper/gmm_lib.h"
-#include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/driver_model_type.h"
 #include "shared/source/memory_manager/definitions/engine_limits.h"
 #include "shared/source/os_interface/linux/drm_debug.h"
 #include "shared/source/os_interface/linux/drm_wrappers.h"
 #include "shared/source/os_interface/linux/hw_device_id.h"
 #include "shared/source/os_interface/os_interface.h"
-#include "shared/source/utilities/stackvec.h"
-
-#include "igfxfmid.h"
 
 #include <array>
 #include <atomic>
@@ -153,6 +149,7 @@ class Drm : public DriverModel {
     bool isDirectSubmissionActive() const { return this->directSubmissionActive; }
     MOCKABLE_VIRTUAL void setSharedSystemAllocEnable(bool value) { this->sharedSystemAllocEnable = value; }
     MOCKABLE_VIRTUAL bool isSharedSystemAllocEnabled() const { return this->sharedSystemAllocEnable; }
+    void adjustSharedSystemMemCapabilities();
 
     MOCKABLE_VIRTUAL bool isSetPairAvailable();
     MOCKABLE_VIRTUAL bool getSetPairAvailable() { return setPairAvailable; }
@@ -165,7 +162,7 @@ class Drm : public DriverModel {
 
     MOCKABLE_VIRTUAL bool isVmBindAvailable();
     MOCKABLE_VIRTUAL bool registerResourceClasses();
-
+    MOCKABLE_VIRTUAL void setPageFaultSupported(bool value) { this->pageFaultSupported = value; }
     MOCKABLE_VIRTUAL void queryPageFaultSupport();
     bool hasPageFaultSupport() const;
     bool hasKmdMigrationSupport() const;
@@ -190,8 +187,8 @@ class Drm : public DriverModel {
         return systemInfo.get();
     }
 
-    CacheInfo *getL3CacheInfo() const {
-        return l3CacheInfo.get();
+    CacheInfo *getCacheInfo() const {
+        return cacheInfo.get();
     }
 
     MemoryInfo *getMemoryInfo() const {
@@ -264,13 +261,17 @@ class Drm : public DriverModel {
     void cleanup() override;
     bool readSysFsAsString(const std::string &relativeFilePath, std::string &readString);
     MOCKABLE_VIRTUAL std::string getSysFsPciPath();
+    MOCKABLE_VIRTUAL std::string getSysFsPciPathBaseName();
     std::unique_ptr<HwDeviceIdDrm> &getHwDeviceId() { return hwDeviceId; }
 
     template <typename DataType>
     std::vector<DataType> query(uint32_t queryId, uint32_t queryItemFlags);
     static std::string getDrmVersion(int fileDescriptor);
+    MOCKABLE_VIRTUAL uint32_t getAggregatedProcessCount() const;
+    uint32_t getVmIdForContext(OsContext &osContext, uint32_t vmHandleId) const;
 
   protected:
+    Drm() = delete;
     Drm(std::unique_ptr<HwDeviceIdDrm> &&hwDeviceIdIn, RootDeviceEnvironment &rootDeviceEnvironment);
 
     int waitOnUserFencesImpl(const OsContextLinux &osContext, uint64_t address, uint64_t value, uint32_t numActiveTiles, int64_t timeout, uint32_t postSyncOffset, bool userInterrupt,
@@ -333,7 +334,7 @@ class Drm : public DriverModel {
     std::unique_ptr<HwDeviceIdDrm> hwDeviceId;
     std::unique_ptr<IoctlHelper> ioctlHelper;
     std::unique_ptr<SystemInfo> systemInfo;
-    std::unique_ptr<CacheInfo> l3CacheInfo;
+    std::unique_ptr<CacheInfo> cacheInfo;
     std::unique_ptr<EngineInfo> engineInfo;
     std::unique_ptr<MemoryInfo> memoryInfo;
 
@@ -354,7 +355,7 @@ class Drm : public DriverModel {
     bool setPairAvailable = false;
     bool chunkingAvailable = false;
     uint32_t chunkingMode = 0;
-    uint32_t minimalChunkingSize = MemoryConstants::pageSize2M;
+    uint32_t minimalChunkingSize;
     bool contextDebugSupported = false;
     bool pageFaultSupported = false;
     bool completionFenceSupported = false;

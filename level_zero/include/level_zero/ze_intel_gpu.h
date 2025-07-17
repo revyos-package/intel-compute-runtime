@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -56,14 +56,14 @@ typedef enum _ze_intel_device_module_dp_exp_flag_t {
 ///       `pNext` member of ::ze_device_module_properties_t.
 /// @brief Device module dot product properties
 typedef struct _ze_intel_device_module_dp_exp_properties_t {
-    ze_structure_type_t stype = ZE_STRUCTURE_INTEL_DEVICE_MODULE_DP_EXP_PROPERTIES; ///< [in] type of this structure
-    void *pNext;                                                                    ///< [in,out][optional] must be null or a pointer to an extension-specific
-                                                                                    ///< structure (i.e. contains sType and pNext).
-    ze_intel_device_module_dp_exp_flags_t flags;                                    ///< [out] 0 (none) or a valid combination of ::ze_intel_device_module_dp_flag_t
+    ze_structure_type_ext_t stype = ZE_STRUCTURE_INTEL_DEVICE_MODULE_DP_EXP_PROPERTIES; ///< [in] type of this structure
+    void *pNext;                                                                        ///< [in,out][optional] must be null or a pointer to an extension-specific
+                                                                                        ///< structure (i.e. contains sType and pNext).
+    ze_intel_device_module_dp_exp_flags_t flags;                                        ///< [out] 0 (none) or a valid combination of ::ze_intel_device_module_dp_flag_t
 } ze_intel_device_module_dp_exp_properties_t;
 
 #ifndef ZE_INTEL_COMMAND_LIST_MEMORY_SYNC
-/// @brief wait on memory extension name
+/// @brief Cmd List memory sync extension name
 #define ZE_INTEL_COMMAND_LIST_MEMORY_SYNC "ZE_intel_experimental_command_list_memory_sync"
 #endif // ZE_INTEL_COMMAND_LIST_MEMORY_SYNC
 
@@ -86,7 +86,7 @@ typedef enum _ze_intel_command_list_memory_sync_exp_version_t {
 ///     - Implementation must support ::ZE_intel_experimental_command_list_memory_sync extension
 ///     - May be passed to ze_device_properties_t through pNext.
 typedef struct _ze_intel_device_command_list_wait_on_memory_data_size_exp_desc_t {
-    ze_structure_type_t stype;                   ///< [in] type of this structure
+    ze_structure_type_ext_t stype;               ///< [in] type of this structure
     const void *pNext;                           ///< [in][optional] must be null or a pointer to an extension-specific
                                                  ///< structure (i.e. contains stype and pNext).
     uint32_t cmdListWaitOnMemoryDataSizeInBytes; /// <out> Defines supported data size for zexCommandListAppendWaitOnMemory[64] API
@@ -123,7 +123,7 @@ typedef enum _zex_intel_event_sync_mode_exp_flag_t {
 ///     - Implementation must support ::ZEX_intel_experimental_event_sync_mode extension
 ///     - May be passed to ze_event_desc_t through pNext.
 typedef struct _zex_intel_event_sync_mode_exp_desc_t {
-    ze_structure_type_t stype;                           ///< [in] type of this structure
+    ze_structure_type_ext_t stype;                       ///< [in] type of this structure
     const void *pNext;                                   ///< [in][optional] must be null or a pointer to an extension-specific
                                                          ///< structure (i.e. contains stype and pNext).
     zex_intel_event_sync_mode_exp_flags_t syncModeFlags; /// <in> valid combination of ::ze_intel_event_sync_mode_exp_flag_t
@@ -139,12 +139,12 @@ typedef struct _zex_intel_queue_allocate_msix_hint_exp_desc_t zex_intel_queue_al
 /// passed as pNext member of ::ze_command_queue_desc_t.
 
 typedef struct _zex_intel_queue_allocate_msix_hint_exp_desc_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in][optional] must be null or a pointer to an extension-specific
-                               ///< structure (i.e. contains stype and pNext).
-    ze_bool_t uniqueMsix;      ///< [in] If set, try to allocate unique msix for command queue.
-                               ///< If not set, driver will follow default behaviour. It may share msix for signaling completion with other queues.
-                               ///< Number of unique msixes may be limited. On unsuccessful allocation, queue or immediate cmd list creation API fallbacks to default behaviour.
+    ze_structure_type_ext_t stype; ///< [in] type of this structure
+    const void *pNext;             ///< [in][optional] must be null or a pointer to an extension-specific
+                                   ///< structure (i.e. contains stype and pNext).
+    ze_bool_t uniqueMsix;          ///< [in] If set, try to allocate unique msix for command queue.
+                                   ///< If not set, driver will follow default behaviour. It may share msix for signaling completion with other queues.
+                                   ///< Number of unique msixes may be limited. On unsuccessful allocation, queue or immediate cmd list creation API fallbacks to default behaviour.
 
 } zex_intel_queue_allocate_msix_hint_exp_desc_t;
 
@@ -153,12 +153,12 @@ typedef struct _zex_intel_queue_allocate_msix_hint_exp_desc_t {
 /// passed as pNext member of ::ze_command_queue_desc_t.
 
 typedef struct _zex_intel_queue_copy_operations_offload_hint_exp_desc_t {
-    ze_structure_type_t stype;    ///< [in] type of this structure
-    const void *pNext;            ///< [in][optional] must be null or a pointer to an extension-specific
-                                  ///< structure (i.e. contains stype and pNext).
-    ze_bool_t copyOffloadEnabled; ///< [in] If set, try to offload copy operations to different engines. Applicable only for compute queues.
-                                  ///< This is only a hint. Driver may ignore it per append call, based on platform capabilities or internal heuristics.
-                                  ///< If not set, driver will follow default behaviour. Copy operations will be submitted to same engine as compute operations.
+    ze_structure_type_ext_t stype; ///< [in] type of this structure
+    const void *pNext;             ///< [in][optional] must be null or a pointer to an extension-specific
+                                   ///< structure (i.e. contains stype and pNext).
+    ze_bool_t copyOffloadEnabled;  ///< [in] If set, try to offload copy operations to different engines. Applicable only for compute queues.
+                                   ///< This is only a hint. Driver may ignore it per append call, based on platform capabilities or internal heuristics.
+                                   ///< If not set, driver will follow default behaviour. Copy operations will be submitted to same engine as compute operations.
 
 } zex_intel_queue_copy_operations_offload_hint_exp_desc_t;
 
@@ -213,10 +213,10 @@ typedef enum _ze_intel_device_block_array_exp_flag_t {
 /// @brief Device 2D block array properties
 
 typedef struct _ze_intel_device_block_array_exp_properties_t {
-    ze_structure_type_t stype = ZE_INTEL_DEVICE_BLOCK_ARRAY_EXP_PROPERTIES; ///< [in] type of this structure
-    void *pNext;                                                            ///< [in,out][optional] must be null or a pointer to an extension-specific
-                                                                            ///< structure (i.e. contains sType and pNext).
-    ze_intel_device_block_array_exp_flags_t flags;                          ///< [out] 0 (none) or a valid combination of ::ze_intel_device_block_array_exp_flag_t
+    ze_structure_type_ext_t stype = ZE_INTEL_DEVICE_BLOCK_ARRAY_EXP_PROPERTIES; ///< [in] type of this structure
+    void *pNext;                                                                ///< [in,out][optional] must be null or a pointer to an extension-specific
+                                                                                ///< structure (i.e. contains sType and pNext).
+    ze_intel_device_block_array_exp_flags_t flags;                              ///< [out] 0 (none) or a valid combination of ::ze_intel_device_block_array_exp_flag_t
 } ze_intel_device_block_array_exp_properties_t;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -275,103 +275,325 @@ zeIntelKernelGetBinaryExp(
     char *pKernelBinary         ///< [in,out] pointer to storage area for GEN ISA binary function
 );
 
+#ifndef ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_NAME
+/// @brief DRM format modifier extension name
+#define ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_NAME "ZE_intel_experimental_drm_format_modifier"
+#endif // ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_NAME
+
 ///////////////////////////////////////////////////////////////////////////////
-#ifndef ZE_INTEL_EXTERNAL_SEMAPHORE_EXP_NAME
-/// @brief External semaphore extension name
-#define ZE_INTEL_EXTERNAL_SEMAPHORE_EXP_NAME "ZE_intel_experimental_external_semaphore"
-#endif // ZE_INTEL_EXTERNAL_SEMAPHORE_EXP_NAME
+/// @brief DRM format modifier extension Version(s)
+typedef enum _ze_intel_drm_format_modifier_exp_version_t {
+    ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_VERSION_1_0 = ZE_MAKE_VERSION(1, 0),     ///< version 1.0
+    ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_VERSION_CURRENT = ZE_MAKE_VERSION(1, 0), ///< latest known version
+    ZE_INTEL_DRM_FORMAT_MODIFIER_EXP_VERSION_FORCE_UINT32 = 0x7fffffff
+} ze_intel_drm_format_modifier_exp_version_t;
 
-typedef enum _ze_intel_external_semaphore_exp_version_t {
-    ZE_EXTERNAL_SEMAPHORE_EXP_VERSION_1_0 = ZE_MAKE_VERSION(1, 0),     ///< version 1.0
-    ZE_EXTERNAL_SEMAPHORE_EXP_VERSION_CURRENT = ZE_MAKE_VERSION(1, 0), ///< latest known version
-    ZE_EXTERNAL_SEMAPHORE_EXP_VERSION_FORCE_UINT32 = 0x7fffffff
-} ze_intel_external_semaphore_exp_version_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Image DRM format modifier properties
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_image_desc_t,
+///       when using a DRM format modifier.
+///     - Properties struct for providing user with the selected drm format modifier for the image
+///     - This is useful if the application wants to export the image to another API that requires the DRM format modifier
+///     - The application can query the chosen DRM format modifier for the image.
+///     - The application can use this information to choose a DRM format modifier for the image during creation
+typedef struct _ze_intel_image_selected_format_modifier_exp_properties_t {
+    ze_structure_type_t stype;  ///< [in] type of this structure
+    const void *pNext;          ///< [in][optional] must be null or a pointer to an extension-specific
+                                ///< structure (i.e. contains stype and pNext).
+    uint64_t drmFormatModifier; ///< [out] DRM format modifier
+} ze_intel_image_selected_format_modifier_exp_properties_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Image DRM format modifier create list
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_image_desc_t,
+///       when providing a list of DRM format modifiers to choose from during image creation.
+///     - This is a descriptor for creating image with the specified list of drm format modifier
+///     - If the user passes a list struct, then implementation chooses one from the list of drm modifiers as it sees fit.
+///     - If user wants to pass a single drm modifier then they can set the drmFormatModifierCount to 1 and pass the single drm modifier in pDrmFormatModifiers
+typedef struct _ze_intel_image_format_modifier_create_list_exp_desc_t {
+    ze_structure_type_t stype;       ///< [in] type of this structure
+    const void *pNext;               ///< [in][optional] must be null or a pointer to an extension-specific
+                                     ///< structure (i.e. contains stype and pNext).
+    uint32_t drmFormatModifierCount; ///< [in] number of DRM format modifiers in the list
+    uint64_t *pDrmFormatModifiers;   ///< [in][range(0, drmFormatModifierCount)] array of DRM format modifiers
+} ze_intel_image_format_modifier_create_list_exp_desc_t;
 
-typedef enum _ze_intel_external_semaphore_exp_flags_t {
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_OPAQUE_FD,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_OPAQUE_WIN32,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_OPAQUE_WIN32_KMT,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_D3D12_FENCE,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_D3D11_FENCE,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_KEYED_MUTEX,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_KEYED_MUTEX_KMT,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_TIMELINE_SEMAPHORE_FD,
-    ZE_EXTERNAL_SEMAPHORE_EXP_FLAGS_TIMELINE_SEMAPHORE_WIN32
-} ze_intel_external_semaphore_exp_flags_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Image DRM format modifier import descriptor
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_image_desc_t,
+///       when importing an image with a specific DRM format modifier.
+///     - The pNext chain is setup accordingly in ze_image_desc_t prior to calling zeImageCreate API
+typedef struct _ze_intel_image_format_modifier_import_exp_desc_t {
+    ze_structure_type_t stype;  ///< [in] type of this structure
+    const void *pNext;          ///< [in][optional] must be null or a pointer to an extension-specific
+                                ///< structure (i.e. contains stype and pNext).
+    uint64_t drmFormatModifier; ///< [in] DRM format modifier to use for the image
+} ze_intel_image_format_modifier_import_exp_desc_t;
 
-typedef struct _ze_intel_external_semaphore_exp_desc_t {
-    ze_structure_type_t stype;                     ///< [in] type of this structure
-    const void *pNext;                             ///< [in] must be null or a pointer to an extension-specific
-                                                   ///< structure (i.e. contains stype and pNext). When importing
-                                                   ///< a semaphore, this can be a pointer to either ze_intel_external_semaphore_win32_exp_desc_t
-                                                   ///< or ze_intel_external_semaphore_fd_exp_desc_t.
-    ze_intel_external_semaphore_exp_flags_t flags; ///< [in] External semaphore flags. Must be 0 or a valid combination of ::ze_intel_external_semaphore_exp_flags_t
-} ze_intel_external_semaphore_exp_desc_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Buffer DRM format modifier create list
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_device_mem_alloc_desc_t,
+///       when providing a list of DRM format modifiers to choose from during buffer creation.
+///     - This is a descriptor for creating buffer with the specified list of drm format modifier
+///     - If the user passes a list struct, then implementation chooses one from the list of drm modifiers as it sees fit.
+///     - If user wants to pass a single drm modifier then they can set the drmFormatModifierCount to 1 and pass the single drm modifier in pDrmFormatModifiers
+///     - The pNext chain is setup accordingly in ze_device_mem_alloc_desc_t prior to calling zeMemAllocDevice API
+typedef struct _ze_intel_mem_format_modifier_create_list_exp_desc_t {
+    ze_structure_type_t stype;       ///< [in] type of this structure
+    const void *pNext;               ///< [in][optional] must be null or a pointer to an extension-specific
+                                     ///< structure (i.e. contains stype and pNext).
+    uint32_t drmFormatModifierCount; ///< [in] number of DRM format modifiers in the list
+    uint64_t *pDrmFormatModifiers;   ///< [in][range(0, drmFormatModifierCount)] array of DRM format modifiers
+} ze_intel_mem_format_modifier_create_list_exp_desc_t;
 
-typedef struct _ze_intel_external_semaphore_win32_exp_desc_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in] must be null or a pointer to an extension-specific
-                               ///< structure (i.e. contains stype and pNext).
-    void *handle;              ///< [in] Win32 HANDLE for semaphore
-    const char *name;          ///< [in] Name of the semaphore. Must be valid NULL terminated string.
-} ze_intel_external_semaphore_win32_exp_desc_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Buffer DRM format modifier import descriptor
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_device_mem_alloc_desc_t,
+///       when importing a buffer with a specific DRM format modifier.
+///     - This descriptor must be used in conjunction with ze_external_memory_import_fd_t. If not, implementation will return an error.
+///     - The pNext chain is setup accordingly in ze_device_mem_alloc_desc_t prior to calling zeMemAllocDevice API
+typedef struct _ze_intel_mem_format_modifier_import_exp_desc_t {
+    ze_structure_type_t stype;  ///< [in] type of this structure
+    const void *pNext;          ///< [in][optional] must be null or a pointer to an extension-specific
+                                ///< structure (i.e. contains stype and pNext).
+    uint64_t drmFormatModifier; ///< [in] DRM format modifier to use for the buffer
+} ze_intel_mem_format_modifier_import_exp_desc_t;
 
-typedef struct _ze_intel_external_semaphore_fd_exp_desc_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in] must be null or a pointer to an extension-specific
-                               ///< structure (i.e. contains stype and pNext).
-    int fd;                    ///< [in] File descriptor for semaphore. Must be valid file descriptor.
-} ze_intel_external_semaphore_desc_fd_exp_desc_t;
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Buffer DRM format modifier properties
+///
+/// @details
+///     - This structure may be passed as pNext member of ::ze_memory_allocation_properties_t,
+///       when querying the DRM format modifier of a buffer.
+///     - Properties struct for providing user with the selected drm format modifier for the buffer
+///     - This is useful if the application wants to export the buffer to another API that requires the DRM format modifier
+///     - The application can query the chosen DRM format modifier for the buffer via zeMemGetAllocProperties API
+typedef struct _ze_intel_mem_selected_format_modifier_exp_properties_t {
+    ze_structure_type_t stype;  ///< [in] type of this structure
+    const void *pNext;          ///< [in][optional] must be null or a pointer to an extension-specific
+                                ///< structure (i.e. contains stype and pNext).
+    uint64_t drmFormatModifier; ///< [out] DRM format modifier
+} ze_intel_mem_selected_format_modifier_exp_properties_t;
 
-typedef struct _ze_intel_external_semaphore_signal_params_exp_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in] must be null or a pointer to an extension-specific
-                               ///< structure (i.e. contains stype and pNext).
-    uint64_t value;            /// [in] [optional] Value to signal the semaphore with
-} ze_intel_external_semaphore_signal_params_exp_t;
-
-typedef struct _ze_intel_external_semaphore_wait_params_exp_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in] must be null or a pointer to an extension-specific
-                               ///< structure (i.e. contains stype and pNext).
-    uint64_t value;            /// [in] [optional] Value to wait on the semaphore for
-} ze_intel_external_semaphore_wait_params_exp_t;
-
-typedef struct _ze_intel_external_semaphore_exp_handle_t *ze_intel_external_semaphore_exp_handle_t;
-
-ZE_APIEXPORT ze_result_t ZE_APICALL
-zeIntelDeviceImportExternalSemaphoreExp(
-    ze_device_handle_t device,                                   ///< [in] handle of the device
-    const ze_intel_external_semaphore_exp_desc_t *semaphoreDesc, ///< [in] pointer to external semaphore descriptor
-    ze_intel_external_semaphore_exp_handle_t *phSemaphore        ///< [out] pointer to handle of the external semaphore
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Query for supported DRM format modifiers for a given image descriptor
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - This function can be used to query supported DRM format modifiers for a specific image description.
+///     - User can use this API in two ways:
+///         1. Set pCount to the address of a uint32_t with value 0 and pDrmFormatModifiers to nullptr
+///            to query just the number of supported DRM format modifiers.
+///         2. Set pCount to the address of a uint32_t with the number of elements in the pDrmFormatModifiers
+///            array to retrieve the list of supported DRM format modifiers.
+///     - The application can use the returned DRM format modifiers to:
+///         1. Create L0 images with supported DRM format modifiers.
+///         2. Compare with DRM format modifiers from other APIs (like Vulkan) to find common
+///            modifiers that work for interop scenarios.
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_UNINITIALIZED
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+///     - ::ZE_RESULT_ERROR_UNSUPPORTED_IMAGE_FORMAT
+///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `nullptr == hDevice`
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `nullptr == pCount`
+///     - ::ZE_RESULT_ERROR_INVALID_IMAGE_DESC
+///         + The image description doesn't match the device capabilities
+ze_result_t ZE_APICALL
+zeIntelImageGetFormatModifiersSupportedExp(
+    ze_device_handle_t hDevice,        ///< [in] handle of the device
+    const ze_image_desc_t *pImageDesc, ///< [in] pointer to image descriptor
+    uint32_t *pCount,                  ///< [in,out] pointer to the number of DRM format modifiers.
+                                       ///< if count is zero, then the driver shall update the value with the
+                                       ///< total number of supported DRM format modifiers for the image format.
+                                       ///< if count is greater than the number of supported DRM format modifiers,
+                                       ///< then the driver shall update the value with the correct number of supported DRM format modifiers.
+    uint64_t *pDrmFormatModifiers      ///< [in,out][optional][range(0, *pCount)] array of supported DRM format modifiers
 );
 
-ZE_APIEXPORT ze_result_t ZE_APICALL
-zeIntelCommandListAppendWaitExternalSemaphoresExp(
-    ze_command_list_handle_t hCmdList,                            ///< [in] handle of the command list
-    unsigned int numExternalSemaphores,                           ///< [in] number of external semaphores
-    const ze_intel_external_semaphore_exp_handle_t *phSemaphores, ///< [in] pointer to array of external semaphore handles
-    const ze_intel_external_semaphore_wait_params_exp_t *params,  ///< [in] pointer to array of wait parameters
-    ze_event_handle_t hSignalEvent,                               ///< [in][optional] handle of the event to signal on completion
-    uint32_t numWaitEvents,                                       ///< [in][optional] number of events to wait on before continuing
-    ze_event_handle_t *phWaitEvents                               ///< [in][optional][range(0, numWaitEvents)] handles of the events to wait on before continuing
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Query for supported DRM format modifiers for a memory allocation descriptor
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - This function can be used to query supported DRM format modifiers for a specific memory allocation description.
+///     - User can use this API in two ways:
+///         1. Set pCount to the address of a uint32_t with value 0 and pDrmFormatModifiers to nullptr
+///            to query just the number of supported DRM format modifiers.
+///         2. Set pCount to the address of a uint32_t with the number of elements in the pDrmFormatModifiers
+///            array to retrieve the list of supported DRM format modifiers.
+///     - The application can use the returned DRM format modifiers to:
+///         1. Create L0 memory allocations with supported DRM format modifiers.
+///         2. Compare with DRM format modifiers from other APIs (like Vulkan) to find common
+///            modifiers that work for interop scenarios.
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_UNINITIALIZED
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `nullptr == hContext`
+ze_result_t ZE_APICALL
+zeIntelMemGetFormatModifiersSupportedExp(
+    ze_context_handle_t hContext,                  ///< [in] handle of the context
+    const ze_device_mem_alloc_desc_t *pDeviceDesc, ///< [in] pointer to device memory allocation descriptor
+    size_t size,                                   ///< [in] size in bytes to allocate
+    size_t alignment,                              ///< [in] minimum alignment in bytes for the allocation
+    ze_device_handle_t hDevice,                    ///< [in] handle of the device
+    uint32_t *pCount,                              ///< [in,out] pointer to the number of DRM format modifiers.
+                                                   ///< if count is zero, then the driver shall update the value with the
+                                                   ///< total number of supported DRM format modifiers for the memory allocation.
+                                                   ///< if count is greater than the number of supported DRM format modifiers,
+                                                   ///< then the driver shall update the value with the correct number of supported DRM format modifiers.
+    uint64_t *pDrmFormatModifiers                  ///< [in,out][optional][range(0, *pCount)] array of supported DRM format modifiers
 );
 
-ZE_APIEXPORT ze_result_t ZE_APICALL
-zeIntelCommandListAppendSignalExternalSemaphoresExp(
-    ze_command_list_handle_t hCmdList,                             ///< [in] handle of the command list
-    size_t numExternalSemaphores,                                  ///< [in] number of external semaphores
-    const ze_intel_external_semaphore_exp_handle_t *phSemaphores,  ///< [in] pointer to array of external semaphore handles
-    const ze_intel_external_semaphore_signal_params_exp_t *params, ///< [in] pointer to array of signal parameters
-    ze_event_handle_t hSignalEvent,                                ///< [in][optional] handle of the event to signal on completion
-    uint32_t numWaitEvents,                                        ///< [in][optional] number of events to wait on before continuing
-    ze_event_handle_t *phWaitEvents                                ///< [in][optional][range(0, numWaitEvents)] handles of the events to wait on before continuing
-);
+/// @brief Get default context associated with driver
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - Default context contains all devices within driver instance
+/// @returns
+///     - Context handle associated with driver
+ze_context_handle_t ZE_APICALL zeDriverGetDefaultContext(ze_driver_handle_t hDriver); ///> [in] handle of the driver
 
-ZE_APIEXPORT ze_result_t ZE_APICALL
-zeIntelDeviceReleaseExternalSemaphoreExp(
-    ze_intel_external_semaphore_exp_handle_t hSemaphore ///< [in] handle of the external semaphore
-);
+/// @brief Get default context associated with default driver
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - Default context contains all devices within default driver instance
+/// @returns
+///     - Context handle associated with default driver
+ze_context_handle_t ZE_APICALL zerDriverGetDefaultContext();
+
+/// @brief Get Device Identifier
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - Returned identifier is a 32-bit unsigned integer that is unique to the driver.
+///     - The identifier can be used then in zerIdentifierTranslateToDeviceHandle to get the device handle.
+/// @returns
+///     - 32-bit unsigned integer identifier
+uint32_t ZE_APICALL zerDeviceTranslateToIdentifier(ze_device_handle_t hDevice); ///< [in] handle of the device
+
+/// @brief Translate Device Identifier to Device Handle from default Driver
+///
+/// @details
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Returned device is associated to default driver handle.
+/// @returns
+///     - device handle associated with the identifier
+ze_device_handle_t ZE_APICALL zerIdentifierTranslateToDeviceHandle(uint32_t identifier); ///< [in] integer identifier of the device
+
+/// @brief Global device synchronization
+///
+/// @details
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Ensures that everything that was submitted to the device is completed.
+///    - Ensures that all submissions in all queues on device are completed.
+///    - It is not allowed to call this function while some command list are in graph capture mode.
+///    - Returns error if error is detected during execution on device.
+///    - Hangs indefinitely if GPU execution is blocked on non signaled event.
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+ze_result_t ZE_APICALL zeDeviceSynchronize(ze_device_handle_t hDevice); ///> [in] handle of the device
+
+/// @brief Get priority levels
+///
+/// @details
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Returns priority levels supported by the device
+///    - lowestPriority reports the numerical value that corresponds to lowest queue priority
+///    - highesPriority reports the numerical value that corresponds to highest queue priority
+///    - Lower numbers indicate greater priorities
+///    - The range of meaningful queue properties is represented by [*highestPriority, *lowestPriority]
+///    - Priority passed upon queue creation would automatically clamp down or up to the nearest supported value
+///    - 0 means default priority
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
+ze_result_t ZE_APICALL zeDeviceGetPriorityLevels(
+    ze_device_handle_t hDevice,
+    int *lowestPriority,
+    int *highestPriority);
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Descriptor used for setting priority on command queues and immediate command lists.
+/// This structure may be passed as pNext member of ::ze_command_queue_desc_t.
+typedef struct _ze_queue_priority_desc_t {
+    ze_structure_type_t stype; ///< [in] type of this structure
+    const void *pNext;         ///< [in][optional] must be null or a pointer to an extension-specific structure
+    int priority;              ///< [in] priority of the queue
+} ze_queue_priority_desc_t;
+
+/// @brief Append with arguments
+///
+/// @details
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Appends kernel to command list with arguments.
+///    - Kernel object state is updated with new arguments, as if separate zeKernelSetArgumentValue were called.
+///    - If argument is SLM (size), then SLM size in bytes for this resource is provided under pointer on specific index and its type is size_t.
+///    - If argument is an immediate type (i.e. structure, non pointer type), then values under pointer must contain full size of immediate type.
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `nullptr == hCommandList`
+///         + `nullptr == hKernel`
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `nullptr == pArguments`
+///     - ::ZE_RESULT_ERROR_INVALID_SYNCHRONIZATION_OBJECT
+///     - ::ZE_RESULT_ERROR_INVALID_SIZE
+///         + `(nullptr == phWaitEvents) && (0 < numWaitEvents)`
+typedef struct _ze_group_size_t {
+    uint32_t groupSizeX; ///< [in] local work-group size in X dimension
+    uint32_t groupSizeY; ///< [in] local work-group size in Y dimension
+    uint32_t groupSizeZ; ///< [in] local work-group size in Z dimension
+
+} ze_group_size_t;
+
+ze_result_t ZE_APICALL zeCommandListAppendLaunchKernelWithArguments(
+    ze_command_list_handle_t hCommandList, ///< [in] handle of the command list
+    ze_kernel_handle_t hKernel,            ///< [in] handle of the kernel object
+    const ze_group_count_t groupCounts,    ///< [in] thread group counts
+    const ze_group_size_t groupSizes,      ///< [in] thread group sizes
+    void **pArguments,                     ///< [in] kernel arguments; pointer to list where each argument represents a pointer to the argument value on specific index
+    void *pNext,                           ///< [in][optional] extensions
+    ze_event_handle_t hSignalEvent,        ///< [in][optional] handle of the event to signal on completion
+    uint32_t numWaitEvents,                ///< [in][optional] number of events to wait on before launching
+    ze_event_handle_t *phWaitEvents);      ///< [in][optional][range(0, numWaitEvents)] handle of the events to wait on before launching
 
 #if defined(__cplusplus)
 } // extern "C"

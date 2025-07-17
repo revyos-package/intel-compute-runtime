@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,14 +9,11 @@
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/source/unified_memory/unified_memory.h"
-#include "shared/test/common/fixtures/memory_management_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
 #include "opencl/source/kernel/kernel.h"
 #include "opencl/source/mem_obj/buffer.h"
-#include "opencl/test/unit_test/fixtures/cl_device_fixture.h"
-#include "opencl/test/unit_test/fixtures/context_fixture.h"
 #include "opencl/test/unit_test/kernel/kernel_arg_buffer_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_buffer.h"
 #include "opencl/test/unit_test/mocks/mock_cl_device.h"
@@ -355,7 +352,7 @@ TEST_F(KernelArgBufferTest, givenKernelExecInfoWithIndirectStatelessAccessWhenHa
         return;
     }
     pContext->getHostMemAllocPool().cleanup();
-    svmAllocationsManager->trimUSMHostAllocCache();
+    svmAllocationsManager->cleanupUSMAllocCaches();
 
     mockKernel.unifiedMemoryControls.indirectHostAllocationsAllowed = true;
     EXPECT_FALSE(mockKernel.hasIndirectStatelessAccessToHostMemory());

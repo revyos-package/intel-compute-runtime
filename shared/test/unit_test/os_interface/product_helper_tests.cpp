@@ -8,17 +8,18 @@
 #include "shared/test/unit_test/os_interface/product_helper_tests.h"
 
 #include "shared/source/aub_mem_dump/aub_mem_dump.h"
+#include "shared/source/debug_settings/debug_settings_manager.h"
+#include "shared/source/helpers/api_specific_config.h"
+#include "shared/source/helpers/constants.h"
+#include "shared/source/helpers/definitions/engine_group_types.h"
 #include "shared/source/helpers/definitions/indirect_detection_versions.h"
-#include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/local_memory_access_modes.h"
 #include "shared/source/kernel/kernel_descriptor.h"
 #include "shared/source/memory_manager/allocation_type.h"
 #include "shared/source/os_interface/product_helper.h"
 #include "shared/source/release_helper/release_helper.h"
 #include "shared/source/unified_memory/usm_memory_support.h"
-#include "shared/test/common/fixtures/device_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/helpers/gtest_helpers.h"
 #include "shared/test/common/helpers/mock_product_helper_hw.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_command_stream_receiver.h"
@@ -26,7 +27,6 @@
 #include "shared/test/common/mocks/mock_execution_environment.h"
 #include "shared/test/common/mocks/mock_gmm.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
-#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
 #include "clos_matchers.h"
@@ -34,7 +34,10 @@
 #include "ocl_igc_shared/indirect_access_detection/version.h"
 #include "test_traits_common.h"
 
-#include <limits>
+namespace NEO {
+extern ApiSpecificConfig::ApiType apiTypeForUlts;
+}
+
 using namespace NEO;
 
 ProductHelperTest::ProductHelperTest() {
@@ -73,23 +76,31 @@ HWTEST_F(ProductHelperTest, givenDebugFlagSetWhenAskingForHostMemCapabilitesThen
 HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingSharedSystemMemCapabilitiesThenCorrectValueIsReturned) {
     DebugManagerStateRestore restore;
 
-    EXPECT_EQ(0u, productHelper->getSharedSystemMemCapabilities(&pInHwInfo));
+    uint64_t caps = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+    pInHwInfo.capabilityTable.sharedSystemMemCapabilities = caps;
 
     for (auto enable : {-1, 0, 1}) {
         debugManager.flags.EnableSharedSystemUsmSupport.set(enable);
-
-        if (enable > 0) {
-            auto caps = UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess;
-            EXPECT_EQ(caps, productHelper->getSharedSystemMemCapabilities(&pInHwInfo));
-        } else {
+        if (enable != 1) {
             EXPECT_EQ(0u, productHelper->getSharedSystemMemCapabilities(&pInHwInfo));
+        } else {
+            for (auto pfEnable : {-1, 0, 1}) {
+                debugManager.flags.EnableRecoverablePageFaults.set(pfEnable);
+                if (pfEnable != 0) {
+                    EXPECT_EQ(caps, productHelper->getSharedSystemMemCapabilities(&pInHwInfo));
+                } else {
+                    EXPECT_EQ(0u, productHelper->getSharedSystemMemCapabilities(&pInHwInfo));
+                }
+            }
         }
     }
+
+    pInHwInfo.capabilityTable.sharedSystemMemCapabilities = caps;
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedIfIsBlitSplitEnqueueWARequiredThenReturnFalse) {
 
-    EXPECT_FALSE(productHelper->isBlitSplitEnqueueWARequired(pInHwInfo));
+    EXPECT_FALSE(productHelper->getBcsSplitSettings().enabled);
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingMemoryCapabilitiesThenCorrectValueIsReturned) {
@@ -115,7 +126,8 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingMemoryCapabilitiesThenC
             }
         }
 
-        auto singleDeviceSharedMemCapabilities = productHelper->getSingleDeviceSharedMemCapabilities();
+        constexpr bool isKmdMigrationAvailable{false};
+        auto singleDeviceSharedMemCapabilities = productHelper->getSingleDeviceSharedMemCapabilities(isKmdMigrationAvailable);
         if (singleDeviceSharedMemCapabilities > 0) {
             if (capabilityBitset.test(static_cast<uint32_t>(UsmAccessCapabilities::sharedSingleDevice))) {
                 EXPECT_TRUE(UnifiedSharedMemoryFlags::concurrentAccess & singleDeviceSharedMemCapabilities);
@@ -142,11 +154,20 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingMemoryCapabilitiesThenC
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperAndSingleDeviceSharedMemAccessConcurrentAtomicEnabledIfKmdMigrationEnabled) {
+    DebugManagerStateRestore restore;
+    debugManager.flags.EnableUsmConcurrentAccessSupport.set(0);
 
-    auto singleDeviceSharedMemCapabilities = productHelper->getSingleDeviceSharedMemCapabilities();
-    if ((singleDeviceSharedMemCapabilities > 0) && (productHelper->isKmdMigrationSupported())) {
-        EXPECT_TRUE(UnifiedSharedMemoryFlags::concurrentAccess & singleDeviceSharedMemCapabilities);
-        EXPECT_TRUE(UnifiedSharedMemoryFlags::concurrentAtomicAccess & singleDeviceSharedMemCapabilities);
+    for (const bool isKmdMigrationAvailable : std::array<bool, 2>{false, true}) {
+        auto singleDeviceSharedMemCapabilities = productHelper->getSingleDeviceSharedMemCapabilities(isKmdMigrationAvailable);
+        EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::access), UnifiedSharedMemoryFlags::access);
+        EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::atomicAccess), UnifiedSharedMemoryFlags::atomicAccess);
+        if (isKmdMigrationAvailable) {
+            EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::concurrentAccess), UnifiedSharedMemoryFlags::concurrentAccess);
+            EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::concurrentAtomicAccess), UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+        } else {
+            EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::concurrentAccess), 0UL);
+            EXPECT_EQ((singleDeviceSharedMemCapabilities & UnifiedSharedMemoryFlags::concurrentAtomicAccess), 0UL);
+        }
     }
 }
 
@@ -314,36 +335,6 @@ HWTEST_F(ProductHelperTest, givenVariousValuesWhenGettingAubStreamSteppingFromHw
     EXPECT_EQ(AubMemDump::SteppingValues::A, mockProductHelper.getAubStreamSteppingFromHwRevId(pInHwInfo));
 }
 
-HWTEST_F(ProductHelperTest, givenDcFlushMitigationWhenOverridePatToUCAndTwoWayCohForDcFlushMitigationThenReturnCorrectValue) {
-    DebugManagerStateRestore restorer;
-    if (!productHelper->isDcFlushMitigated()) {
-        for (auto i = 0; i < static_cast<int>(AllocationType::count); ++i) {
-            auto allocationType = static_cast<AllocationType>(i);
-            EXPECT_FALSE(productHelper->overridePatToUCAndTwoWayCohForDcFlushMitigation(allocationType));
-        }
-    }
-    debugManager.flags.AllowDcFlush.set(0);
-    for (auto i = 0; i < static_cast<int>(AllocationType::count); ++i) {
-        auto allocationType = static_cast<AllocationType>(i);
-        if (allocationType == AllocationType::externalHostPtr ||
-            allocationType == AllocationType::bufferHostMemory ||
-            allocationType == AllocationType::mapAllocation ||
-            allocationType == AllocationType::svmCpu ||
-            allocationType == AllocationType::svmZeroCopy ||
-            allocationType == AllocationType::internalHostMemory ||
-            allocationType == AllocationType::timestampPacketTagBuffer ||
-            allocationType == AllocationType::tagBuffer ||
-            allocationType == AllocationType::gpuTimestampDeviceBuffer ||
-            allocationType == AllocationType::linearStream ||
-            allocationType == AllocationType::internalHeap ||
-            allocationType == AllocationType::printfSurface) {
-            EXPECT_EQ(productHelper->overrideUsageForDcFlushMitigation(allocationType), productHelper->isDcFlushMitigated());
-        } else {
-            EXPECT_FALSE(productHelper->overridePatToUCAndTwoWayCohForDcFlushMitigation(allocationType));
-        }
-    }
-}
-
 HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedForDefaultEngineTypeAdjustmentThenFalseIsReturned) {
 
     EXPECT_FALSE(productHelper->isDefaultEngineTypeAdjustmentRequired(pInHwInfo));
@@ -352,11 +343,6 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedForDefaultEngineTypeAdjus
 HWCMDTEST_F(IGFX_GEN12LP_CORE, ProductHelperTest, givenProductHelperWhenAdditionalKernelExecInfoSupportCheckedThenCorrectValueIsReturned) {
 
     EXPECT_FALSE(productHelper->isDisableOverdispatchAvailable(pInHwInfo));
-}
-
-HWTEST_F(ProductHelperTest, WhenAllowRenderCompressionIsCalledThenTrueIsReturned) {
-
-    EXPECT_TRUE(productHelper->allowCompression(pInHwInfo));
 }
 
 HWTEST_F(ProductHelperTest, givenVariousDebugKeyValuesWhenGettingLocalMemoryAccessModeThenCorrectValueIsReturned) {
@@ -370,11 +356,7 @@ HWTEST_F(ProductHelperTest, givenVariousDebugKeyValuesWhenGettingLocalMemoryAcce
     EXPECT_EQ(LocalMemoryAccessMode::cpuAccessDisallowed, productHelper->getLocalMemoryAccessMode(pInHwInfo));
 }
 
-HWTEST_F(ProductHelperTest, WhenCheckAssignEngineRoundRobinSupportedThenReturnFalse) {
-    EXPECT_FALSE(productHelper->isAssignEngineRoundRobinSupported());
-}
-
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfPipeControlPriorToNonPipelinedStateCommandsWARequiredThenFalseIsReturned, IsNotXeHpgOrXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfPipeControlPriorToNonPipelinedStateCommandsWARequiredThenFalseIsReturned, IsNotXeCore) {
 
     auto isRcs = false;
     const auto &[isBasicWARequired, isExtendedWARequired] = productHelper->isPipeControlPriorToNonPipelinedStateCommandsWARequired(pInHwInfo, isRcs, releaseHelper);
@@ -438,7 +420,7 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedIfStorageInfoAdjustmentIs
     EXPECT_FALSE(productHelper->isStorageInfoAdjustmentRequired());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallUseGemCreateExtInAllocateMemoryByKMDThenFalseIsReturned, IsBeforeXeHpgCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallUseGemCreateExtInAllocateMemoryByKMDThenFalseIsReturned, IsGen12LP) {
     EXPECT_FALSE(productHelper->useGemCreateExtInAllocateMemoryByKMD());
 }
 
@@ -457,8 +439,16 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedIfKmdMigrationIsSupported
     EXPECT_FALSE(productHelper->isKmdMigrationSupported());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfDisableScratchPagesIsSupportedThenReturnFalse, IsBeforeXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfDisableScratchPagesIsSupportedThenReturnFalse, IsAtMostXeHpgCore) {
     EXPECT_FALSE(productHelper->isDisableScratchPagesSupported());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfDisableScratchPagesIsSupportedForDebuggerThenReturnTrue, IsNotDG2) {
+    EXPECT_TRUE(productHelper->isDisableScratchPagesRequiredForDebugger());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfPlatformSupportsSvmHeapReservationThenReturnTrue, IsXeHpcCore) {
+    EXPECT_TRUE(productHelper->isSvmHeapReservationSupported());
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperWhenCheckBlitEnqueuePreferredThenReturnTrue) {
@@ -474,16 +464,16 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenAskedIfPatIndexProgrammingSupp
     EXPECT_FALSE(productHelper->isVmBindPatIndexProgrammingSupported());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfIsTimestampWaitSupportedForEventsThenFalseIsReturned, IsBeforeXeHpCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfIsTimestampWaitSupportedForEventsThenFalseIsReturned, IsGen12LP) {
 
     EXPECT_FALSE(productHelper->isTimestampWaitSupportedForEvents());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallGetCommandBuffersPreallocatedPerCommandQueueThenReturnCorrectValue, IsBeforeXeHpCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallGetCommandBuffersPreallocatedPerCommandQueueThenReturnCorrectValue, IsGen12LP) {
     EXPECT_EQ(0u, productHelper->getCommandBuffersPreallocatedPerCommandQueue());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallGetInternalHeapsPreallocatedThenReturnCorrectValue, IsBeforeXeHpCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallGetInternalHeapsPreallocatedThenReturnCorrectValue, IsGen12LP) {
     EXPECT_EQ(productHelper->getInternalHeapsPreallocated(), 0u);
 
     DebugManagerStateRestore restorer;
@@ -491,7 +481,7 @@ HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallGetInternalHeapsPrealloca
     EXPECT_EQ(productHelper->getInternalHeapsPreallocated(), 3u);
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfIsTlbFlushRequiredThenTrueIsReturned, IsNotXeHpgOrXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenAskedIfIsTlbFlushRequiredThenTrueIsReturned, IsNotXeCore) {
     EXPECT_TRUE(productHelper->isTlbFlushRequired());
 }
 
@@ -602,7 +592,7 @@ HWTEST2_F(ProductHelperTest, WhenFillingScmPropertiesSupportThenExpectUseCorrect
     EXPECT_EQ(productHelper->getScmPropertyZPassAsyncComputeThreadLimitSupport(), scmPropertiesSupport.zPassAsyncComputeThreadLimit);
     EXPECT_EQ(productHelper->getScmPropertyPixelAsyncComputeThreadLimitSupport(), scmPropertiesSupport.pixelAsyncComputeThreadLimit);
     EXPECT_EQ(productHelper->getScmPropertyDevicePreemptionModeSupport(), scmPropertiesSupport.devicePreemptionMode);
-    if constexpr (TestTraits<gfxCoreFamily>::largeGrfModeInStateComputeModeSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::largeGrfModeInStateComputeModeSupported) {
         EXPECT_EQ(productHelper->isGrfNumReportedWithScm(), scmPropertiesSupport.largeGrfMode);
     }
 }
@@ -632,9 +622,9 @@ HWTEST_F(ProductHelperTest, WhenFillingStateBaseAddressPropertiesSupportThenExpe
     EXPECT_EQ(productHelper->getStateBaseAddressPropertyBindingTablePoolBaseAddressSupport(), stateBaseAddressPropertiesSupport.bindingTablePoolBaseAddress);
 }
 
-HWTEST_F(ProductHelperTest, givenProductHelperWhenIsGlobalFenceInCommandStreamRequiredThenFalseIsReturned) {
+HWTEST_F(ProductHelperTest, givenProductHelperWhenisReleaseGlobalFenceInCommandStreamRequiredThenFalseIsReturned) {
 
-    EXPECT_FALSE(productHelper->isGlobalFenceInCommandStreamRequired(*defaultHwInfo));
+    EXPECT_FALSE(productHelper->isReleaseGlobalFenceInCommandStreamRequired(*defaultHwInfo));
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperWhenIsSystolicModeConfigurabledThenFalseIsReturned) {
@@ -667,7 +657,7 @@ HWTEST_F(ProductHelperTest, givenDefaultSettingWhenIsThreadArbitrationPolicyRepo
     EXPECT_EQ(productHelper->getScmPropertyThreadArbitrationPolicySupport(), productHelper->isThreadArbitrationPolicyReportedWithScm());
 }
 
-HWTEST_F(ProductHelperTest, givenForceThreadArbitrationPolicyProgrammingWithScmFlagSetWhenIsThreadArbitrationPolicyReportedWithScmIsQueriedThenCorrectValueIsReturned) {
+HWTEST2_F(ProductHelperTest, givenForceThreadArbitrationPolicyProgrammingWithScmFlagSetWhenIsThreadArbitrationPolicyReportedWithScmIsQueriedThenCorrectValueIsReturned, IsAtMostXe3Core) {
     DebugManagerStateRestore restorer;
 
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(0);
@@ -686,11 +676,11 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenIsPrefetcherDisablingInDirectS
     EXPECT_TRUE(productHelper->isPrefetcherDisablingInDirectSubmissionRequired());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenIsImplicitScalingSupportedThenExpectFalse, IsNotXeHpOrXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenIsImplicitScalingSupportedThenExpectFalse, IsNotXeHpcCore) {
     EXPECT_FALSE(productHelper->isImplicitScalingSupported(*defaultHwInfo));
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperAndDebugFlagWhenGetL1CachePolicyThenReturnCorrectPolicy, IsAtLeastXeHpgCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperAndDebugFlagWhenGetL1CachePolicyThenReturnCorrectPolicy, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
 
     debugManager.flags.OverrideL1CachePolicyInSurfaceStateAndStateless.set(0);
@@ -714,12 +704,12 @@ HWTEST2_F(ProductHelperTest, givenProductHelperAndDebugFlagWhenGetL1CachePolicyT
     EXPECT_EQ(FamilyType::STATE_BASE_ADDRESS::L1_CACHE_CONTROL_UC, productHelper->getL1CachePolicy(true));
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenGetL1CachePolicyThenReturnWriteByPass, IsAtLeastXeHpgCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenGetL1CachePolicyThenReturnWriteByPass, IsAtLeastXeCore) {
     EXPECT_EQ(FamilyType::STATE_BASE_ADDRESS::L1_CACHE_CONTROL_WBP, productHelper->getL1CachePolicy(false));
     EXPECT_EQ(FamilyType::STATE_BASE_ADDRESS::L1_CACHE_CONTROL_WBP, productHelper->getL1CachePolicy(true));
 }
 
-HWTEST2_F(ProductHelperTest, givenPlatformWithUnsupportedL1CachePoliciesWhenGetL1CachePolicyThenReturnZero, IsAtMostXeHpCore) {
+HWTEST2_F(ProductHelperTest, givenPlatformWithUnsupportedL1CachePoliciesWhenGetL1CachePolicyThenReturnZero, IsGen12LP) {
     EXPECT_EQ(0u, productHelper->getL1CachePolicy(false));
     EXPECT_EQ(0u, productHelper->getL1CachePolicy(true));
 }
@@ -732,7 +722,7 @@ HWTEST2_F(ProductHelperTest, givenProductHelperWhenIsPlatformQueryNotSupportedTh
     EXPECT_FALSE(productHelper->isPlatformQuerySupported());
 }
 
-HWTEST2_F(ProductHelperTest, givenDebugFlagWhenCheckingIsResolveDependenciesByPipeControlsSupportedThenCorrectValueIsReturned, IsBeforeXeHpgCore) {
+HWTEST2_F(ProductHelperTest, givenDebugFlagWhenCheckingIsResolveDependenciesByPipeControlsSupportedThenCorrectValueIsReturned, IsGen12LP) {
     DebugManagerStateRestore restorer;
 
     auto mockDevice = std::unique_ptr<MockDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr));
@@ -784,7 +774,7 @@ HWTEST2_F(ProductHelperTest, givenDebugFlagWhenCheckingIsResolveDependenciesByPi
     EXPECT_TRUE(productHelper->isResolveDependenciesByPipeControlsSupported(pInHwInfo, true, 3, csr));
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsBufferPoolAllocatorSupportedThenCorrectValueIsReturned, IsBeforeXeHpgCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsBufferPoolAllocatorSupportedThenCorrectValueIsReturned, IsGen12LP) {
     EXPECT_FALSE(productHelper->isBufferPoolAllocatorSupported());
 }
 
@@ -796,44 +786,58 @@ HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsBufferPoolAllocator
     EXPECT_TRUE(productHelper->isBufferPoolAllocatorSupported());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmPoolAllocatorSupportedThenCorrectValueIsReturned, IsBeforeXeHpgCore) {
-    EXPECT_FALSE(productHelper->isUsmPoolAllocatorSupported());
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmPoolAllocatorSupportedThenCorrectValueIsReturned, IsGen12LP) {
+    EXPECT_FALSE(productHelper->isDeviceUsmPoolAllocatorSupported());
+    EXPECT_FALSE(productHelper->isHostUsmPoolAllocatorSupported());
 }
 
 HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmPoolAllocatorSupportedThenCorrectValueIsReturned, IsXeHpcCore) {
-    EXPECT_FALSE(productHelper->isUsmPoolAllocatorSupported());
+    EXPECT_FALSE(productHelper->isDeviceUsmPoolAllocatorSupported());
+    EXPECT_FALSE(productHelper->isHostUsmPoolAllocatorSupported());
 }
 
 HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmPoolAllocatorSupportedThenCorrectValueIsReturned, IsXeHpgCore) {
-    EXPECT_TRUE(productHelper->isUsmPoolAllocatorSupported());
+    EXPECT_TRUE(productHelper->isDeviceUsmPoolAllocatorSupported());
+    EXPECT_TRUE(productHelper->isHostUsmPoolAllocatorSupported());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsDeviceUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsAtMostDg2) {
-    EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsGen12LP) {
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::OCL);
+        EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::L0);
+        EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsDeviceUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsXeHpcCore) {
-    EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsXeHpcCore) {
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::OCL);
+        EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::L0);
+        EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsDeviceUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsAtLeastMtl) {
-    EXPECT_TRUE(productHelper->isDeviceUsmAllocationReuseSupported());
-}
-
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsHostUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsBeforeXeHpgCore) {
-    EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
-}
-
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsHostUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsXeHpgCore) {
-    EXPECT_TRUE(productHelper->isHostUsmAllocationReuseSupported());
-}
-
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsHostUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsXeHpcCore) {
-    EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
-}
-
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsHostUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsAtLeastMtl) {
-    EXPECT_TRUE(productHelper->isHostUsmAllocationReuseSupported());
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCheckingIsUsmAllocationReuseSupportedThenCorrectValueIsReturned, IsXe2HpgCore) {
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::OCL);
+        EXPECT_TRUE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_TRUE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
+    {
+        VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::L0);
+        EXPECT_FALSE(productHelper->isHostUsmAllocationReuseSupported());
+        EXPECT_FALSE(productHelper->isDeviceUsmAllocationReuseSupported());
+    }
 }
 
 HWTEST_F(ProductHelperTest, givenProductHelperWhenCheckingIsUnlockingLockedPtrNecessaryThenReturnFalse) {
@@ -996,6 +1000,12 @@ HWTEST_F(ProductHelperTest, givenBooleanUncachedWhenCallOverridePatIndexThenProp
     EXPECT_EQ(patIndex, productHelper->overridePatIndex(isUncached, patIndex, AllocationType::buffer));
 }
 
+HWTEST_F(ProductHelperTest, givenGmmUsageTypeWhenCallingGetGmmResourceUsageOverrideThenReturnNoOverride) {
+    constexpr uint32_t noOverride = GMM_RESOURCE_USAGE_UNKNOWN;
+    EXPECT_EQ(noOverride, productHelper->getGmmResourceUsageOverride(GMM_RESOURCE_USAGE_OCL_BUFFER));
+    EXPECT_EQ(noOverride, productHelper->getGmmResourceUsageOverride(GMM_RESOURCE_USAGE_XADAPTER_SHARED_RESOURCE));
+}
+
 HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingSupportedNumGrfsThenCorrectValueIsReturned) {
     if (releaseHelper) {
         EXPECT_EQ(releaseHelper->getSupportedNumGrfs(), productHelper->getSupportedNumGrfs(releaseHelper));
@@ -1034,6 +1044,10 @@ HWTEST_F(ProductHelperTest, givenProductHelperWhenAskingForReadOnlyResourceSuppo
     EXPECT_FALSE(productHelper->supportReadOnlyAllocations());
 }
 
+HWTEST_F(ProductHelperTest, givenProductHelperWhenAskingForSharingWith3dOrMediaSupportThenTrueReturned) {
+    EXPECT_TRUE(productHelper->isSharingWith3dOrMediaAllowed());
+}
+
 HWTEST_F(ProductHelperTest, givenProductHelperWhenAskingForDeviceToHostCopySignalingFenceFalseReturned) {
     EXPECT_FALSE(productHelper->isDeviceToHostCopySignalingFenceRequired());
 }
@@ -1049,7 +1063,7 @@ HWTEST2_F(ProductHelperTest, givenProductHelperWhenItsPreXe2ThenCacheLineSizeIs6
     EXPECT_EQ(productHelper->getCacheLineSize(), 64u);
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenItsXe2PlusThenCacheLineSizeIs256Bytes, IsAtLeastBmg) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenItsXe2PlusThenCacheLineSizeIs256Bytes, IsAtLeastXe2HpgCore) {
     EXPECT_EQ(productHelper->getCacheLineSize(), 256u);
 }
 
@@ -1073,24 +1087,28 @@ TEST_F(ProductHelperTest, whenGettingMaxSubSliceSpaceThenValueIsNotSmallerThanMa
     EXPECT_EQ(maxSupportedSubSlices, productHelper->computeMaxNeededSubSliceSpace(hwInfo));
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockLoadThenReturnFalse, IsBeforeXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockLoadThenReturnFalse, IsAtMostXeHpgCore) {
 
     EXPECT_FALSE(productHelper->supports2DBlockLoad());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockStoreThenReturnFalse, IsBeforeXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockStoreThenReturnFalse, IsAtMostXeHpgCore) {
 
     EXPECT_FALSE(productHelper->supports2DBlockStore());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockLoadThenReturnTrue, IsAtLeastXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockLoadThenReturnTrue, IsWithinXeHpcCoreAndXe3Core) {
 
     EXPECT_TRUE(productHelper->supports2DBlockLoad());
 }
 
-HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockStoreThenReturnTrue, IsAtLeastXeHpcCore) {
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenQuery2DBlockStoreThenReturnTrue, IsWithinXeHpcCoreAndXe3Core) {
 
     EXPECT_TRUE(productHelper->supports2DBlockStore());
+}
+
+HWTEST2_F(ProductHelperTest, WhenGetSvmCpuAlignmentThenProperValueIsReturned, IsAtLeastXeHpcCore) {
+    EXPECT_EQ(MemoryConstants::pageSize64k, productHelper->getSvmCpuAlignment());
 }
 
 HWTEST2_F(ProductHelperTest, givenProductHelperWhenGetRequiredDetectIndirectVersionCalledThenReturnCorrectVersion, IsNotPVC) {
@@ -1103,4 +1121,121 @@ HWTEST_F(ProductHelperTest, whenAdjustScratchSizeThenSizeIsNotChanged) {
     size_t scratchSize = initialScratchSize;
     productHelper->adjustScratchSize(scratchSize);
     EXPECT_EQ(initialScratchSize, scratchSize);
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenCheckingIs2MBLocalMemAlignmentEnabledThenCorrectValueIsReturned) {
+    EXPECT_FALSE(productHelper->is2MBLocalMemAlignmentEnabled());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenGetMaxLocalSubRegionSizeCalledThenZeroIsReturned, IsAtMostXe3Core) {
+    auto hwInfo = *defaultHwInfo;
+    EXPECT_EQ(0u, productHelper->getMaxLocalSubRegionSize(hwInfo));
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenCheckingIsCompressionForbiddenThenCorrectValueIsReturned) {
+    DebugManagerStateRestore restore;
+    auto hwInfo = *defaultHwInfo;
+
+    debugManager.flags.RenderCompressedImagesEnabled.set(0);
+    debugManager.flags.RenderCompressedBuffersEnabled.set(0);
+    EXPECT_TRUE(productHelper->isCompressionForbidden(hwInfo));
+
+    debugManager.flags.RenderCompressedImagesEnabled.set(1);
+    EXPECT_FALSE(productHelper->isCompressionForbidden(hwInfo));
+
+    debugManager.flags.RenderCompressedImagesEnabled.set(0);
+    debugManager.flags.RenderCompressedBuffersEnabled.set(1);
+    EXPECT_FALSE(productHelper->isCompressionForbidden(hwInfo));
+
+    debugManager.flags.RenderCompressedImagesEnabled.set(1);
+    EXPECT_FALSE(productHelper->isCompressionForbidden(hwInfo));
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperThenCompressionIsNotForbidden, IsAtLeastXe2HpgCore) {
+    auto hwInfo = *defaultHwInfo;
+    EXPECT_FALSE(productHelper->isCompressionForbidden(hwInfo));
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperBeforeXe2WhenOverrideDirectSubmissionTimeoutsThenTimeoutsNotAdjusted, IsAtMostXeCore) {
+    DebugManagerStateRestore restorer;
+
+    uint64_t timeoutUs{5000};
+    uint64_t maxTimeoutUs{5000};
+    productHelper->overrideDirectSubmissionTimeouts(timeoutUs, maxTimeoutUs);
+    EXPECT_EQ(5000ull, timeoutUs);
+    EXPECT_EQ(5000ull, maxTimeoutUs);
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenOverrideDirectSubmissionTimeoutsThenTimeoutsAdjusted, IsAtLeastXe2HpgCore) {
+    DebugManagerStateRestore restorer;
+
+    uint64_t timeoutUs{5000};
+    uint64_t maxTimeoutUs{5000};
+    productHelper->overrideDirectSubmissionTimeouts(timeoutUs, maxTimeoutUs);
+    EXPECT_EQ(1000ull, timeoutUs);
+    EXPECT_EQ(1000ull, maxTimeoutUs);
+
+    debugManager.flags.DirectSubmissionControllerTimeout.set(10000);
+    debugManager.flags.DirectSubmissionControllerMaxTimeout.set(10000);
+    productHelper->overrideDirectSubmissionTimeouts(timeoutUs, maxTimeoutUs);
+    EXPECT_EQ(10000ull, timeoutUs);
+    EXPECT_EQ(10000ull, maxTimeoutUs);
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenIsExposingSubdevicesAllowedThenTrueIsReturned) {
+    EXPECT_TRUE(productHelper->isExposingSubdevicesAllowed());
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingIsPrimaryContextsAggregationSupportedThenReturnCorrectValue) {
+    EXPECT_FALSE(productHelper->isPrimaryContextsAggregationSupported());
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenCallingUseAdditionalBlitPropertiesThenFalseReturned) {
+    EXPECT_FALSE(productHelper->useAdditionalBlitProperties());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallingIsResourceUncachedForCSThenFalseReturned, IsAtMostXeCore) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(AllocationType::count); i++) {
+        auto allocationType = static_cast<AllocationType>(i);
+        EXPECT_FALSE(productHelper->isResourceUncachedForCS(allocationType));
+    }
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenCallingIsResourceUncachedForCSThenTrueReturned, IsAtLeastXe2HpgCore) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(AllocationType::count); i++) {
+        auto allocationType = static_cast<AllocationType>(i);
+        if (allocationType == AllocationType::commandBuffer ||
+            allocationType == AllocationType::ringBuffer ||
+            allocationType == AllocationType::semaphoreBuffer) {
+            EXPECT_TRUE(productHelper->isResourceUncachedForCS(allocationType));
+        } else {
+            EXPECT_FALSE(productHelper->isResourceUncachedForCS(allocationType));
+        }
+    }
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenisPackedCopyFormatSupportedThenCorrectValueIsReturned, IsAtMostXe3Core) {
+    EXPECT_FALSE(productHelper->isPackedCopyFormatSupported());
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWhenGettingPreferredWorkgroupCountPerSubsliceThenZeroReturned) {
+    EXPECT_EQ(0u, productHelper->getPreferredWorkgroupCountPerSubslice());
+}
+
+HWTEST_F(ProductHelperTest, givenProductHelperWithDebugKeyWhenPidFdOrSocketForIpcIsSupportedThenExpectedValueReturned) {
+    DebugManagerStateRestore restore;
+
+    debugManager.flags.EnablePidFdOrSocketsForIpc.set(1);
+    EXPECT_TRUE(productHelper->isPidFdOrSocketForIpcSupported());
+
+    debugManager.flags.EnablePidFdOrSocketsForIpc.set(0);
+    EXPECT_FALSE(productHelper->isPidFdOrSocketForIpcSupported());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenPidFdOrSocketForIpcIsNotSupportedThenFalseReturned, IsAtLeastXe2HpgCore) {
+    EXPECT_FALSE(productHelper->isPidFdOrSocketForIpcSupported());
+}
+
+HWTEST2_F(ProductHelperTest, givenProductHelperWhenPidFdOrSocketForIpcIsNotSupportedThenFalseReturned, IsAtMostXeCore) {
+    EXPECT_FALSE(productHelper->isPidFdOrSocketForIpcSupported());
 }

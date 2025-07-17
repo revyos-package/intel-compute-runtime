@@ -1,11 +1,9 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
-
-#pragma once
 
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_stream/linear_stream.h"
@@ -190,48 +188,57 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithParams(K
     auto maxWgCountPerTile = kernel->getMaxWgCountPerTile(this->engineGroupType);
 
     NEO::EncodeDispatchKernelArgs dispatchKernelArgs{
-        0,                                                      // eventAddress
-        static_cast<uint64_t>(Event::STATE_SIGNALED),           // postSyncImmValue
-        0,                                                      // inOrderCounterValue
-        neoDevice,                                              // device
-        nullptr,                                                // inOrderExecInfo
-        kernel,                                                 // dispatchInterface
-        ssh,                                                    // surfaceStateHeap
-        dsh,                                                    // dynamicStateHeap
-        reinterpret_cast<const void *>(&threadGroupDimensions), // threadGroupDimensions
-        nullptr,                                                // outWalkerPtr
-        nullptr,                                                // cpuWalkerBuffer
-        nullptr,                                                // cpuPayloadBuffer
-        nullptr,                                                // outImplicitArgsPtr
-        &additionalCommands,                                    // additionalCommands
-        commandListPreemptionMode,                              // preemptionMode
-        launchParams.requiredPartitionDim,                      // requiredPartitionDim
-        launchParams.requiredDispatchWalkOrder,                 // requiredDispatchWalkOrder
-        launchParams.localRegionSize,                           // localRegionSize
-        0,                                                      // partitionCount
-        launchParams.reserveExtraPayloadSpace,                  // reserveExtraPayloadSpace
-        maxWgCountPerTile,                                      // maxWgCountPerTile
-        NEO::ThreadArbitrationPolicy::NotPresent,               // defaultPipelinedThreadArbitrationPolicy
-        launchParams.isIndirect,                                // isIndirect
-        launchParams.isPredicate,                               // isPredicate
-        false,                                                  // isTimestampEvent
-        uncachedMocsKernel,                                     // requiresUncachedMocs
-        internalUsage,                                          // isInternal
-        launchParams.isCooperative,                             // isCooperative
-        false,                                                  // isHostScopeSignalEvent
-        false,                                                  // isKernelUsingSystemAllocation
-        isImmediateType(),                                      // isKernelDispatchedFromImmediateCmdList
-        engineGroupType == NEO::EngineGroupType::renderCompute, // isRcs
-        this->dcFlushSupport,                                   // dcFlushEnable
-        this->heaplessModeEnabled,                              // isHeaplessModeEnabled
-        this->heaplessStateInitEnabled,                         // isHeaplessStateInitEnabled
-        false,                                                  // interruptEvent
-        !this->scratchAddressPatchingEnabled,                   // immediateScratchAddressPatching
-        false,                                                  // makeCommandView
+        .device = neoDevice,
+        .dispatchInterface = kernel,
+        .surfaceStateHeap = ssh,
+        .dynamicStateHeap = dsh,
+        .threadGroupDimensions = reinterpret_cast<const void *>(&threadGroupDimensions),
+        .outWalkerPtr = nullptr,
+        .cpuWalkerBuffer = nullptr,
+        .cpuPayloadBuffer = nullptr,
+        .outImplicitArgsPtr = nullptr,
+        .additionalCommands = &additionalCommands,
+        .extendedArgs = nullptr,
+        .postSyncArgs = {
+            .eventAddress = 0,
+            .postSyncImmValue = static_cast<uint64_t>(Event::STATE_SIGNALED),
+            .inOrderCounterValue = 0,
+            .inOrderIncrementGpuAddress = 0,
+            .inOrderIncrementValue = 0,
+            .device = neoDevice,
+            .inOrderExecInfo = nullptr,
+            .isCounterBasedEvent = false,
+            .isTimestampEvent = false,
+            .isHostScopeSignalEvent = false,
+            .isUsingSystemAllocation = false,
+            .dcFlushEnable = this->dcFlushSupport,
+            .interruptEvent = false,
+            .isFlushL3ForExternalAllocationRequired = false,
+            .isFlushL3ForHostUsmRequired = false,
+        },
+        .preemptionMode = commandListPreemptionMode,
+        .requiredPartitionDim = launchParams.requiredPartitionDim,
+        .requiredDispatchWalkOrder = launchParams.requiredDispatchWalkOrder,
+        .localRegionSize = launchParams.localRegionSize,
+        .partitionCount = 0,
+        .reserveExtraPayloadSpace = launchParams.reserveExtraPayloadSpace,
+        .maxWgCountPerTile = maxWgCountPerTile,
+        .defaultPipelinedThreadArbitrationPolicy = NEO::ThreadArbitrationPolicy::NotPresent,
+        .isIndirect = launchParams.isIndirect,
+        .isPredicate = launchParams.isPredicate,
+        .requiresUncachedMocs = uncachedMocsKernel,
+        .isInternal = internalUsage,
+        .isCooperative = launchParams.isCooperative,
+        .isKernelDispatchedFromImmediateCmdList = isImmediateType(),
+        .isRcs = engineGroupType == NEO::EngineGroupType::renderCompute,
+        .isHeaplessModeEnabled = this->heaplessModeEnabled,
+        .isHeaplessStateInitEnabled = this->heaplessStateInitEnabled,
+        .immediateScratchAddressPatching = !this->scratchAddressPatchingEnabled,
+        .makeCommandView = false,
     };
 
     NEO::EncodeDispatchKernel<GfxFamily>::encodeCommon(commandContainer, dispatchKernelArgs);
-    if (!this->isFlushTaskSubmissionEnabled) {
+    if (!isImmediateType()) {
         this->containsStatelessUncachedResource = dispatchKernelArgs.requiresUncachedMocs;
     }
 
@@ -266,7 +273,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithParams(K
         commandContainer.addToResidencyContainer(resource);
     }
 
-    if (kernelImmutableData->getDescriptor().kernelAttributes.flags.usesPrintf) {
+    if (kernelImp->getPrintfBufferAllocation() != nullptr) {
         storePrintfKernel(kernel);
     }
 
@@ -275,16 +282,16 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithParams(K
     }
 
     if (NEO::PauseOnGpuProperties::pauseModeAllowed(NEO::debugManager.flags.PauseOnEnqueue.get(), neoDevice->debugExecutionCounter.load(), NEO::PauseOnGpuProperties::PauseMode::BeforeWorkload)) {
-        commandsToPatch.push_back({0x0, additionalCommands.front(), 0, CommandToPatch::PauseOnEnqueuePipeControlStart});
+        commandsToPatch.push_back({.pCommand = additionalCommands.front(), .type = CommandToPatch::PauseOnEnqueuePipeControlStart});
         additionalCommands.pop_front();
-        commandsToPatch.push_back({0x0, additionalCommands.front(), 0, CommandToPatch::PauseOnEnqueueSemaphoreStart});
+        commandsToPatch.push_back({.pCommand = additionalCommands.front(), .type = CommandToPatch::PauseOnEnqueueSemaphoreStart});
         additionalCommands.pop_front();
     }
 
     if (NEO::PauseOnGpuProperties::pauseModeAllowed(NEO::debugManager.flags.PauseOnEnqueue.get(), neoDevice->debugExecutionCounter.load(), NEO::PauseOnGpuProperties::PauseMode::AfterWorkload)) {
-        commandsToPatch.push_back({0x0, additionalCommands.front(), 0, CommandToPatch::PauseOnEnqueuePipeControlEnd});
+        commandsToPatch.push_back({.pCommand = additionalCommands.front(), .type = CommandToPatch::PauseOnEnqueuePipeControlEnd});
         additionalCommands.pop_front();
-        commandsToPatch.push_back({0x0, additionalCommands.front(), 0, CommandToPatch::PauseOnEnqueueSemaphoreEnd});
+        commandsToPatch.push_back({.pCommand = additionalCommands.front(), .type = CommandToPatch::PauseOnEnqueueSemaphoreEnd});
         additionalCommands.pop_front();
     }
 
@@ -301,7 +308,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithParams(K
 
             NEO::MemorySynchronizationCommands<GfxFamily>::addSingleBarrier(*commandContainer.getCommandStream(), args);
         }
-        appendSignalInOrderDependencyCounter(event, false, false);
+        appendSignalInOrderDependencyCounter(event, false, false, false);
     }
 
     return ZE_RESULT_SUCCESS;

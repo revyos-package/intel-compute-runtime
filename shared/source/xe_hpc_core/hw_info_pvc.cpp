@@ -57,9 +57,9 @@ const RuntimeCapabilityTable PVC::capabilityTable{
     aub_stream::ENGINE_CCS,                                    // defaultEngineType
     0,                                                         // maxRenderFrequency
     30,                                                        // clVersionSupport
-    CmdServicesMemTraceVersion::DeviceValues::Pvc,             // aubDeviceId
+    AubMemDump::CmdServicesMemTraceVersion::DeviceValues::Pvc, // aubDeviceId
     0,                                                         // extraQuantityThreadsPerEU
-    128,                                                       // slmSize
+    128,                                                       // maxProgrammableSlmSize
     sizeof(PVC::GRF),                                          // grfSize
     36u,                                                       // timestampValidBits
     32u,                                                       // kernelTimestampValidBits
@@ -68,23 +68,15 @@ const RuntimeCapabilityTable PVC::capabilityTable{
     true,                                                      // ftrSupportsFP64
     false,                                                     // ftrSupportsFP64Emulation
     true,                                                      // ftrSupports64BitMath
-    true,                                                      // ftrSvm
     false,                                                     // ftrSupportsCoherency
-    false,                                                     // ftrSupportsVmeAvcTextureSampler
-    false,                                                     // ftrSupportsVmeAvcPreemption
     false,                                                     // ftrRenderCompressedBuffers
     false,                                                     // ftrRenderCompressedImages
-    true,                                                      // ftr64KBpages
     true,                                                      // instrumentationEnabled
-    false,                                                     // supportsVme
     false,                                                     // supportCacheFlushAfterWalker
     false,                                                     // supportsImages
-    false,                                                     // supportsDeviceEnqueue
-    false,                                                     // supportsPipes
     true,                                                      // supportsOcl21Features
     true,                                                      // supportsOnDemandPageFaults
     true,                                                      // supportsIndependentForwardProgress
-    false,                                                     // hostPtrTrackingEnabled
     false,                                                     // isIntegratedDevice
     false,                                                     // supportsMediaBlock
     true,                                                      // p2pAccessSupported

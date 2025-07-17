@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -20,11 +20,15 @@ class CacheReservationImpl : public CacheReservation {
 
     bool reserveCache(size_t cacheLevel, size_t cacheReservationSize) override;
     bool setCacheAdvice(void *ptr, size_t regionSize, ze_cache_ext_region_t cacheRegion) override;
-    size_t getMaxCacheReservationSize() override;
+    size_t getMaxCacheReservationSize(size_t cacheLevel) override;
 
   protected:
+    bool reserveCacheForLevel(NEO::CacheLevel cacheLevel, size_t cacheReservationSize, NEO::CacheRegion &reservedCacheRegion, size_t &reservedCacheSize);
+    bool setCacheAdviceImpl(void *ptr, size_t regionSize, uint32_t cacheRegion);
     Device &device;
+    NEO::CacheRegion reservedL2CacheRegion = NEO::CacheRegion::none;
     NEO::CacheRegion reservedL3CacheRegion = NEO::CacheRegion::none;
+    size_t reservedL2CacheSize = 0;
     size_t reservedL3CacheSize = 0;
 };
 

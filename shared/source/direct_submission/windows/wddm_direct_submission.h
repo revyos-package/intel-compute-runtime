@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -24,12 +24,12 @@ class WddmDirectSubmission : public DirectSubmissionHw<GfxFamily, Dispatcher> {
 
     ~WddmDirectSubmission() override;
 
-    void flushMonitorFence() override;
+    void flushMonitorFence(bool notifyKmd) override;
     void unblockPagingFenceSemaphore(uint64_t pagingFenceValue) override;
 
   protected:
     bool allocateOsResources() override;
-    bool submit(uint64_t gpuAddress, size_t size) override;
+    bool submit(uint64_t gpuAddress, size_t size, const ResidencyContainer *allocationsForResidency) override;
 
     bool handleResidency() override;
     void handleCompletionFence(uint64_t completionValue, MonitoredFence &fence);
@@ -39,11 +39,16 @@ class WddmDirectSubmission : public DirectSubmissionHw<GfxFamily, Dispatcher> {
     uint64_t updateTagValue(bool requireMonitorFence) override;
     bool dispatchMonitorFenceRequired(bool requireMonitorFence) override;
     MOCKABLE_VIRTUAL uint64_t updateTagValueImpl(uint32_t completionBufferIndex);
+    MOCKABLE_VIRTUAL void updateTagValueImplForSwitchRingBuffer(uint32_t completionBufferIndex);
     void getTagAddressValue(TagData &tagData) override;
+    void getTagAddressValueForRingSwitch(TagData &tagData) override;
     bool isCompleted(uint32_t ringBufferIndex) override;
     MOCKABLE_VIRTUAL void updateMonitorFenceValueForResidencyList(ResidencyContainer *allocationsForResidency);
     void makeGlobalFenceAlwaysResident() override;
+    void dispatchStopRingBufferSection() override;
+    size_t dispatchStopRingBufferSectionSize() override;
 
+    TagData ringBufferEndCompletionTagData{};
     OsContextWin *osContextWin;
     Wddm *wddm;
     MonitoredFence ringFence;

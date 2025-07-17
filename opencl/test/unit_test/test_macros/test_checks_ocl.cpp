@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -22,17 +22,12 @@
 
 using namespace NEO;
 
-bool TestChecks::supportsSvm(const ClDevice *pClDevice) {
-    return supportsSvm(&pClDevice->getDevice());
-}
-
 bool TestChecks::supportsImages(const Context *pContext) {
     return pContext->getDevice(0)->getSharedDeviceInfo().imageSupport;
 }
 
 bool TestChecks::supportsOcl21(const std::unique_ptr<HardwareInfo> &pHardwareInfo) {
-    return (pHardwareInfo->capabilityTable.supportsOcl21Features && pHardwareInfo->capabilityTable.supportsPipes &&
-            pHardwareInfo->capabilityTable.supportsIndependentForwardProgress);
+    return (pHardwareInfo->capabilityTable.supportsOcl21Features && pHardwareInfo->capabilityTable.supportsIndependentForwardProgress);
 }
 
 bool TestChecks::supportsAuxResolves(const RootDeviceEnvironment &rootDeviceEnvironment) {

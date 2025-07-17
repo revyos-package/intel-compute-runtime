@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,7 +14,6 @@
 #include "shared/source/os_interface/os_context.h"
 #include "shared/source/os_interface/os_thread.h"
 #include "shared/source/os_interface/os_time.h"
-#include "shared/source/os_interface/product_helper.h"
 
 #include <chrono>
 #include <thread>
@@ -24,9 +23,6 @@ namespace NEO {
 DirectSubmissionController::DirectSubmissionController() {
     if (debugManager.flags.DirectSubmissionControllerTimeout.get() != -1) {
         timeout = std::chrono::microseconds{debugManager.flags.DirectSubmissionControllerTimeout.get()};
-    }
-    if (debugManager.flags.DirectSubmissionControllerDivisor.get() != -1) {
-        timeoutDivisor = debugManager.flags.DirectSubmissionControllerDivisor.get();
     }
     if (debugManager.flags.DirectSubmissionControllerBcsTimeoutDivisor.get() != -1) {
         bcsTimeoutDivisor = debugManager.flags.DirectSubmissionControllerBcsTimeoutDivisor.get();
@@ -48,42 +44,7 @@ DirectSubmissionController::~DirectSubmissionController() {
 void DirectSubmissionController::registerDirectSubmission(CommandStreamReceiver *csr) {
     std::lock_guard<std::mutex> lock(directSubmissionsMutex);
     directSubmissions.insert(std::make_pair(csr, DirectSubmissionState()));
-    this->adjustTimeout(csr);
-}
-
-void DirectSubmissionController::setTimeoutParamsForPlatform(const ProductHelper &helper) {
-    adjustTimeoutOnThrottleAndAcLineStatus = helper.isAdjustDirectSubmissionTimeoutOnThrottleAndAcLineStatusEnabled();
-
-    if (debugManager.flags.DirectSubmissionControllerAdjustOnThrottleAndAcLineStatus.get() != -1) {
-        adjustTimeoutOnThrottleAndAcLineStatus = debugManager.flags.DirectSubmissionControllerAdjustOnThrottleAndAcLineStatus.get();
-    }
-
-    if (adjustTimeoutOnThrottleAndAcLineStatus) {
-        for (auto throttle : {QueueThrottle::LOW, QueueThrottle::MEDIUM, QueueThrottle::HIGH}) {
-            for (auto acLineStatus : {false, true}) {
-                auto key = this->getTimeoutParamsMapKey(throttle, acLineStatus);
-                auto timeoutParam = std::make_pair(key, helper.getDirectSubmissionControllerTimeoutParams(acLineStatus, throttle));
-                this->timeoutParamsMap.insert(timeoutParam);
-            }
-        }
-    }
-}
-
-void DirectSubmissionController::applyTimeoutForAcLineStatusAndThrottle(bool acLineConnected) {
-    const auto &timeoutParams = this->timeoutParamsMap[this->getTimeoutParamsMapKey(this->lowestThrottleSubmitted, acLineConnected)];
-    this->timeout = timeoutParams.timeout;
-    this->maxTimeout = timeoutParams.maxTimeout;
-    this->timeoutDivisor = timeoutParams.timeoutDivisor;
-}
-
-void DirectSubmissionController::updateLastSubmittedThrottle(QueueThrottle throttle) {
-    if (throttle < this->lowestThrottleSubmitted) {
-        this->lowestThrottleSubmitted = throttle;
-    }
-}
-
-size_t DirectSubmissionController::getTimeoutParamsMapKey(QueueThrottle throttle, bool acLineStatus) {
-    return (static_cast<size_t>(throttle) << 1) + acLineStatus;
+    this->overrideDirectSubmissionTimeouts(csr->getProductHelper());
 }
 
 void DirectSubmissionController::unregisterDirectSubmission(CommandStreamReceiver *csr) {
@@ -165,19 +126,14 @@ void DirectSubmissionController::checkNewSubmissions() {
             }
             auto lock = csr->obtainUniqueOwnership();
             if (!isCsrIdleDetectionEnabled || isDirectSubmissionIdle(csr, lock)) {
-                csr->stopDirectSubmission(false);
+                csr->stopDirectSubmission(false, false);
                 state.isStopped = true;
                 shouldRecalculateTimeout = true;
-                this->lowestThrottleSubmitted = QueueThrottle::HIGH;
             }
             state.taskCount = csr->peekTaskCount();
         } else {
             state.isStopped = false;
             state.taskCount = taskCount;
-            if (this->adjustTimeoutOnThrottleAndAcLineStatus) {
-                this->updateLastSubmittedThrottle(csr->getLastDirectSubmissionThrottle());
-                this->applyTimeoutForAcLineStatusAndThrottle(csr->getAcLineConnected(true));
-            }
         }
     }
     if (shouldRecalculateTimeout) {
@@ -215,21 +171,6 @@ bool DirectSubmissionController::isDirectSubmissionIdle(CommandStreamReceiver *c
 
 SteadyClock::time_point DirectSubmissionController::getCpuTimestamp() {
     return SteadyClock::now();
-}
-
-void DirectSubmissionController::adjustTimeout(CommandStreamReceiver *csr) {
-    if (EngineHelpers::isCcs(csr->getOsContext().getEngineType())) {
-        for (size_t subDeviceIndex = 0u; subDeviceIndex < csr->getOsContext().getDeviceBitfield().size(); ++subDeviceIndex) {
-            if (csr->getOsContext().getDeviceBitfield().test(subDeviceIndex)) {
-                ++this->ccsCount[subDeviceIndex];
-            }
-        }
-        auto curentMaxCcsCount = std::max_element(this->ccsCount.begin(), this->ccsCount.end());
-        if (*curentMaxCcsCount > this->maxCcsCount) {
-            this->maxCcsCount = *curentMaxCcsCount;
-            this->timeout /= this->timeoutDivisor;
-        }
-    }
 }
 
 void DirectSubmissionController::recalculateTimeout() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -17,17 +17,12 @@
 #include "config.h"
 
 namespace AubMemDump {
-
-enum {
-    device = deviceValue
-};
-
 // Instantiate these common template implementations.
-template struct AubDump<Traits<device, 32>>;
-template struct AubDump<Traits<device, 48>>;
+template struct AubDump<Traits<32>>;
+template struct AubDump<Traits<48>>;
 
-template struct AubPageTableHelper32<Traits<device, 32>>;
-template struct AubPageTableHelper64<Traits<device, 48>>;
+template struct AubPageTableHelper32<Traits<32>>;
+template struct AubPageTableHelper64<Traits<48>>;
 } // namespace AubMemDump
 
 namespace NEO {
@@ -280,14 +275,4 @@ using namespace NEO;
 template SurfaceInfo *getDumpSurfaceInfo<Family>(GraphicsAllocation &gfxAllocation, const GmmHelper &gmmHelper, DumpFormat dumpFormat);
 
 template uint32_t getImageSurfaceTypeFromGmmResourceType<Family>(GMM_RESOURCE_TYPE gmmResourceType);
-
-template void dumpBufferInBinFormat<Family>(GraphicsAllocation &gfxAllocation, AubMemDump::AubFileStream *stream, uint32_t context);
-
-template void dumpImageInBmpFormat<Family>(GraphicsAllocation &gfxAllocation, AubMemDump::AubFileStream *stream, uint32_t context);
-
-template void dumpBufferInTreFormat<Family>(GraphicsAllocation &gfxAllocation, AubMemDump::AubFileStream *stream, uint32_t context);
-
-template void dumpImageInTreFormat<Family>(GraphicsAllocation &gfxAllocation, AubMemDump::AubFileStream *stream, uint32_t context);
-
-template void dumpAllocation<Family>(DumpFormat dumpFormat, GraphicsAllocation &gfxAllocation, AubMemDump::AubFileStream *stream, uint32_t context);
 } // namespace AubAllocDump

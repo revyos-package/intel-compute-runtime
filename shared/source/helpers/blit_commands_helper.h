@@ -24,6 +24,10 @@ struct RootDeviceEnvironment;
 class ProductHelper;
 struct EncodeDummyBlitWaArgs;
 
+struct BlitCommandsResult {
+    void *lastBlitCommand = nullptr;
+};
+
 template <typename GfxFamily>
 struct BlitCommandsHelper {
     using COLOR_DEPTH = typename GfxFamily::XY_COLOR_BLT::COLOR_DEPTH;
@@ -31,6 +35,8 @@ struct BlitCommandsHelper {
     static uint64_t getMaxBlitWidthOverride(const RootDeviceEnvironment &rootDeviceEnvironment);
     static uint64_t getMaxBlitHeight(const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
     static uint64_t getMaxBlitHeightOverride(const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
+    static uint64_t getMaxBlitSetWidth(const RootDeviceEnvironment &rootDeviceEnvironment);
+    static uint64_t getMaxBlitSetHeight(const RootDeviceEnvironment &rootDeviceEnvironment);
     static void dispatchPreBlitCommand(LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
     static size_t estimatePreBlitCommandSize();
     static void dispatchPostBlitCommand(LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
@@ -41,17 +47,20 @@ struct BlitCommandsHelper {
                                            bool debugPauseEnabled, bool blitterDirectSubmission, bool relaxedOrderingEnabled, const RootDeviceEnvironment &rootDeviceEnvironment);
     static size_t getNumberOfBlitsForCopyRegion(const Vec3<size_t> &copySize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
     static size_t getNumberOfBlitsForCopyPerRow(const Vec3<size_t> &copySize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
+    static size_t getNumberOfBlitsForColorFill(const Vec3<size_t> &copySize, size_t patternSize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
+    static size_t getNumberOfBlitsForByteFill(const Vec3<size_t> &copySize, size_t patternSize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
+    static size_t getNumberOfBlitsForFill(const Vec3<size_t> &copySize, size_t patternSize, const RootDeviceEnvironment &rootDeviceEnvironment, bool isSystemMemoryPoolUsed);
     static uint64_t calculateBlitCommandDestinationBaseAddress(const BlitProperties &blitProperties, uint64_t offset, uint64_t row, uint64_t slice);
     static uint64_t calculateBlitCommandSourceBaseAddress(const BlitProperties &blitProperties, uint64_t offset, uint64_t row, uint64_t slice);
     static uint64_t calculateBlitCommandDestinationBaseAddressCopyRegion(const BlitProperties &blitProperties, size_t slice);
     static uint64_t calculateBlitCommandSourceBaseAddressCopyRegion(const BlitProperties &blitProperties, size_t slice);
     static void dispatchBlitCommands(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitCommandsForBufferRegion(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitCommandsForBufferPerRow(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitCommandsForImageRegion(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitMemoryColorFill(NEO::GraphicsAllocation *dstAlloc, uint64_t offset, uint32_t *pattern, size_t patternSize, LinearStream &linearStream, size_t size, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitMemoryByteFill(NEO::GraphicsAllocation *dstAlloc, uint64_t offset, uint32_t *pattern, LinearStream &linearStream, size_t size, RootDeviceEnvironment &rootDeviceEnvironment);
-    static void dispatchBlitMemoryFill(NEO::GraphicsAllocation *dstAlloc, uint64_t offset, uint32_t *pattern, LinearStream &linearStream, size_t size, RootDeviceEnvironment &rootDeviceEnvironment, COLOR_DEPTH depth, size_t patternSize);
+    static BlitCommandsResult dispatchBlitCommandsForBufferRegion(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
+    static BlitCommandsResult dispatchBlitCommandsForBufferPerRow(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
+    static BlitCommandsResult dispatchBlitCommandsForImageRegion(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
+    static BlitCommandsResult dispatchBlitMemoryColorFill(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
+    static BlitCommandsResult dispatchBlitMemoryByteFill(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
+    static BlitCommandsResult dispatchBlitMemoryFill(const BlitProperties &blitProperties, LinearStream &linearStream, RootDeviceEnvironment &rootDeviceEnvironment);
     static void dispatchDummyBlit(LinearStream &linearStream, EncodeDummyBlitWaArgs &waArgs);
     static size_t getDummyBlitSize(const EncodeDummyBlitWaArgs &waArgs);
     static bool isDummyBlitWaNeeded(const EncodeDummyBlitWaArgs &waArgs);
@@ -67,13 +76,14 @@ struct BlitCommandsHelper {
     template <typename T = typename GfxFamily::XY_BLOCK_COPY_BLT>
     static void appendColorDepth(const BlitProperties &blitProperties, T &blitCmd);
     static void appendBlitMemoryOptionsForFillBuffer(NEO::GraphicsAllocation *dstAlloc, typename GfxFamily::XY_COLOR_BLT &blitCmd, const RootDeviceEnvironment &rootDeviceEnvironment);
-    static void appendBlitFillCommand(typename GfxFamily::XY_COLOR_BLT &blitCmd);
+    static void appendBlitFillCommand(const BlitProperties &blitProperties, typename GfxFamily::XY_COLOR_BLT &blitCmd);
     static void appendBlitMemSetCompressionFormat(void *blitCmd, NEO::GraphicsAllocation *dstAlloc, uint32_t compressionFormat);
-    static void appendBlitMemSetCommand(void *blitCmd);
+    static void appendBlitMemSetCommand(const BlitProperties &blitProperties, void *blitCmd);
     static void appendSurfaceType(const BlitProperties &blitProperties, typename GfxFamily::XY_BLOCK_COPY_BLT &blitCmd);
     static void appendTilingEnable(typename GfxFamily::XY_COLOR_BLT &blitCmd);
     static void appendTilingType(const GMM_TILE_TYPE srcTilingType, const GMM_TILE_TYPE dstTilingType, typename GfxFamily::XY_BLOCK_COPY_BLT &blitCmd);
     static void appendSliceOffsets(const BlitProperties &blitProperties, typename GfxFamily::XY_BLOCK_COPY_BLT &blitCmd, uint32_t sliceIndex, const RootDeviceEnvironment &rootDeviceEnvironment, uint32_t srcSlicePitch, uint32_t dstSlicePitch);
+    static void appendBaseAddressOffset(const BlitProperties &blitProperties, typename GfxFamily::XY_BLOCK_COPY_BLT &blitCmd, const bool isSource);
     static void getBlitAllocationProperties(const GraphicsAllocation &allocation, uint32_t &pitch, uint32_t &qPitch, GMM_TILE_TYPE &tileType,
                                             uint32_t &mipTailLod, uint32_t &compressionDetails,
                                             const RootDeviceEnvironment &rootDeviceEnvironment, GMM_YUV_PLANE_ENUM plane);
@@ -95,5 +105,8 @@ struct BlitCommandsHelper {
 
     static void encodeWa(LinearStream &cmdStream, const BlitProperties &blitProperties, uint32_t &latestSentBcsWaValue);
     static size_t getWaCmdsSize(const BlitPropertiesContainer &blitPropertiesContainer);
+
+    template <typename CommandType>
+    static void applyAdditionalBlitProperties(const BlitProperties &blitProperties, CommandType &cmd, const RootDeviceEnvironment &rootDeviceEnvironment, bool last);
 };
 } // namespace NEO

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -45,7 +45,7 @@ uint32_t KernelHelper::getMaxWorkGroupCount(const RootDeviceEnvironment &rootDev
     }
 
     auto availableThreadCount = helper.calculateAvailableThreadCount(hwInfo, numGrfRequired);
-    auto availableSlmSize = static_cast<uint32_t>(dssCount * MemoryConstants::kiloByte * hwInfo.capabilityTable.slmSize);
+    auto availableSlmSize = static_cast<uint32_t>(dssCount * MemoryConstants::kiloByte * hwInfo.capabilityTable.maxProgrammableSlmSize);
     auto maxBarrierCount = static_cast<uint32_t>(helper.getMaxBarrierRegisterPerSlice());
 
     UNRECOVERABLE_IF((workDim == 0) || (workDim > 3));
@@ -94,6 +94,9 @@ KernelHelper::ErrorCode KernelHelper::checkIfThereIsSpaceForScratchOrPrivate(Ker
 
     PRINT_DEBUG_STRING(debugManager.flags.PrintDebugMessages.get(), stderr,
                        "computeUnits for each thread: %u\n", computeUnitsForScratch);
+
+    PRINT_DEBUG_STRING(debugManager.flags.PrintDebugMessages.get(), stderr,
+                       "global memory size: %llu\n", globalMemorySize);
 
     PRINT_DEBUG_STRING(debugManager.flags.PrintDebugMessages.get(), stderr,
                        "perHwThreadPrivateMemorySize: %u\t totalPrivateMemorySize: %lu\n",

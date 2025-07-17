@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -86,6 +86,7 @@ TEST(KernelDescriptor, WhenDefaultInitializedThenValuesAreCleared) {
     EXPECT_TRUE(desc.kernelMetadata.printfStringsMap.empty());
     EXPECT_EQ(0U, desc.kernelMetadata.compiledSubGroupsNumber);
     EXPECT_EQ(0U, desc.kernelMetadata.requiredSubGroupSize);
+    EXPECT_EQ(0U, desc.kernelMetadata.requiredThreadGroupDispatchSize);
     EXPECT_EQ(nullptr, desc.external.debugData.get());
     EXPECT_EQ(nullptr, desc.external.igcInfoForGtpin);
 }
@@ -271,4 +272,21 @@ TEST(KernelDescriptor, GivenDescriptorWithoutStatefulArgsWhenInitBindlessOffsets
 
     desc.initBindlessOffsetToSurfaceState();
     EXPECT_EQ(0u, desc.bindlessArgsMap.size());
+}
+
+TEST(KernelDescriptor, GivenDescriptorWhenGettingPerThreadDataOffsetThenItReturnsCorrectValue) {
+    NEO::KernelDescriptor desc{};
+
+    desc.kernelAttributes.crossThreadDataSize = 64u;
+    desc.kernelAttributes.inlineDataPayloadSize = 64u;
+    EXPECT_EQ(0u, desc.getPerThreadDataOffset());
+
+    // crossThreadData is fully consumed by inlineDataPayload
+    desc.kernelAttributes.crossThreadDataSize = 40u;
+    desc.kernelAttributes.inlineDataPayloadSize = 64u;
+    EXPECT_EQ(0u, desc.getPerThreadDataOffset());
+
+    desc.kernelAttributes.crossThreadDataSize = 128u;
+    desc.kernelAttributes.inlineDataPayloadSize = 64u;
+    EXPECT_EQ(64u, desc.getPerThreadDataOffset());
 }

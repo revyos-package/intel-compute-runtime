@@ -14,7 +14,7 @@
 #include "level_zero/core/source/kernel/kernel.h"
 #include "level_zero/core/source/module/module.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <list>
 #include <memory>
@@ -23,7 +23,8 @@
 
 namespace NEO {
 struct KernelDescriptor;
-class SharedIsaAllocation;
+struct MetadataGeneration;
+class SharedPoolAllocation;
 
 namespace Zebin::Debug {
 struct Segments;
@@ -50,7 +51,14 @@ struct ModuleTranslationUnit {
     ModuleTranslationUnit(L0::Device *device);
     virtual ~ModuleTranslationUnit();
     MOCKABLE_VIRTUAL ze_result_t buildFromSpirV(const char *input, uint32_t inputSize, const char *buildOptions, const char *internalBuildOptions,
-                                                const ze_module_constants_t *pConstants);
+                                                const ze_module_constants_t *pConstants) {
+        return buildFromIntermediate(IGC::CodeType::spirV, input, inputSize, buildOptions, internalBuildOptions, pConstants);
+    }
+
+    MOCKABLE_VIRTUAL ze_result_t buildExt(ze_module_format_t inputFormat, const char *input, uint32_t inputSize, const char *buildOptions, const char *internalBuildOptions);
+
+    MOCKABLE_VIRTUAL ze_result_t buildFromIntermediate(IGC::CodeType::CodeType_t intermediateType, const char *input, uint32_t inputSize, const char *buildOptions, const char *internalBuildOptions,
+                                                       const ze_module_constants_t *pConstants);
     MOCKABLE_VIRTUAL ze_result_t staticLinkSpirV(std::vector<const char *> inputSpirVs, std::vector<uint32_t> inputModuleSizes, const char *buildOptions, const char *internalBuildOptions,
                                                  std::vector<const ze_module_constants_t *> specConstants);
     MOCKABLE_VIRTUAL ze_result_t createFromNativeBinary(const char *input, size_t inputSize, const char *internalBuildOptions);
@@ -151,6 +159,9 @@ struct ModuleImp : public Module {
         return allocatePrivateMemoryPerDispatch;
     }
 
+    void populateZebinExtendedArgsMetadata() override;
+    void generateDefaultExtendedArgsMetadata() override;
+
     uint32_t getProfileFlags() const override { return profileFlags; }
 
     ModuleTranslationUnit *getTranslationUnit() {
@@ -189,7 +200,7 @@ struct ModuleImp : public Module {
     std::unique_ptr<ModuleTranslationUnit> translationUnit;
     ModuleBuildLog *moduleBuildLog = nullptr;
     NEO::GraphicsAllocation *exportedFunctionsSurface = nullptr;
-    std::unique_ptr<NEO::SharedIsaAllocation> sharedIsaAllocation;
+    std::unique_ptr<NEO::SharedPoolAllocation> sharedIsaAllocation;
     std::vector<std::shared_ptr<Kernel>> printfKernelContainer;
     std::vector<std::unique_ptr<KernelImmutableData>> kernelImmDatas;
     NEO::Linker::RelocatedSymbolsMap symbols;
@@ -219,6 +230,8 @@ struct ModuleImp : public Module {
 
     NEO::Linker::PatchableSegments isaSegmentsForPatching;
     std::vector<std::vector<char>> patchedIsaTempStorage;
+
+    std::unique_ptr<NEO::MetadataGeneration> metadataGeneration;
 };
 
 bool moveBuildOption(std::string &dstOptionsSet, std::string &srcOptionSet, NEO::ConstStringRef dstOptionName, NEO::ConstStringRef srcOptionName);

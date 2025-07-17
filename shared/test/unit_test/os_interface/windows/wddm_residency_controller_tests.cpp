@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -748,6 +748,15 @@ TEST_F(WddmResidencyControllerLockTest, givenTrimToBudgetWhenTrimmingResidencyTh
     EXPECT_EQ(1u, residencyController->acquireLockCallCount);
 }
 
+HWTEST_F(WddmResidencyControllerLockTest, givenTrimToBudgetWhenTrimmingToBudgetThenLockCsr) {
+    D3DKMT_TRIMNOTIFICATION trimNotification = {0};
+    trimNotification.Flags.TrimToBudget = 1;
+    trimNotification.NumBytesToTrim = 0;
+
+    residencyController->trimResidency(trimNotification.Flags, trimNotification.NumBytesToTrim);
+    EXPECT_EQ(1u, static_cast<UltCommandStreamReceiver<FamilyType> *>(residencyController->csr)->recursiveLockCounter);
+}
+
 TEST_F(WddmResidencyControllerLockTest, givenPeriodicTrimAndTrimToBudgetWhenTrimmingResidencyThenLockTwice) {
     D3DKMT_TRIMNOTIFICATION trimNotification = {0};
     trimNotification.Flags.PeriodicTrim = 1;
@@ -851,6 +860,23 @@ TEST_F(WddmResidencyControllerWithMockWddmTest, givenMakeResidentFailsWhenCallin
     EXPECT_FALSE(allocation3.getResidencyData().resident[osContextId]);
     EXPECT_FALSE(allocation4.getResidencyData().resident[osContextId]);
     EXPECT_EQ(2u, wddm->makeResidentResult.called);
+}
+
+TEST_F(WddmResidencyControllerWithMockWddmTest, givenMakeResidentFailsWhenCallingMakeResidentResidencyAllocationsThenResidencyContainerIsCleared) {
+    MockWddmAllocation allocation1(gmmHelper);
+    MockWddmAllocation allocation2(gmmHelper);
+    MockWddmAllocation allocation3(gmmHelper);
+    MockWddmAllocation allocation4(gmmHelper);
+
+    wddm->makeResidentNumberOfBytesToTrim = 4 * 4096;
+    wddm->makeResidentStatus = false;
+
+    ResidencyContainer residencyPack{&allocation1, &allocation2, &allocation3, &allocation4};
+    bool requiresBlockingResidencyHandling = true;
+    bool result = residencyController->makeResidentResidencyAllocations(residencyPack, requiresBlockingResidencyHandling);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(residencyPack.size(), 0u);
 }
 
 TEST_F(WddmResidencyControllerWithMockWddmTest, givenMakeResidentFailsWhenCallingMakeResidentResidencyAllocationsThenDontMarkTripleAllocationsAsResident) {

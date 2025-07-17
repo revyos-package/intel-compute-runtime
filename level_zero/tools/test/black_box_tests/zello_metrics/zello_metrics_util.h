@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -90,7 +90,7 @@ void printMetricProperties(const zet_metric_properties_t &properties);
 void sleep(uint32_t milliseconds);
 bool getTestMachineConfiguration(TestMachineConfiguration &machineConfig);
 zet_metric_group_handle_t findMetricGroup(const char *groupName,
-                                          const zet_metric_group_sampling_type_flag_t samplingType,
+                                          const zet_metric_group_sampling_type_flags_t samplingType,
                                           ze_device_handle_t deviceHandle);
 ze_event_pool_handle_t createHostVisibleEventPool(ze_context_handle_t contextHandle, ze_device_handle_t deviceHandle);
 ze_event_handle_t createHostVisibleEvent(ze_event_pool_handle_t hostVisibleEventPool);
@@ -101,5 +101,6 @@ void showMetricsExportData(uint8_t *pExportData, size_t exportDataSize);
 bool osStreamMpCollectionWorkloadDifferentProcess();
 bool osStreamMpCollectionWorkloadSameProcess();
 int32_t osRunAllTests(int32_t runStatus);
+bool isEnvVariableSet(const char *name);
 
 } // namespace ZelloMetricsUtility

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,11 +11,13 @@
 #include "shared/source/execution_environment/root_device_environment.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/hw_info.h"
+#include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/gfx_partition.h"
 #include "shared/source/os_interface/linux/drm_allocation.h"
 #include "shared/source/os_interface/linux/drm_memory_manager.h"
 #include "shared/source/os_interface/linux/drm_neo.h"
 #include "shared/source/os_interface/linux/drm_wrappers.h"
+#include "shared/source/os_interface/linux/file_descriptor.h"
 #include "shared/source/os_interface/linux/os_context_linux.h"
 #include "shared/source/os_interface/linux/sys_calls.h"
 
@@ -53,6 +55,37 @@ uint32_t IoctlHelper::getFlagsForPrimeHandleToFd() const {
     return DRM_CLOEXEC | DRM_RDWR;
 }
 
+void IoctlHelper::writeCcsMode(const std::string &gtFile, uint32_t ccsMode,
+                               std::vector<std::tuple<std::string, uint32_t>> &deviceCcsModeVec) {
+
+    std::string ccsFile = gtFile + "/ccs_mode";
+    auto fd = FileDescriptor(ccsFile.c_str(), O_RDWR);
+    if (fd < 0) {
+        if ((errno == -EACCES) || (errno == -EPERM)) {
+            fprintf(stderr, "No read and write permissions for %s, System administrator needs to grant permissions to allow modification of this file from user space\n", ccsFile.c_str());
+            fprintf(stdout, "No read and write permissions for %s, System administrator needs to grant permissions to allow modification of this file from user space\n", ccsFile.c_str());
+        }
+        return;
+    }
+
+    uint32_t ccsValue = 0;
+    ssize_t ret = SysCalls::read(fd, &ccsValue, sizeof(uint32_t));
+    PRINT_DEBUG_STRING(debugManager.flags.PrintDebugMessages.get() && (ret < 0), stderr, "read() on %s failed errno = %d | ret = %d \n",
+                       ccsFile.c_str(), errno, ret);
+
+    if ((ret < 0) || (ccsValue == ccsMode)) {
+        return;
+    }
+
+    do {
+        ret = SysCalls::write(fd, &ccsMode, sizeof(uint32_t));
+    } while (ret == -1 && errno == -EBUSY);
+
+    if (ret > 0) {
+        deviceCcsModeVec.emplace_back(ccsFile, ccsValue);
+    }
+};
+
 unsigned int IoctlHelper::getIoctlRequestValueBase(DrmIoctl ioctlRequest) const {
     switch (ioctlRequest) {
     case DrmIoctl::gemClose:
@@ -61,6 +94,16 @@ unsigned int IoctlHelper::getIoctlRequestValueBase(DrmIoctl ioctlRequest) const 
         return DRM_IOCTL_PRIME_FD_TO_HANDLE;
     case DrmIoctl::primeHandleToFd:
         return DRM_IOCTL_PRIME_HANDLE_TO_FD;
+    case DrmIoctl::syncObjFdToHandle:
+        return DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE;
+    case DrmIoctl::syncObjWait:
+        return DRM_IOCTL_SYNCOBJ_WAIT;
+    case DrmIoctl::syncObjSignal:
+        return DRM_IOCTL_SYNCOBJ_SIGNAL;
+    case DrmIoctl::syncObjTimelineWait:
+        return DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT;
+    case DrmIoctl::syncObjTimelineSignal:
+        return DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL;
     default:
         UNRECOVERABLE_IF(true);
         return 0u;
@@ -75,6 +118,16 @@ std::string IoctlHelper::getIoctlStringBase(DrmIoctl ioctlRequest) const {
         return "DRM_IOCTL_PRIME_FD_TO_HANDLE";
     case DrmIoctl::primeHandleToFd:
         return "DRM_IOCTL_PRIME_HANDLE_TO_FD";
+    case DrmIoctl::syncObjFdToHandle:
+        return "DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE";
+    case DrmIoctl::syncObjWait:
+        return "DRM_IOCTL_SYNCOBJ_WAIT";
+    case DrmIoctl::syncObjSignal:
+        return "DRM_IOCTL_SYNCOBJ_SIGNAL";
+    case DrmIoctl::syncObjTimelineWait:
+        return "DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT";
+    case DrmIoctl::syncObjTimelineSignal:
+        return "DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL";
     default:
         UNRECOVERABLE_IF(true);
         return "";
@@ -93,14 +146,14 @@ uint64_t *IoctlHelper::getPagingFenceAddress(uint32_t vmHandleId, OsContextLinux
     }
 }
 
-uint64_t IoctlHelper::acquireGpuRange(DrmMemoryManager &memoryManager, size_t &size, uint32_t rootDeviceIndex, HeapIndex heapIndex) {
+uint64_t IoctlHelper::acquireGpuRange(DrmMemoryManager &memoryManager, size_t &size, uint32_t rootDeviceIndex, AllocationType allocType, HeapIndex heapIndex) {
     if (heapIndex >= HeapIndex::totalHeaps) {
         return 0;
     }
     return memoryManager.acquireGpuRange(size, rootDeviceIndex, heapIndex);
 }
 
-void IoctlHelper::releaseGpuRange(DrmMemoryManager &memoryManager, void *address, size_t size, uint32_t rootDeviceIndex) {
+void IoctlHelper::releaseGpuRange(DrmMemoryManager &memoryManager, void *address, size_t size, uint32_t rootDeviceIndex, AllocationType allocType) {
     memoryManager.releaseGpuRange(address, size, rootDeviceIndex);
 }
 
@@ -117,7 +170,7 @@ void IoctlHelper::registerMemoryToUnmap(DrmAllocation &allocation, void *pointer
 }
 
 BufferObject *IoctlHelper::allocUserptr(DrmMemoryManager &memoryManager, const AllocationData &allocData, uintptr_t address, size_t size, uint32_t rootDeviceIndex) {
-    return memoryManager.allocUserptr(address, size, rootDeviceIndex);
+    return memoryManager.allocUserptr(address, size, allocData.type, rootDeviceIndex);
 }
 
 } // namespace NEO

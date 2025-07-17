@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,13 +7,14 @@
 
 #pragma once
 #include "shared/source/helpers/device_bitfield.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/utilities/reference_tracked_object.h"
 
 #include "opencl/source/api/cl_types.h"
 #include "opencl/source/cl_device/cl_device_info.h"
 #include "opencl/source/helpers/base_object.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <mutex>
 #include <vector>
@@ -51,9 +52,6 @@ struct OpenCLObjectMapper<_cl_device_id> {
 class ClDevice : public BaseObject<_cl_device_id> {
   public:
     static const cl_ulong objectMagic = 0x8055832341AC8D08LL;
-
-    ClDevice &operator=(const ClDevice &) = delete;
-    ClDevice(const ClDevice &) = delete;
 
     explicit ClDevice(Device &device, Platform *platformId);
     explicit ClDevice(Device &device, ClDevice &rootClDevice, Platform *platformId);
@@ -126,7 +124,6 @@ class ClDevice : public BaseObject<_cl_device_id> {
     const std::string &peekCompilerExtensions() const;
     const std::string &peekCompilerExtensionsWithFeatures() const;
     DeviceBitfield getDeviceBitfield() const;
-    bool arePipesSupported() const;
     bool isPciBusInfoValid() const;
 
     static cl_command_queue_capabilities_intel getQueueFamilyCapabilitiesAll();
@@ -171,5 +168,7 @@ class ClDevice : public BaseObject<_cl_device_id> {
     std::string compilerExtensions;
     std::string compilerExtensionsWithFeatures;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<ClDevice>);
 
 } // namespace NEO

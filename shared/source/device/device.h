@@ -8,14 +8,17 @@
 #pragma once
 #include "shared/source/command_stream/preemption_mode.h"
 #include "shared/source/device/device_info.h"
+#include "shared/source/helpers/common_types.h"
 #include "shared/source/helpers/engine_control.h"
 #include "shared/source/helpers/engine_node_helper.h"
 #include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/helpers/options.h"
+#include "shared/source/memory_manager/unified_memory_reuse.h"
 #include "shared/source/os_interface/performance_counters.h"
 #include "shared/source/os_interface/product_helper.h"
 #include "shared/source/utilities/isa_pool_allocator.h"
 #include "shared/source/utilities/reference_tracked_object.h"
+#include "shared/source/utilities/timestamp_pool_allocator.h"
 
 #include <array>
 #include <mutex>
@@ -35,13 +38,15 @@ class GmmHelper;
 class OSTime;
 class ProductHelper;
 class ReleaseHelper;
+class SipExternalLib;
 class SubDevice;
 class SyncBufferHandler;
 class UsmMemAllocPoolsManager;
+class UsmMemAllocPool;
 enum class EngineGroupType : uint32_t;
 struct PhysicalDevicePciBusInfo;
 
-struct SelectorCopyEngine : NonCopyableOrMovableClass {
+struct SelectorCopyEngine : NonCopyableAndNonMovableClass {
     std::atomic<bool> isMainUsed = false;
     std::atomic<uint32_t> selector = 0;
 };
@@ -54,19 +59,18 @@ struct EngineGroupT {
 using EngineGroupsT = std::vector<EngineGroupT>;
 using CsrContainer = std::vector<std::unique_ptr<CommandStreamReceiver>>;
 
-struct SecondaryContexts {
+struct SecondaryContexts : NEO::NonCopyableAndNonMovableClass {
     SecondaryContexts() = default;
-    SecondaryContexts(SecondaryContexts &&in) {
+    SecondaryContexts(SecondaryContexts &&in) noexcept {
         this->engines = std::move(in.engines);
         this->regularCounter = in.regularCounter.load();
         this->highPriorityCounter = in.highPriorityCounter.load();
         this->regularEnginesTotal = in.regularEnginesTotal;
         this->highPriorityEnginesTotal = in.highPriorityEnginesTotal;
     }
-    SecondaryContexts(const SecondaryContexts &in) = delete;
-    SecondaryContexts &operator=(const SecondaryContexts &) = delete;
+    SecondaryContexts &operator=(SecondaryContexts &&other) noexcept = delete;
 
-    EngineControl *getEngine(const EngineUsage usage);
+    EngineControl *getEngine(const EngineUsage usage, int priority);
 
     EnginesT engines;                                 // vector of secondary EngineControls
     std::atomic<uint8_t> regularCounter = 0;          // Counter used to assign next regular EngineControl
@@ -80,15 +84,15 @@ struct SecondaryContexts {
     std::mutex mutex;
 };
 
+static_assert(NEO::NonCopyable<SecondaryContexts>);
+
 struct RTDispatchGlobalsInfo {
     GraphicsAllocation *rtDispatchGlobalsArray = nullptr;
     std::vector<GraphicsAllocation *> rtStacks; // per tile
 };
 
-class Device : public ReferenceTrackedObject<Device> {
+class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMovableClass {
   public:
-    Device &operator=(const Device &) = delete;
-    Device(const Device &) = delete;
     ~Device() override;
 
     template <typename DeviceT, typename... ArgsT>
@@ -117,7 +121,6 @@ class Device : public ReferenceTrackedObject<Device> {
     size_t getEngineGroupIndexFromEngineGroupType(EngineGroupType engineGroupType) const;
     EngineControl &getEngine(uint32_t index);
     EngineControl &getDefaultEngine();
-    EngineControl &getNextEngineForCommandQueue();
     EngineControl &getInternalEngine();
     EngineControl *getInternalCopyEngine();
     EngineControl *getHpCopyEngine();
@@ -144,6 +147,7 @@ class Device : public ReferenceTrackedObject<Device> {
     bool isFullRangeSvm() const;
     static bool isBlitSplitEnabled();
     static bool isInitDeviceWithFirstSubmissionEnabled(CommandStreamReceiverType csrType);
+    static std::vector<DeviceVector> groupDevices(DeviceVector devices);
     bool isBcsSplitSupported();
     bool isInitDeviceWithFirstSubmissionSupported(CommandStreamReceiverType csrType);
     bool areSharedSystemAllocationsAllowed() const;
@@ -156,6 +160,7 @@ class Device : public ReferenceTrackedObject<Device> {
         return reinterpret_cast<SpecializedDeviceT *>(specializedDevice);
     }
     MOCKABLE_VIRTUAL CompilerInterface *getCompilerInterface() const;
+    MOCKABLE_VIRTUAL SipExternalLib *getSipExternalLibInterface() const;
     BuiltIns *getBuiltIns() const;
     void allocateSyncBufferHandler();
 
@@ -177,7 +182,8 @@ class Device : public ReferenceTrackedObject<Device> {
     std::unique_ptr<SyncBufferHandler> syncBufferHandler;
     GraphicsAllocation *getRTMemoryBackedBuffer() { return rtMemoryBackedBuffer; }
     RTDispatchGlobalsInfo *getRTDispatchGlobals(uint32_t maxBvhLevels);
-    bool rayTracingIsInitialized() const { return rtMemoryBackedBuffer != nullptr; }
+    bool rayTracingIsInitialized() const { return rtMemoryBackedBuffer != nullptr && rtDispatchGlobalsInfos.size() != 0; }
+    void initializeRTMemoryBackedBuffer();
     void initializeRayTracing(uint32_t maxBvhLevels);
     void allocateRTDispatchGlobals(uint32_t maxBvhLevels);
 
@@ -196,16 +202,23 @@ class Device : public ReferenceTrackedObject<Device> {
     ISAPoolAllocator &getIsaPoolAllocator() {
         return isaPoolAllocator;
     }
+    TimestampPoolAllocator &getDeviceTimestampPoolAllocator() {
+        return deviceTimestampPoolAllocator;
+    }
     UsmMemAllocPoolsManager *getUsmMemAllocPoolsManager() {
         return deviceUsmMemAllocPoolsManager.get();
     }
+    UsmMemAllocPool *getUsmMemAllocPool() {
+        return usmMemAllocPool.get();
+    }
     MOCKABLE_VIRTUAL void stopDirectSubmissionAndWaitForCompletion();
-    bool isAnyDirectSubmissionEnabled();
+    bool isAnyDirectSubmissionEnabled() const;
+    bool isAnyDirectSubmissionLightEnabled() const;
     bool isStateSipRequired() const {
         return (getPreemptionMode() == PreemptionMode::MidThread || getDebugger() != nullptr) && getCompilerInterface();
     }
 
-    MOCKABLE_VIRTUAL EngineControl *getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, bool allocateInterrupt);
+    MOCKABLE_VIRTUAL EngineControl *getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, int priority, bool allocateInterrupt);
     bool isSecondaryContextEngineType(aub_stream::EngineType type) {
         return EngineHelpers::isCcs(type) || EngineHelpers::isBcs(type);
     }
@@ -218,25 +231,8 @@ class Device : public ReferenceTrackedObject<Device> {
 
     void stopDirectSubmissionForCopyEngine();
 
-    uint64_t getMaxAllocationsSavedForReuseSize() const {
-        return maxAllocationsSavedForReuseSize;
-    }
+    bool shouldLimitAllocationsReuse() const;
 
-    std::unique_lock<std::mutex> obtainAllocationsReuseLock() const {
-        return std::unique_lock<std::mutex>(allocationsReuseMtx);
-    }
-
-    void recordAllocationSaveForReuse(size_t size) {
-        allocationsSavedForReuseSize += size;
-    }
-
-    void recordAllocationGetFromReuse(size_t size) {
-        allocationsSavedForReuseSize -= size;
-    }
-
-    uint64_t getAllocationsSavedForReuseSize() const {
-        return allocationsSavedForReuseSize;
-    }
     uint32_t getMicrosecondResolution() const {
         return microsecondResolution;
     }
@@ -258,6 +254,11 @@ class Device : public ReferenceTrackedObject<Device> {
         bufferPoolCount -= size;
     }
 
+    UsmReuseInfo usmReuseInfo;
+
+    void resetUsmAllocationPool(UsmMemAllocPool *usmMemAllocPool);
+    void cleanupUsmAllocationPool();
+
   protected:
     Device() = delete;
     Device(ExecutionEnvironment *executionEnvironment, const uint32_t rootDeviceIndex);
@@ -275,9 +276,9 @@ class Device : public ReferenceTrackedObject<Device> {
 
     MOCKABLE_VIRTUAL bool createDeviceImpl();
     bool initDeviceWithEngines();
-    void initializeCommonResources();
+    bool initializeCommonResources();
     bool initDeviceFully();
-    void initUsmReuseMaxSize();
+    void initUsmReuseLimits();
     virtual bool createEngines();
 
     void addEngineToEngineGroup(EngineControl &engine);
@@ -288,6 +289,7 @@ class Device : public ReferenceTrackedObject<Device> {
     MOCKABLE_VIRTUAL std::unique_ptr<CommandStreamReceiver> createCommandStreamReceiver() const;
     MOCKABLE_VIRTUAL SubDevice *createSubDevice(uint32_t subDeviceIndex);
     MOCKABLE_VIRTUAL size_t getMaxParameterSizeFromIGC() const;
+    MOCKABLE_VIRTUAL bool isAnyDirectSubmissionEnabledImpl(bool light) const;
     double getPercentOfGlobalMemoryAvailable() const;
     virtual void createBindlessHeapsHelper() {}
     bool createSubDevices();
@@ -316,7 +318,6 @@ class Device : public ReferenceTrackedObject<Device> {
     std::atomic_uint32_t regularCommandQueuesCreatedWithinDeviceCount{0};
     std::bitset<8> availableEnginesForCommandQueueusRoundRobin = 0;
     uint32_t queuesPerEngineCount = 1;
-    void initializeEngineRoundRobinControls();
     bool hasGenericSubDevices = false;
     bool rootCsrCreated = false;
     const uint32_t rootDeviceIndex;
@@ -333,13 +334,12 @@ class Device : public ReferenceTrackedObject<Device> {
     std::vector<RTDispatchGlobalsInfo *> rtDispatchGlobalsInfos;
 
     ISAPoolAllocator isaPoolAllocator;
+    TimestampPoolAllocator deviceTimestampPoolAllocator;
     std::unique_ptr<UsmMemAllocPoolsManager> deviceUsmMemAllocPoolsManager;
+    std::unique_ptr<UsmMemAllocPool> usmMemAllocPool;
 
-    uint64_t allocationsSavedForReuseSize = 0u;
-    uint64_t maxAllocationsSavedForReuseSize = 0u;
     std::atomic_uint32_t bufferPoolCount = 0u;
     uint32_t maxBufferPoolCount = 0u;
-    mutable std::mutex allocationsReuseMtx;
     uint32_t microsecondResolution = 1000u;
 
     struct {
@@ -356,5 +356,7 @@ inline EngineControl &Device::getDefaultEngine() {
 inline SelectorCopyEngine &Device::getSelectorCopyEngine() {
     return selectorCopyEngine;
 }
+
+static_assert(NEO::NonCopyableAndNonMovable<Device>);
 
 } // namespace NEO

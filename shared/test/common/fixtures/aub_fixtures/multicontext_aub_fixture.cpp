@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Intel Corporation
+ * Copyright (C) 2024-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,6 +11,7 @@
 #include "shared/source/helpers/api_specific_config.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/hw_info.h"
+#include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/source/release_helper/release_helper.h"
 #include "shared/test/common/helpers/ult_hw_config.h"
 #include "shared/test/common/helpers/variable_backup.h"
@@ -22,7 +23,7 @@ void MulticontextAubFixture::setUp(uint32_t numberOfTiles, EnabledCommandStreame
     this->numberOfEnabledTiles = numberOfTiles;
     const ::testing::TestInfo *const testInfo = ::testing::UnitTest::GetInstance()->current_test_info();
 
-    debugManager.flags.CsrDispatchMode.set(static_cast<int32_t>(DispatchMode::batchedDispatch));
+    debugManager.flags.CsrDispatchMode.set(static_cast<int32_t>(dispatchMode));
     debugManager.flags.CreateMultipleSubDevices.set(numberOfTiles);
 
     HardwareInfo localHwInfo = *defaultHwInfo;
@@ -68,6 +69,9 @@ void MulticontextAubFixture::setUp(uint32_t numberOfTiles, EnabledCommandStreame
     }
     isRenderEngineSupported = (renderEngine != aub_stream::NUM_ENGINES);
     auto firstEngine = isRenderEngineSupported ? renderEngine : aub_stream::ENGINE_CCS;
+    if (isFirstEngineBcs) {
+        firstEngine = aub_stream::ENGINE_BCS;
+    }
 
     std::stringstream strfilename;
     strfilename << ApiSpecificConfig::getAubPrefixForSpecificApi();
@@ -112,13 +116,17 @@ void MulticontextAubFixture::overridePlatformConfigForAllEnginesSupport(Hardware
 
     auto releaseHelper = ReleaseHelper::create(localHwInfo.ipVersion);
 
-    if (localHwInfo.platform.eRenderCoreFamily == IGFX_XE_HPG_CORE) {
+    if (localHwInfo.platform.eRenderCoreFamily == IGFX_XE_HPG_CORE ||
+        localHwInfo.platform.eRenderCoreFamily == IGFX_XE_HPC_CORE ||
+        localHwInfo.platform.eRenderCoreFamily == IGFX_XE2_HPG_CORE ||
+        localHwInfo.platform.eRenderCoreFamily == IGFX_XE3_CORE) {
+
+        setupCalled = true;
+        hardwareInfoSetup[localHwInfo.platform.eProductFamily](&localHwInfo, true, 0u, releaseHelper.get());
+
 #ifdef SUPPORT_DG2
         if (localHwInfo.platform.eProductFamily == IGFX_DG2) {
             ASSERT_TRUE(numberOfEnabledTiles == 1);
-            setupCalled = true;
-
-            Dg2HwConfig::setupHardwareInfo(&localHwInfo, true, releaseHelper.get());
 
             // Mock values
             localHwInfo.gtSystemInfo.SliceCount = 8;
@@ -130,15 +138,8 @@ void MulticontextAubFixture::overridePlatformConfigForAllEnginesSupport(Hardware
             localHwInfo.gtSystemInfo.CCSInfo.Instances.CCSEnableMask = 0b1111;
         }
 #endif
-    }
-
-    if (localHwInfo.platform.eRenderCoreFamily == IGFX_XE_HPC_CORE) {
 #ifdef SUPPORT_PVC
         if (localHwInfo.platform.eProductFamily == IGFX_PVC) {
-            setupCalled = true;
-
-            PvcHwConfig::setupHardwareInfo(&localHwInfo, true, releaseHelper.get());
-
             // Mock values
             localHwInfo.gtSystemInfo.SliceCount = 8;
             localHwInfo.gtSystemInfo.SubSliceCount = 64;
@@ -154,6 +155,19 @@ void MulticontextAubFixture::overridePlatformConfigForAllEnginesSupport(Hardware
     adjustPlatformOverride(localHwInfo, setupCalled);
 
     ASSERT_TRUE(setupCalled);
+}
+
+bool MulticontextAubFixture::isMemoryCompressed(CommandStreamReceiver *csr, void *gfxAddress) {
+    auto releaseHelper = csr->getReleaseHelper();
+    if (!releaseHelper || !releaseHelper->getFtrXe2Compression()) {
+        return false;
+    }
+    auto svmAllocs = svmAllocsManager->getSVMAlloc(gfxAddress);
+    if (!svmAllocs) {
+        return false;
+    }
+    auto alloc = svmAllocs->gpuAllocations.getGraphicsAllocation(rootDeviceIndex);
+    return alloc->isCompressionEnabled();
 }
 
 } // namespace NEO

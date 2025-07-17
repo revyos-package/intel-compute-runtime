@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,11 +7,10 @@
 
 #pragma once
 
+#include "level_zero/api/core/ze_mutable_cmdlist_api_entrypoints.h"
 #include "level_zero/core/source/cmdlist/cmdlist.h"
 #include "level_zero/core/source/context/context.h"
 #include <level_zero/ze_api.h>
-
-#include "mcl_cmdlist.h"
 
 namespace L0 {
 ze_result_t zeCommandListCreate(
@@ -96,6 +95,12 @@ ze_result_t zeCommandListIsImmediate(
     return L0::CommandList::fromHandle(hCommandList)->isImmediate(pIsImmediate);
 }
 
+ze_result_t zeCommandListCreateCloneExp(
+    ze_command_list_handle_t hCommandList,
+    ze_command_list_handle_t *phClonedCommandList) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+}
+
 ze_result_t zeCommandListImmediateAppendCommandListsExp(
     ze_command_list_handle_t hCommandListImmediate,
     uint32_t numCommandLists,
@@ -104,6 +109,44 @@ ze_result_t zeCommandListImmediateAppendCommandListsExp(
     uint32_t numWaitEvents,
     ze_event_handle_t *phWaitEvents) {
     return L0::CommandList::fromHandle(hCommandListImmediate)->appendCommandLists(numCommandLists, phCommandLists, hSignalEvent, numWaitEvents, phWaitEvents);
+}
+
+ze_result_t zeCommandListAppendSignalExternalSemaphoreExt(
+    ze_command_list_handle_t hCommandList,
+    uint32_t numSemaphores,
+    ze_external_semaphore_ext_handle_t *phSemaphores,
+    ze_external_semaphore_signal_params_ext_t *signalParams,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return L0::CommandList::fromHandle(hCommandList)->appendSignalExternalSemaphores(numSemaphores, phSemaphores, signalParams, hSignalEvent, numWaitEvents, phWaitEvents);
+}
+
+ze_result_t zeCommandListAppendWaitExternalSemaphoreExt(
+    ze_command_list_handle_t hCommandList,
+    uint32_t numSemaphores,
+    ze_external_semaphore_ext_handle_t *phSemaphores,
+    ze_external_semaphore_wait_params_ext_t *waitParams,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return L0::CommandList::fromHandle(hCommandList)->appendWaitExternalSemaphores(numSemaphores, phSemaphores, waitParams, hSignalEvent, numWaitEvents, phWaitEvents);
+}
+
+ze_result_t zeCommandListAppendLaunchKernelWithArguments(
+    ze_command_list_handle_t hCommandList,
+    ze_kernel_handle_t hKernel,
+    const ze_group_count_t groupCounts,
+    const ze_group_size_t groupSizes,
+    void **pArguments,
+    void *pNext,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    if (!hCommandList) {
+        return ZE_RESULT_ERROR_INVALID_NULL_HANDLE;
+    }
+    return L0::CommandList::fromHandle(hCommandList)->appendLaunchKernelWithArguments(hKernel, groupCounts, groupSizes, pArguments, pNext, hSignalEvent, numWaitEvents, phWaitEvents);
 }
 
 } // namespace L0
@@ -220,4 +263,39 @@ ZE_APIEXPORT ze_result_t ZE_APICALL zeCommandListImmediateAppendCommandListsExp(
         numWaitEvents,
         phWaitEvents);
 }
+
+ZE_APIEXPORT ze_result_t ZE_APICALL zeCommandListAppendSignalExternalSemaphoreExt(
+    ze_command_list_handle_t hCommandList,
+    uint32_t numSemaphores,
+    ze_external_semaphore_ext_handle_t *phSemaphores,
+    ze_external_semaphore_signal_params_ext_t *signalParams,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return L0::CommandList::fromHandle(hCommandList)->appendSignalExternalSemaphores(numSemaphores, phSemaphores, signalParams, hSignalEvent, numWaitEvents, phWaitEvents);
 }
+
+ZE_APIEXPORT ze_result_t ZE_APICALL zeCommandListAppendWaitExternalSemaphoreExt(
+    ze_command_list_handle_t hCommandList,
+    uint32_t numSemaphores,
+    ze_external_semaphore_ext_handle_t *phSemaphores,
+    ze_external_semaphore_wait_params_ext_t *waitParams,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return L0::CommandList::fromHandle(hCommandList)->appendWaitExternalSemaphores(numSemaphores, phSemaphores, waitParams, hSignalEvent, numWaitEvents, phWaitEvents);
+}
+
+ze_result_t ZE_APICALL zeCommandListAppendLaunchKernelWithArguments(
+    ze_command_list_handle_t hCommandList,
+    ze_kernel_handle_t hKernel,
+    const ze_group_count_t groupCounts,
+    const ze_group_size_t groupSizes,
+    void **pArguments,
+    void *pNext,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return L0::zeCommandListAppendLaunchKernelWithArguments(hCommandList, hKernel, groupCounts, groupSizes, pArguments, pNext, hSignalEvent, numWaitEvents, phWaitEvents);
+}
+} // extern "C"

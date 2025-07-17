@@ -1,11 +1,10 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#pragma once
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/direct_submission/relaxed_ordering_helper.h"
 #include "shared/source/helpers/gfx_core_helper.h"
@@ -144,12 +143,6 @@ void HardwareInterface<GfxFamily>::dispatchWalker(
                                    DebugPauseState::hasUserStartConfirmation, hwInfo);
     }
 
-    mainKernel->performKernelTuning(commandQueue.getGpgpuCommandStreamReceiver(),
-                                    multiDispatchInfo.begin()->getLocalWorkgroupSize(),
-                                    multiDispatchInfo.begin()->getActualWorkgroupSize(),
-                                    multiDispatchInfo.begin()->getOffset(),
-                                    walkerArgs.currentTimestampPacketNodes);
-
     walkerArgs.currentDispatchIndex = 0;
 
     for (auto &dispatchInfo : multiDispatchInfo) {
@@ -165,6 +158,16 @@ void HardwareInterface<GfxFamily>::dispatchWalker(
     if (PauseOnGpuProperties::gpuScratchRegWriteAllowed(debugManager.flags.GpuScratchRegWriteAfterWalker.get(), commandQueue.getGpgpuCommandStreamReceiver().peekTaskCount())) {
         uint32_t registerOffset = debugManager.flags.GpuScratchRegWriteRegisterOffset.get();
         uint32_t registerData = debugManager.flags.GpuScratchRegWriteRegisterData.get();
+
+        PipeControlArgs args;
+        args.dcFlushEnable = MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, commandQueue.getDevice().getRootDeviceEnvironment());
+        MemorySynchronizationCommands<GfxFamily>::addBarrierWithPostSyncOperation(
+            *commandStream,
+            PostSyncMode::noWrite,
+            0u,
+            0u,
+            commandQueue.getDevice().getRootDeviceEnvironment(),
+            args);
         LriHelper<GfxFamily>::program(commandStream, registerOffset, registerData, EncodeSetMMIO<GfxFamily>::isRemapApplicable(registerOffset), commandQueue.isBcs());
     }
 

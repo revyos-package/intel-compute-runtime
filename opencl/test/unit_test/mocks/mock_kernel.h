@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -108,12 +108,12 @@ class MockKernel : public Kernel {
     using Kernel::hasDirectStatelessAccessToHostMemory;
     using Kernel::hasDirectStatelessAccessToSharedBuffer;
     using Kernel::hasIndirectStatelessAccessToHostMemory;
+    using Kernel::implicitArgsVersion;
+    using Kernel::isBuiltIn;
     using Kernel::isUnifiedMemorySyncRequired;
     using Kernel::kernelArgHandlers;
     using Kernel::kernelArguments;
-    using Kernel::KernelConfig;
     using Kernel::kernelHasIndirectAccess;
-    using Kernel::kernelSubmissionMap;
     using Kernel::kernelSvmGfxAllocations;
     using Kernel::kernelUnifiedMemoryGfxAllocations;
     using Kernel::localBindingTableOffset;
@@ -129,11 +129,10 @@ class MockKernel : public Kernel {
     using Kernel::preferredWkgMultipleOffset;
     using Kernel::privateSurface;
     using Kernel::setInlineSamplers;
-    using Kernel::singleSubdevicePreferredInCurrentEnqueue;
-    using Kernel::unifiedMemoryControls;
-
     using Kernel::slmSizes;
     using Kernel::slmTotalSize;
+    using Kernel::unifiedMemoryControls;
+    using Kernel::usingImages;
 
     MockKernel(Program *programArg, const KernelInfo &kernelInfoArg, ClDevice &clDeviceArg)
         : Kernel(programArg, kernelInfoArg, clDeviceArg) {

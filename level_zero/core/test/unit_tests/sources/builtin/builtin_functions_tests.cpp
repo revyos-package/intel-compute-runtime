@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #include "shared/source/built_ins/built_ins.h"
 #include "shared/source/execution_environment/root_device_environment.h"
+#include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/test/common/fixtures/device_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/memory_management.h"
@@ -50,7 +51,7 @@ class BuiltinFunctionsLibFixture : public DeviceFixture {
 
     void setUp() {
         DeviceFixture::setUp();
-        mockDevicePtr = std::unique_ptr<MockDeviceForSpv<false, false>>(new MockDeviceForSpv<false, false>(device->getNEODevice(), device->getNEODevice()->getExecutionEnvironment(), driverHandle.get()));
+        mockDevicePtr = std::unique_ptr<MockDeviceForSpv<false, false>>(new MockDeviceForSpv<false, false>(device->getNEODevice(), driverHandle.get()));
         mockBuiltinFunctionsLibImpl.reset(new MockBuiltinFunctionsLibImpl(mockDevicePtr.get(), neoDevice->getBuiltIns()));
         mockBuiltinFunctionsLibImpl->ensureInitCompletion();
         EXPECT_TRUE(mockBuiltinFunctionsLibImpl->initAsyncComplete);
@@ -136,8 +137,17 @@ HWTEST_F(TestBuiltinFunctionsLibImpl, whenCreateBuiltinFunctionsLibThenImmediate
     EXPECT_FALSE(lib.initAsyncComplete);
     lib.ensureInitCompletion();
     EXPECT_TRUE(lib.initAsyncComplete);
+    const auto &compilerProductHelper = device->getCompilerProductHelper();
+    auto expectedInitFillBuiltin = Builtin::count;
+    if (compilerProductHelper.isHeaplessModeEnabled(this->device->getHwInfo())) {
+        expectedInitFillBuiltin = Builtin::fillBufferImmediateStatelessHeapless;
+    } else if (compilerProductHelper.isForceToStatelessRequired()) {
+        expectedInitFillBuiltin = Builtin::fillBufferImmediateStateless;
+    } else {
+        expectedInitFillBuiltin = Builtin::fillBufferImmediate;
+    }
     for (uint32_t builtId = 0; builtId < static_cast<uint32_t>(Builtin::count); builtId++) {
-        if (builtId == static_cast<uint32_t>(Builtin::fillBufferImmediate)) {
+        if (builtId == static_cast<uint32_t>(expectedInitFillBuiltin)) {
             EXPECT_NE(nullptr, lib.builtins[builtId]);
         } else {
             EXPECT_EQ(nullptr, lib.builtins[builtId]);
@@ -238,7 +248,7 @@ HWTEST_F(TestBuiltinFunctionsLibImpl, givenHeaplessImageBuiltinsWhenInitBuiltinK
 
     lib.initBuiltinImageKernel(L0::ImageBuiltin::copyImageRegionHeapless);
     EXPECT_EQ(NEO::EBuiltInOps::copyImageToImage3dHeapless, lib.builtinPassed);
-    EXPECT_STREQ("CopyImageToImage3d", lib.kernelNamePassed.c_str());
+    EXPECT_STREQ("CopyImage3dToImage3d", lib.kernelNamePassed.c_str());
 }
 
 HWTEST_F(TestBuiltinFunctionsLibImpl, givenCompilerInterfaceWhenCreateDeviceAndImageSupportedThenBuiltinsImageFunctionsAreLoaded) {

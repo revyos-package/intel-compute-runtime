@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,6 +14,7 @@
 namespace NEO {
 
 class CommandQueue;
+class CsrDependencies;
 class DispatchInfo;
 class Event;
 class IndirectHeap;
@@ -21,9 +22,14 @@ class Kernel;
 class LinearStream;
 class HwPerfCounter;
 class HwTimeStamps;
+class TagNodeBase;
+class TimestampPacketContainer;
 struct KernelOperation;
 struct MultiDispatchInfo;
 struct TimestampPacketDependencies;
+struct KernelInfo;
+struct EncodeWalkerArgs;
+struct HardwareInfo;
 
 template <class T>
 class TagNode;
@@ -47,13 +53,20 @@ struct HardwareInterfaceWalkerArgs {
     uint32_t interfaceDescriptorIndex = 0;
     bool isMainKernel = false;
     bool relaxedOrderingEnabled = false;
+    bool blocking = false;
+};
+
+struct HardwareInterfaceHelper {
+    static void setEncodeWalkerArgsExt(
+        EncodeWalkerArgs &encodeWalkerArgs,
+        const KernelInfo &kernelInfo);
 };
 
 template <typename GfxFamily>
 class HardwareInterface {
   public:
-    using INTERFACE_DESCRIPTOR_DATA = typename GfxFamily::INTERFACE_DESCRIPTOR_DATA;
     using DefaultWalkerType = typename GfxFamily::DefaultWalkerType;
+    using INTERFACE_DESCRIPTOR_DATA = typename DefaultWalkerType::InterfaceDescriptorType;
 
     template <typename WalkerType>
     static void dispatchWalker(

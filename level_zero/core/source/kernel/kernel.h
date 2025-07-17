@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,16 +14,12 @@
 #include "shared/source/unified_memory/unified_memory.h"
 
 #include "level_zero/core/source/helpers/api_handle_helper.h"
-#include <level_zero/ze_api.h>
-#include <level_zero/zet_api.h>
 
 #include <memory>
 #include <vector>
 
-struct _ze_kernel_handle_t {
-    const uint64_t objMagic = objMagicValue;
-    static const zel_handle_type_t handleType = ZEL_HANDLE_KERNEL;
-};
+struct _ze_kernel_handle_t : BaseHandleWithLoaderTranslation<ZEL_HANDLE_KERNEL> {};
+static_assert(IsCompliantWithDdiHandlesExt<_ze_kernel_handle_t>);
 
 namespace NEO {
 class Device;
@@ -110,7 +106,7 @@ struct KernelImmutableData {
     bool isaCopiedToAllocation = false;
 };
 
-struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI {
+struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI, NEO::NonCopyableAndNonMovableClass {
     template <typename Type>
     struct Allocator {
         static Kernel *allocate(Module *module) { return new Type(module); }
@@ -132,18 +128,20 @@ struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI {
     virtual void setGroupCount(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
 
     virtual ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *peerAllocData) = 0;
-    virtual ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal) = 0;
+    virtual ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal, bool isPacked) = 0;
     virtual ze_result_t setGroupSize(uint32_t groupSizeX, uint32_t groupSizeY,
                                      uint32_t groupSizeZ) = 0;
     virtual ze_result_t suggestGroupSize(uint32_t globalSizeX, uint32_t globalSizeY,
                                          uint32_t globalSizeZ, uint32_t *groupSizeX,
                                          uint32_t *groupSizeY, uint32_t *groupSizeZ) = 0;
     virtual ze_result_t getKernelName(size_t *pSize, char *pName) = 0;
+    virtual ze_result_t getArgumentSize(uint32_t argIndex, uint32_t *argSize) const = 0;
+    virtual ze_result_t getArgumentType(uint32_t argIndex, uint32_t *pSize, char *pString) const = 0;
 
     virtual uint32_t *getGlobalOffsets() = 0;
     virtual ze_result_t setGlobalOffsetExp(uint32_t offsetX, uint32_t offsetY, uint32_t offsetZ) = 0;
     virtual void patchGlobalOffset() = 0;
-    virtual void patchRegionParams(const CmdListKernelLaunchParams &launchParams) = 0;
+    virtual void patchRegionParams(const CmdListKernelLaunchParams &launchParams, const ze_group_count_t &threadGroupDimensions) = 0;
 
     virtual uint32_t suggestMaxCooperativeGroupCount(NEO::EngineGroupType engineGroupType, bool forceSingleTileQuery) = 0;
     virtual ze_result_t setCacheConfig(ze_cache_config_flags_t flags) = 0;
@@ -174,12 +172,6 @@ struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI {
 
     virtual ze_result_t setSchedulingHintExp(ze_scheduling_hint_exp_desc_t *pHint) = 0;
 
-    Kernel() = default;
-    Kernel(const Kernel &) = delete;
-    Kernel(Kernel &&) = delete;
-    Kernel &operator=(const Kernel &) = delete;
-    Kernel &operator=(Kernel &&) = delete;
-
     static Kernel *fromHandle(ze_kernel_handle_t handle) { return static_cast<Kernel *>(handle); }
 
     inline ze_kernel_handle_t toHandle() { return this; }
@@ -193,6 +185,8 @@ struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI {
         }
         return value;
     }
+
+    virtual uint32_t getIndirectSize() const = 0;
 
   protected:
     uint32_t maxWgCountPerTileCcs = 0;
@@ -214,5 +208,7 @@ struct KernelPopulateFactory {
         kernelFactory[productFamily] = KernelType::template Allocator<KernelType>::allocate;
     }
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<Kernel>);
 
 } // namespace L0

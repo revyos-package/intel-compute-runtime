@@ -38,10 +38,8 @@ TEST_F(ReleaseHelper3001Tests, whenGettingCapabilitiesThenCorrectPropertiesAreRe
         EXPECT_TRUE(releaseHelper->isGlobalBindlessAllocatorEnabled());
         EXPECT_EQ(10u, releaseHelper->getNumThreadsPerEu());
         EXPECT_TRUE(releaseHelper->isRayTracingSupported());
-        EXPECT_EQ(0u, releaseHelper->getStackSizePerRay());
-        EXPECT_EQ(revision == 0, releaseHelper->isDisablingMsaaRequired());
-        EXPECT_TRUE(releaseHelper->isNumRtStacksPerDssFixedValue());
-        EXPECT_EQ(revision != 0, releaseHelper->getFtrXe2Compression());
+        EXPECT_EQ(64u, releaseHelper->getAsyncStackSizePerRay());
+        EXPECT_TRUE(releaseHelper->getFtrXe2Compression());
     }
 }
 
@@ -49,8 +47,8 @@ TEST_F(ReleaseHelper3001Tests, whenGettingSupportedNumGrfsThenCorrectValuesAreRe
     whenGettingSupportedNumGrfsThenValuesUpTo256Returned();
 }
 
-TEST_F(ReleaseHelper3001Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnDebugKey) {
-    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnDebugKey();
+TEST_F(ReleaseHelper3001Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey) {
+    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey();
 }
 
 TEST_F(ReleaseHelper3001Tests, whenGettingThreadsPerEuConfigsThenCorrectValueIsReturnedBasedOnNumThreadPerEu) {
@@ -75,6 +73,18 @@ TEST_F(ReleaseHelper3001Tests, whenIsLocalOnlyAllowedCalledThenFalseReturned) {
 
 TEST_F(ReleaseHelper3001Tests, whenIsDummyBlitWaRequiredCalledThenFalseReturned) {
     whenIsDummyBlitWaRequiredCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper3001Tests, whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned) {
+    whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned();
+}
+
+TEST_F(ReleaseHelper3001Tests, whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned) {
+    whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper3001Tests, whenIsPostImageWriteFlushRequiredCalledThenFalseReturned) {
+    whenIsPostImageWriteFlushRequiredCalledThenFalseReturned();
 }
 
 TEST_F(ReleaseHelper3001Tests, whenGettingPreferredSlmSizeThenAllEntriesHaveCorrectValues) {

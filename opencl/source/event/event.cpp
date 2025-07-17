@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -21,6 +21,7 @@
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/utilities/perf_counter.h"
 #include "shared/source/utilities/range.h"
+#include "shared/source/utilities/staging_buffer_manager.h"
 #include "shared/source/utilities/tag_allocator.h"
 
 #include "opencl/extensions/public/cl_ext_private.h"
@@ -28,7 +29,6 @@
 #include "opencl/source/command_queue/command_queue.h"
 #include "opencl/source/context/context.h"
 #include "opencl/source/event/async_events_handler.h"
-#include "opencl/source/event/event_tracker.h"
 #include "opencl/source/helpers/get_info_status_mapper.h"
 #include "opencl/source/helpers/hardware_commands_helper.h"
 #include "opencl/source/helpers/task_information.h"
@@ -48,9 +48,6 @@ Event::Event(
       cmdQueue(cmdQueue),
       cmdType(cmdType),
       taskCount(taskCount) {
-    if (NEO::debugManager.flags.EventsTrackerEnable.get()) {
-        EventsTracker::getEventsTracker().notifyCreation(this);
-    }
     flushStamp.reset(new FlushStampTracker(true));
 
     DBG_LOG(EventsDebugEnable, "Event()", this);
@@ -90,10 +87,6 @@ Event::Event(
 }
 
 Event::~Event() {
-    if (NEO::debugManager.flags.EventsTrackerEnable.get()) {
-        EventsTracker::getEventsTracker().notifyDestruction(this);
-    }
-
     DBG_LOG(EventsDebugEnable, "~Event()", this);
     // no commands should be registred
     DEBUG_BREAK_IF(this->cmdToSubmit.load());
@@ -553,6 +546,9 @@ void Event::updateExecutionStatus() {
         auto *allocationStorage = cmdQueue->getGpgpuCommandStreamReceiver().getInternalAllocationStorage();
         allocationStorage->cleanAllocationList(this->taskCount, TEMPORARY_ALLOCATION);
         allocationStorage->cleanAllocationList(this->taskCount, DEFERRED_DEALLOCATION);
+        if (cmdQueue->getContext().getStagingBufferManager()) {
+            cmdQueue->getContext().getStagingBufferManager()->resetDetectedPtrs();
+        }
         return;
     }
 
@@ -644,9 +640,6 @@ void Event::transitionExecutionStatus(int32_t newExecutionStatus) const {
             break;
         }
     }
-    if (NEO::debugManager.flags.EventsTrackerEnable.get()) {
-        EventsTracker::getEventsTracker().notifyTransitionedExecutionStatus();
-    }
 }
 
 void Event::submitCommand(bool abortTasks) {
@@ -671,6 +664,14 @@ void Event::submitCommand(bool abortTasks) {
         }
 
         auto &complStamp = cmdToProcess->submit(taskLevel, abortTasks);
+        if (abortTasks) {
+            if (timestampPacketContainer.get() != nullptr) {
+                const auto &timestamps = timestampPacketContainer->peekNodes();
+                for (auto i = 0u; i < timestamps.size(); i++) {
+                    timestamps[i]->markAsAborted();
+                }
+            }
+        }
         if (profilingCpuPath && this->isProfilingEnabled()) {
             setEndTimeStamp();
         }
@@ -910,8 +911,8 @@ void Event::addCallback(Callback::ClbFuncT fn, cl_int type, void *data) {
     //     All enqueued callbacks shall be called before the event object is destroyed."
     // That's why each registered calback increments the internal refcount
     incRefInternal();
-    DBG_LOG(EventsDebugEnable, "event", this, "addCallback", "ECallbackTarget", (uint32_t)type);
-    callbacks[(uint32_t)target].pushFrontOne(*new Callback(this, fn, type, data));
+    DBG_LOG(EventsDebugEnable, "event", this, "addCallback", "ECallbackTarget", static_cast<uint32_t>(type));
+    callbacks[static_cast<uint32_t>(target)].pushFrontOne(*new Callback(this, fn, type, data));
 
     // Callback added after event reached its "completed" state
     if (updateStatusAndCheckCompletion()) {
@@ -942,7 +943,7 @@ void Event::executeCallbacks(int32_t executionStatusIn) {
     }
 
     // run through all needed callback targets and execute callbacks
-    for (uint32_t i = 0; i <= (uint32_t)target; ++i) {
+    for (uint32_t i = 0; i <= static_cast<uint32_t>(target); ++i) {
         auto cb = callbacks[i].detachNodes();
         auto curr = cb;
         while (curr != nullptr) {
@@ -950,7 +951,7 @@ void Event::executeCallbacks(int32_t executionStatusIn) {
             if (terminated) {
                 curr->overrideCallbackExecutionStatusTarget(execStatus);
             }
-            DBG_LOG(EventsDebugEnable, "event", this, "executing callback", "ECallbackTarget", (uint32_t)target);
+            DBG_LOG(EventsDebugEnable, "event", this, "executing callback", "ECallbackTarget", static_cast<uint32_t>(target));
             curr->execute();
             decRefInternal();
             delete curr;

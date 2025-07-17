@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -29,13 +29,6 @@ class ProductHelper;
 using SteadyClock = std::chrono::steady_clock;
 using HighResolutionClock = std::chrono::high_resolution_clock;
 
-struct TimeoutParams {
-    std::chrono::microseconds maxTimeout;
-    std::chrono::microseconds timeout;
-    int32_t timeoutDivisor;
-    bool directSubmissionEnabled;
-};
-
 struct WaitForPagingFenceRequest {
     CommandStreamReceiver *csr;
     uint64_t pagingFenceValue;
@@ -54,7 +47,6 @@ class DirectSubmissionController {
     DirectSubmissionController();
     virtual ~DirectSubmissionController();
 
-    void setTimeoutParamsForPlatform(const ProductHelper &helper);
     void registerDirectSubmission(CommandStreamReceiver *csr);
     void unregisterDirectSubmission(CommandStreamReceiver *csr);
 
@@ -69,7 +61,7 @@ class DirectSubmissionController {
 
   protected:
     struct DirectSubmissionState {
-        DirectSubmissionState(DirectSubmissionState &&other) {
+        DirectSubmissionState(DirectSubmissionState &&other) noexcept {
             isStopped = other.isStopped.load();
             taskCount = other.taskCount.load();
         }
@@ -97,8 +89,8 @@ class DirectSubmissionController {
     bool isDirectSubmissionIdle(CommandStreamReceiver *csr, std::unique_lock<std::recursive_mutex> &csrLock);
     MOCKABLE_VIRTUAL bool sleep(std::unique_lock<std::mutex> &lock);
     MOCKABLE_VIRTUAL SteadyClock::time_point getCpuTimestamp();
+    MOCKABLE_VIRTUAL void overrideDirectSubmissionTimeouts(const ProductHelper &productHelper);
 
-    void adjustTimeout(CommandStreamReceiver *csr);
     void recalculateTimeout();
     void applyTimeoutForAcLineStatusAndThrottle(bool acLineConnected);
     void updateLastSubmittedThrottle(QueueThrottle throttle);
@@ -124,9 +116,7 @@ class DirectSubmissionController {
     std::chrono::microseconds timeout{defaultTimeout};
     int32_t timeoutDivisor = 1;
     int32_t bcsTimeoutDivisor = 1;
-    std::unordered_map<size_t, TimeoutParams> timeoutParamsMap;
     QueueThrottle lowestThrottleSubmitted = QueueThrottle::HIGH;
-    bool adjustTimeoutOnThrottleAndAcLineStatus = false;
     bool isCsrIdleDetectionEnabled = false;
 
     std::condition_variable condVar;

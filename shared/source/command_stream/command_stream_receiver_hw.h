@@ -7,11 +7,14 @@
 
 #pragma once
 #include "shared/source/command_stream/command_stream_receiver.h"
+#include "shared/source/command_stream/csr_definitions.h"
 #include "shared/source/command_stream/wait_status.h"
 #include "shared/source/direct_submission/direct_submission_hw.h"
 #include "shared/source/direct_submission/dispatchers/blitter_dispatcher.h"
 #include "shared/source/direct_submission/dispatchers/render_dispatcher.h"
 #include "shared/source/helpers/dirty_state_helpers.h"
+#include "shared/source/helpers/pipeline_select_args.h"
+
 namespace NEO {
 class TagNodeBase;
 template <typename GfxFamily>
@@ -39,6 +42,7 @@ class CommandStreamReceiverHw : public CommandStreamReceiver {
         bool stateBaseAddressFullConfigurationNeeded = false;
         bool stateBaseAddressDirty = false;
         bool contextOneTimeInit = false;
+        bool stateCacheFlushRequired = false;
     };
 
   public:
@@ -58,10 +62,6 @@ class CommandStreamReceiverHw : public CommandStreamReceiver {
     CompletionStamp flushTask(LinearStream &commandStream, size_t commandStreamStart,
                               const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
                               TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override;
-
-    CompletionStamp flushTaskStateless(LinearStream &commandStream, size_t commandStreamStart,
-                                       const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
-                                       TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override;
 
     void addPipeControlFlushTaskIfNeeded(LinearStream &commandStreamCSR, TaskCountType taskLevel);
 
@@ -158,7 +158,7 @@ class CommandStreamReceiverHw : public CommandStreamReceiver {
     bool directSubmissionRelaxedOrderingEnabled() const override;
     uint32_t getDirectSubmissionRelaxedOrderingQueueDepth() const override;
 
-    void stopDirectSubmission(bool blocking) override;
+    void stopDirectSubmission(bool blocking, bool needsLock) override;
 
     QueueThrottle getLastDirectSubmissionThrottle() override;
 
@@ -205,6 +205,14 @@ class CommandStreamReceiverHw : public CommandStreamReceiver {
     void unblockPagingFenceSemaphore(uint64_t pagingFenceValue) override;
 
   protected:
+    CompletionStamp flushTaskHeapful(LinearStream &commandStream, size_t commandStreamStart,
+                                     const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
+                                     TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override;
+
+    CompletionStamp flushTaskHeapless(LinearStream &commandStream, size_t commandStreamStart,
+                                      const IndirectHeap *dsh, const IndirectHeap *ioh, const IndirectHeap *ssh,
+                                      TaskCountType taskLevel, DispatchFlags &dispatchFlags, Device &device) override;
+
     void programPreemption(LinearStream &csr, DispatchFlags &dispatchFlags);
     void programL3(LinearStream &csr, uint32_t &newL3Config, bool isBcs);
     void programPreamble(LinearStream &csr, Device &device, uint32_t &newL3Config);
@@ -223,6 +231,8 @@ class CommandStreamReceiverHw : public CommandStreamReceiver {
 
     void programEnginePrologue(LinearStream &csr);
     size_t getCmdSizeForPrologue() const;
+    void programExceptions(LinearStream &csr, Device &device);
+    size_t getCmdSizeForExceptions() const;
     size_t getCmdSizeForHeaplessPrologue(Device &device) const;
     void handleAllocationsResidencyForHeaplessProlog(LinearStream &linearStream, Device &device);
 

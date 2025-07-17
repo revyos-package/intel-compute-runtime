@@ -30,6 +30,22 @@ static std::map<unsigned long, std::map<std::string, uint32_t>> guidToKeyOffsetM
       {"XTAL_COUNT", 128},
       {"VCCGT_ENERGY_ACCUMULATOR", 407},
       {"VCCDDR_ENERGY_ACCUMULATOR", 410}}},
+    {0x1e2f8201, // BMG PUNIT rev 2
+     {{"XTAL_CLK_FREQUENCY", 1},
+      {"ACCUM_PACKAGE_ENERGY", 12},
+      {"ACCUM_PSYS_ENERGY", 13},
+      {"VRAM_BANDWIDTH", 14},
+      {"XTAL_COUNT", 128},
+      {"VCCGT_ENERGY_ACCUMULATOR", 407},
+      {"VCCDDR_ENERGY_ACCUMULATOR", 410}}},
+    {0x1e2f8202, // BMG PUNIT rev 3
+     {{"XTAL_CLK_FREQUENCY", 1},
+      {"ACCUM_PACKAGE_ENERGY", 12},
+      {"ACCUM_PSYS_ENERGY", 13},
+      {"VRAM_BANDWIDTH", 14},
+      {"XTAL_COUNT", 128},
+      {"VCCGT_ENERGY_ACCUMULATOR", 407},
+      {"VCCDDR_ENERGY_ACCUMULATOR", 410}}},
     {0x5e2f8210, // BMG OOBMSM rev 15
      {{"PACKAGE_ENERGY_STATUS_SKU", 34},
       {"PLATFORM_ENERGY_STATUS", 35},
@@ -43,8 +59,8 @@ static std::map<unsigned long, std::map<std::string, uint32_t>> guidToKeyOffsetM
       {"rx_pkt_count_msb", 73},
       {"tx_pkt_count_lsb", 76},
       {"tx_pkt_count_msb", 75},
-      {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 92},
-      {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 93},
+      {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 93},
+      {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 92},
       {"GDDR0_CH0_GT_32B_RD_REQ_UPPER", 94},
       {"GDDR0_CH0_GT_32B_RD_REQ_LOWER", 95},
       {"GDDR1_CH0_GT_32B_RD_REQ_UPPER", 134},
@@ -541,7 +557,23 @@ static std::map<unsigned long, std::map<std::string, uint32_t>> guidToKeyOffsetM
       {"GDDR4_CH1_GT_64B_WR_REQ_UPPER", 281},
       {"GDDR4_CH1_GT_64B_WR_REQ_LOWER", 280},
       {"GDDR5_CH1_GT_64B_WR_REQ_UPPER", 321},
-      {"GDDR5_CH1_GT_64B_WR_REQ_LOWER", 320}}}};
+      {"GDDR5_CH1_GT_64B_WR_REQ_LOWER", 320}}},
+    {0x1e2f8301, // BMG G31 PUNIT rev 2
+     {{"XTAL_CLK_FREQUENCY", 1},
+      {"ACCUM_PACKAGE_ENERGY", 12},
+      {"ACCUM_PSYS_ENERGY", 13},
+      {"VRAM_BANDWIDTH", 14},
+      {"XTAL_COUNT", 128},
+      {"VCCGT_ENERGY_ACCUMULATOR", 407},
+      {"VCCDDR_ENERGY_ACCUMULATOR", 410}}},
+    {0x1e2f8302, // BMG G31 PUNIT rev 3
+     {{"XTAL_CLK_FREQUENCY", 1},
+      {"ACCUM_PACKAGE_ENERGY", 12},
+      {"ACCUM_PSYS_ENERGY", 13},
+      {"VRAM_BANDWIDTH", 14},
+      {"XTAL_COUNT", 128},
+      {"VCCGT_ENERGY_ACCUMULATOR", 407},
+      {"VCCDDR_ENERGY_ACCUMULATOR", 410}}}};
 
 ze_result_t getGpuMaxTemperature(PlatformMonitoringTech *pPmt, double *pTemperature) {
     uint32_t gpuMaxTemperature = 0;
@@ -843,21 +875,8 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryBandWidth(zes_mem_bandwi
     // PMT reports maxBandwidth in units of 100 MBps (decimal). Need to convert it into Bytes/sec, unit to be returned by sysman.
     pBandwidth->maxBandwidth = static_cast<uint64_t>(maxBandwidth) * megaBytesToBytes * 100;
 
-    // timestamp calculation
-    uint32_t timeStampL = 0;
-    uint32_t timeStampH = 0;
-
-    status = pPmt->readValue("GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", timeStampH);
-    if (status != ZE_RESULT_SUCCESS) {
-        return status;
-    }
-    status = pPmt->readValue("GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", timeStampL);
-    if (status != ZE_RESULT_SUCCESS) {
-        return status;
-    }
-
-    // timestamp from PMT is in milli seconds
-    pBandwidth->timestamp = packInto64Bit(timeStampH, timeStampL) * milliSecsToMicroSecs;
+    // Get timestamp
+    pBandwidth->timestamp = SysmanDevice::getSysmanTimestamp();
 
     return status;
 }
@@ -893,7 +912,6 @@ template <>
 ze_result_t SysmanProductHelperHw<gfxProduct>::getPowerEnergyCounter(zes_power_energy_counter_t *pEnergy, zes_power_domain_t powerDomain, WddmSysmanImp *pWddmSysmanImp) {
     ze_result_t status = ZE_RESULT_SUCCESS;
     uint32_t energyCounter = 0;
-    std::string key;
 
     PlatformMonitoringTech *pPmt = pWddmSysmanImp->getSysmanPmt();
     if (pPmt == nullptr) {
@@ -902,24 +920,30 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getPowerEnergyCounter(zes_power_e
 
     switch (powerDomain) {
     case ZES_POWER_DOMAIN_PACKAGE:
-        key = "PACKAGE_ENERGY_STATUS_SKU";
+        status = pPmt->readValue("ACCUM_PACKAGE_ENERGY", energyCounter);
+
+        if (status != ZE_RESULT_SUCCESS) {
+            status = pPmt->readValue("PACKAGE_ENERGY_STATUS_SKU", energyCounter);
+        }
         break;
     case ZES_POWER_DOMAIN_CARD:
-        key = "PLATFORM_ENERGY_STATUS";
+        status = pPmt->readValue("ACCUM_PSYS_ENERGY", energyCounter);
+
+        if (status != ZE_RESULT_SUCCESS) {
+            status = pPmt->readValue("PLATFORM_ENERGY_STATUS", energyCounter);
+        }
         break;
     case ZES_POWER_DOMAIN_MEMORY:
-        key = "VCCDDR_ENERGY_ACCUMULATOR";
+        status = pPmt->readValue("VCCDDR_ENERGY_ACCUMULATOR", energyCounter);
         break;
     case ZES_POWER_DOMAIN_GPU:
-        key = "VCCGT_ENERGY_ACCUMULATOR";
+        status = pPmt->readValue("VCCGT_ENERGY_ACCUMULATOR", energyCounter);
         break;
     default:
         DEBUG_BREAK_IF(true);
         return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
         break;
     }
-
-    status = pPmt->readValue(key, energyCounter);
 
     if (status != ZE_RESULT_SUCCESS) {
         return status;
@@ -958,6 +982,11 @@ std::map<unsigned long, std::map<std::string, uint32_t>> *SysmanProductHelperHw<
 
 template <>
 bool SysmanProductHelperHw<gfxProduct>::isZesInitSupported() {
+    return true;
+}
+
+template <>
+bool SysmanProductHelperHw<gfxProduct>::isLateBindingSupported() {
     return true;
 }
 

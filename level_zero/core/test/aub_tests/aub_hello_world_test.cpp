@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #include "shared/test/common/test_macros/test.h"
 
+#include "level_zero/core/source/cmdlist/cmdlist_memory_copy_params.h"
 #include "level_zero/core/source/cmdqueue/cmdqueue.h"
 #include "level_zero/core/source/context/context_imp.h"
 #include "level_zero/core/source/driver/driver_handle_imp.h"
@@ -37,7 +38,7 @@ TEST_F(AUBHelloWorldL0, whenAppendMemoryCopyIsCalledThenMemoryIsProperlyCopied) 
     commandList->close();
     auto pHCmdList = std::make_unique<ze_command_list_handle_t>(commandList->toHandle());
 
-    pCmdq->executeCommandLists(1, pHCmdList.get(), nullptr, false, nullptr);
+    pCmdq->executeCommandLists(1, pHCmdList.get(), nullptr, false, nullptr, nullptr);
     pCmdq->synchronize(std::numeric_limits<uint32_t>::max());
 
     EXPECT_TRUE(csr->expectMemory(dstMemory, srcMemory, size, AubMemDump::CmdServicesMemTraceMemoryCompare::CompareOperationValues::CompareEqual));

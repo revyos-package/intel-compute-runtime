@@ -1,10 +1,11 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
+#include "shared/source/helpers/file_io.h"
 #include "shared/source/helpers/local_work_size.h"
 #include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
@@ -14,8 +15,6 @@
 #include "opencl/source/event/user_event.h"
 #include "opencl/source/helpers/dispatch_info.h"
 #include "opencl/test/unit_test/context/driver_diagnostics_tests.h"
-#include "opencl/test/unit_test/fixtures/buffer_fixture.h"
-#include "opencl/test/unit_test/test_macros/test_checks_ocl.h"
 
 using namespace NEO;
 
@@ -96,6 +95,26 @@ TEST_P(PerformanceHintEnqueueReadBufferTest, GivenHostPtrAndSizeAlignmentsWhenEn
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_READ_BUFFER_RECT_REQUIRES_COPY_DATA], static_cast<cl_mem>(buffer), addressForReadBufferRect);
     EXPECT_TRUE(containsHint(expectedHint, userData));
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_READ_BUFFER_RECT_DOESNT_MEET_ALIGNMENT_RESTRICTIONS], addressForReadBufferRect, sizeForReadBufferRect, MemoryConstants::pageSize, MemoryConstants::pageSize);
+    EXPECT_EQ(!(alignedSize && alignedAddress), containsHint(expectedHint, userData));
+    alignedFree(ptr);
+}
+
+TEST_P(PerformanceHintEnqueueReadBufferTest, GivenHostPtrAndSizeAlignmentsWhenEnqueueStagingReadBufferIsCalledThenContextProvidesHintsAboutAlignments) {
+    REQUIRE_SVM_OR_SKIP(pPlatform->getClDevice(0));
+    void *ptr = alignedMalloc(2 * MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize);
+    uintptr_t addressForReadBuffer = (uintptr_t)ptr;
+    size_t sizeForReadBuffer = MemoryConstants::cacheLineSize;
+    if (!alignedAddress) {
+        addressForReadBuffer++;
+    }
+    if (!alignedSize) {
+        sizeForReadBuffer--;
+    }
+    pCmdQ->enqueueStagingBufferTransfer(CL_COMMAND_READ_BUFFER, buffer, CL_FALSE,
+                                        0, sizeForReadBuffer, (void *)addressForReadBuffer, nullptr);
+    snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_READ_BUFFER_REQUIRES_COPY_DATA], static_cast<cl_mem>(buffer), addressForReadBuffer);
+    EXPECT_TRUE(containsHint(expectedHint, userData));
+    snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_READ_BUFFER_DOESNT_MEET_ALIGNMENT_RESTRICTIONS], addressForReadBuffer, sizeForReadBuffer, MemoryConstants::pageSize, MemoryConstants::pageSize);
     EXPECT_EQ(!(alignedSize && alignedAddress), containsHint(expectedHint, userData));
     alignedFree(ptr);
 }
@@ -382,6 +401,41 @@ TEST_P(PerformanceHintEnqueueReadImageTest, GivenHostPtrAndSizeAlignmentsWhenEnq
     alignedFree(ptr);
 }
 
+TEST_P(PerformanceHintEnqueueReadImageTest, GivenHostPtrAndSizeAlignmentsWhenEnqueueStagingReadImageIsCallingThenContextProvidesHintsAboutAlignments) {
+    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
+    REQUIRE_SVM_OR_SKIP(pPlatform->getClDevice(0));
+
+    size_t hostOrigin[] = {0, 0, 0};
+    size_t sizeForReadImageInPixels = MemoryConstants::cacheLineSize;
+    size_t sizeForReadImage = sizeForReadImageInPixels * image->getSurfaceFormatInfo().surfaceFormat.imageElementSizeInBytes;
+    void *ptr = alignedMalloc(sizeForReadImage + MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize);
+    uintptr_t addressForReadImage = (uintptr_t)ptr;
+
+    bool hintWithMisalignment = !(alignedAddress && alignedSize);
+    if (!alignedAddress) {
+        addressForReadImage++;
+    }
+    if (!alignedSize) {
+        sizeForReadImageInPixels--;
+        sizeForReadImage -= image->getSurfaceFormatInfo().surfaceFormat.imageElementSizeInBytes;
+    }
+    size_t region[] = {sizeForReadImageInPixels, 1, 1};
+    pCmdQ->enqueueStagingImageTransfer(CL_COMMAND_READ_IMAGE,
+                                       image,
+                                       CL_FALSE,
+                                       hostOrigin,
+                                       region,
+                                       0,
+                                       0,
+                                       (void *)addressForReadImage,
+                                       nullptr);
+    ASSERT_EQ(alignedSize, isAligned<MemoryConstants::cacheLineSize>(sizeForReadImage));
+
+    snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_READ_IMAGE_DOESNT_MEET_ALIGNMENT_RESTRICTIONS], addressForReadImage, sizeForReadImage, MemoryConstants::pageSize, MemoryConstants::pageSize);
+    EXPECT_EQ(hintWithMisalignment, containsHint(expectedHint, userData));
+    alignedFree(ptr);
+}
+
 TEST_F(PerformanceHintEnqueueImageTest, GivenNonBlockingWriteWhenEnqueueWriteImageIsCallingThenContextProvidesProperHint) {
 
     size_t hostOrigin[] = {0, 0, 0};
@@ -469,7 +523,7 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagWhenEnqueueMapBufferIsCal
     EXPECT_EQ(zeroCopyBuffer, containsHint(expectedHint, userData));
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_MAP_BUFFER_REQUIRES_COPY_DATA], static_cast<cl_mem>(buffer));
-    EXPECT_EQ(!zeroCopyBuffer && !pCmdQ->getDevice().getProductHelper().isDcFlushMitigated(), containsHint(expectedHint, userData));
+    EXPECT_EQ(!zeroCopyBuffer, containsHint(expectedHint, userData));
 
     alignedFree(address);
     delete buffer;
@@ -499,7 +553,7 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagAndBlockingEventWhenEnque
     EXPECT_EQ(zeroCopyBuffer, containsHint(expectedHint, userData));
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_MAP_BUFFER_REQUIRES_COPY_DATA], static_cast<cl_mem>(buffer.get()));
-    EXPECT_EQ(!zeroCopyBuffer && !pCmdQ->getDevice().getProductHelper().isDcFlushMitigated(), containsHint(expectedHint, userData));
+    EXPECT_EQ(!zeroCopyBuffer, containsHint(expectedHint, userData));
 
     alignedFree(address);
 }
@@ -515,9 +569,9 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagWhenEnqueueMapImageIsCall
     size_t region[] = {1, 1, 1};
 
     if (isZeroCopyImage) {
-        image = ImageHelper<ImageReadOnly<Image1dDefaults>>::create(context);
+        image = ImageHelperUlt<ImageReadOnly<Image1dDefaults>>::create(context);
     } else {
-        image = ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context);
+        image = ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context);
     }
     EXPECT_EQ(isZeroCopyImage, image->isMemObjZeroCopy());
     pCmdQ->enqueueMapImage(
@@ -544,14 +598,14 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagWhenEnqueueMapImageIsCall
 
 TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagAndBlockingEventWhenEnqueueMapImageIsCallingThenContextProvidesProperHint) {
 
-    auto image = std::unique_ptr<Image>(ImageHelper<ImageReadOnly<Image1dDefaults>>::create(context));
+    auto image = std::unique_ptr<Image>(ImageHelperUlt<ImageReadOnly<Image1dDefaults>>::create(context));
     bool isZeroCopyImage = GetParam();
 
     size_t origin[] = {0, 0, 0};
     size_t region[] = {1, 1, 1};
 
     if (!isZeroCopyImage) {
-        image.reset(ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context));
+        image.reset(ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context));
     }
     EXPECT_EQ(isZeroCopyImage, image->isMemObjZeroCopy());
 
@@ -597,7 +651,7 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagWhenEnqueueUnmapIsCalling
     pCmdQ->enqueueUnmapMemObject(buffer, mapPtr, 0, nullptr, nullptr);
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_UNMAP_MEM_OBJ_REQUIRES_COPY_DATA], mapPtr, static_cast<cl_mem>(buffer));
-    EXPECT_EQ(!zeroCopyBuffer && !pCmdQ->getDevice().getProductHelper().isDcFlushMitigated(), containsHint(expectedHint, userData));
+    EXPECT_EQ(!zeroCopyBuffer, containsHint(expectedHint, userData));
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_UNMAP_MEM_OBJ_DOESNT_REQUIRE_COPY_DATA], mapPtr);
     EXPECT_EQ(zeroCopyBuffer, containsHint(expectedHint, userData));
@@ -629,7 +683,7 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyAndBlockedEventFlagWhenEnqueu
     EXPECT_FALSE(pCmdQ->isQueueBlocked());
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_UNMAP_MEM_OBJ_REQUIRES_COPY_DATA], mapPtr, static_cast<cl_mem>(buffer.get()));
-    EXPECT_EQ(!zeroCopyBuffer && !pCmdQ->getDevice().getProductHelper().isDcFlushMitigated(), containsHint(expectedHint, userData));
+    EXPECT_EQ(!zeroCopyBuffer, containsHint(expectedHint, userData));
 
     snprintf(expectedHint, DriverDiagnostics::maxHintStringSize, DriverDiagnostics::hintFormat[CL_ENQUEUE_UNMAP_MEM_OBJ_DOESNT_REQUIRE_COPY_DATA], mapPtr);
     EXPECT_EQ(zeroCopyBuffer, containsHint(expectedHint, userData));
@@ -648,9 +702,9 @@ TEST_P(PerformanceHintEnqueueMapTest, GivenZeroCopyFlagWhenEnqueueUnmapIsCalling
     size_t region[] = {1, 1, 1};
 
     if (isZeroCopyImage) {
-        image = ImageHelper<ImageReadOnly<Image1dDefaults>>::create(context);
+        image = ImageHelperUlt<ImageReadOnly<Image1dDefaults>>::create(context);
     } else {
-        image = ImageHelper<ImageUseHostPtr<Image1dDefaults>>::create(context);
+        image = ImageHelperUlt<ImageUseHostPtr<Image1dDefaults>>::create(context);
     }
     EXPECT_EQ(isZeroCopyImage, image->isMemObjZeroCopy());
 
@@ -798,6 +852,7 @@ TEST_P(PerformanceHintEnqueueKernelBadSizeTest, GivenBadLocalWorkGroupSizeWhenEn
 }
 
 HWTEST_F(PerformanceHintEnqueueKernelPrintfTest, GivenKernelWithPrintfWhenEnqueueKernelIsCalledWithWorkDim3ThenContextProvidesProperHint) {
+    USE_REAL_FILE_SYSTEM();
     size_t preferredWorkGroupSize[3];
     auto maxWorkGroupSize = static_cast<uint32_t>(pPlatform->getClDevice(0)->getSharedDeviceInfo().maxWorkGroupSize);
     if (debugManager.flags.EnableComputeWorkSizeND.get()) {
