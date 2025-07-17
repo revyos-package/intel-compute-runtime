@@ -12,18 +12,15 @@
 #include "shared/source/utilities/tag_allocator.h"
 
 #include "level_zero/core/source/helpers/api_handle_helper.h"
-#include <level_zero/ze_api.h>
-#include <level_zero/zet_api.h>
 
 #include <memory>
 #include <mutex>
 
 static_assert(NEO::ProductHelper::uuidSize == ZE_MAX_DEVICE_UUID_SIZE);
 
-struct _ze_device_handle_t {
-    const uint64_t objMagic = objMagicValue;
-    static const zel_handle_type_t handleType = ZEL_HANDLE_DEVICE;
-};
+struct _ze_device_handle_t : BaseHandleWithLoaderTranslation<ZEL_HANDLE_DEVICE> {};
+static_assert(IsCompliantWithDdiHandlesExt<_ze_device_handle_t>);
+
 namespace NEO {
 class CommandStreamReceiver;
 class DebuggerL0;
@@ -79,6 +76,7 @@ struct Device : _ze_device_handle_t {
     virtual ze_result_t getMemoryProperties(uint32_t *pCount, ze_device_memory_properties_t *pMemProperties) = 0;
     virtual ze_result_t getMemoryAccessProperties(ze_device_memory_access_properties_t *pMemAccessProperties) = 0;
     virtual ze_result_t getProperties(ze_device_properties_t *pDeviceProperties) = 0;
+    virtual ze_result_t getVectorWidthPropertiesExt(uint32_t *pCount, ze_device_vector_width_properties_ext_t *pVectorWidthProperties) = 0;
     virtual ze_result_t getSubDevices(uint32_t *pCount, ze_device_handle_t *phSubdevices) = 0;
     virtual ze_result_t getCacheProperties(uint32_t *pCount, ze_device_cache_properties_t *pCacheProperties) = 0;
     virtual ze_result_t getStatus() = 0;
@@ -94,10 +92,10 @@ struct Device : _ze_device_handle_t {
     virtual ze_result_t getDebugProperties(zet_device_debug_properties_t *pDebugProperties) = 0;
 
     virtual ze_result_t systemBarrier() = 0;
+    virtual ze_result_t synchronize() = 0;
 
     virtual ~Device() = default;
 
-    virtual void *getExecEnvironment() = 0;
     virtual BuiltinFunctionsLib *getBuiltinFunctionsLib() = 0;
     virtual uint32_t getMOCS(bool l3enabled, bool l1enabled) = 0;
     virtual uint32_t getMaxNumHwThreads() const = 0;
@@ -145,7 +143,7 @@ struct Device : _ze_device_handle_t {
     virtual NEO::GraphicsAllocation *allocateMemoryFromHostPtr(const void *buffer, size_t size, bool hostCopyAllowed) = 0;
     virtual void setSysmanHandle(SysmanDevice *pSysmanDevice) = 0;
     virtual SysmanDevice *getSysmanHandle() = 0;
-    virtual ze_result_t getCsrForOrdinalAndIndex(NEO::CommandStreamReceiver **csr, uint32_t ordinal, uint32_t index, ze_command_queue_priority_t priority, bool allocateInterrupt) = 0;
+    virtual ze_result_t getCsrForOrdinalAndIndex(NEO::CommandStreamReceiver **csr, uint32_t ordinal, uint32_t index, ze_command_queue_priority_t priority, int priorityLevel, bool allocateInterrupt) = 0;
     virtual ze_result_t getCsrForLowPriority(NEO::CommandStreamReceiver **csr, bool copyOnly) = 0;
     virtual NEO::GraphicsAllocation *obtainReusableAllocation(size_t requiredSize, NEO::AllocationType type) = 0;
     virtual void storeReusableAllocation(NEO::GraphicsAllocation &alloc) = 0;
@@ -155,20 +153,29 @@ struct Device : _ze_device_handle_t {
     NEO::TagAllocatorBase *getDeviceInOrderCounterAllocator();
     NEO::TagAllocatorBase *getHostInOrderCounterAllocator();
     NEO::TagAllocatorBase *getInOrderTimestampAllocator();
+    NEO::TagAllocatorBase *getFillPatternAllocator();
     NEO::GraphicsAllocation *getSyncDispatchTokenAllocation() const { return syncDispatchTokenAllocation; }
     uint32_t getNextSyncDispatchQueueId();
     void ensureSyncDispatchTokenAllocation();
+    void setIdentifier(uint32_t id) { identifier = id; }
+    uint32_t getIdentifier() const { return identifier; }
+    ze_result_t getPriorityLevels(int *lowestPriority,
+                                  int *highestPriority);
 
   protected:
     NEO::Device *neoDevice = nullptr;
     std::unique_ptr<NEO::TagAllocatorBase> deviceInOrderCounterAllocator;
     std::unique_ptr<NEO::TagAllocatorBase> hostInOrderCounterAllocator;
     std::unique_ptr<NEO::TagAllocatorBase> inOrderTimestampAllocator;
+    std::unique_ptr<NEO::TagAllocatorBase> fillPatternAllocator;
     NEO::GraphicsAllocation *syncDispatchTokenAllocation = nullptr;
     std::mutex inOrderAllocatorMutex;
     std::mutex syncDispatchTokenMutex;
     std::atomic<uint32_t> syncDispatchQueueIdAllocator = 0;
+    uint32_t identifier = 0;
     bool implicitScalingCapable = false;
+    int queuePriorityHigh = 0;
+    int queuePriorityLow = 1;
 };
 
 } // namespace L0

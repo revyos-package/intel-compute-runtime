@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -22,7 +22,6 @@
 #include "shared/source/os_interface/os_context.h"
 
 #include <cstdint>
-
 namespace NEO {
 
 BuiltIns::BuiltIns() {
@@ -49,7 +48,7 @@ const SipKernel &BuiltIns::getSipKernel(SipKernelType type, Device &device) {
 
         if (NEO::debugManager.flags.DumpSipHeaderFile.get() != "unk") {
             std::string name = NEO::debugManager.flags.DumpSipHeaderFile.get() + "_header.bin";
-            writeDataToFile(name.c_str(), stateSaveAreaHeader.data(), stateSaveAreaHeader.size());
+            writeDataToFile(name.c_str(), std::string_view(stateSaveAreaHeader.data(), stateSaveAreaHeader.size()));
         }
 
         const auto allocType = AllocationType::kernelIsaInternal;
@@ -93,7 +92,7 @@ const SipKernel &BuiltIns::getSipKernel(Device &device, OsContext *context) {
         UNRECOVERABLE_IF(bindlessSip.getBinary().size() == 0);
 
         auto binarySize = alignUp(bindlessSip.getBinary().size(), sizeof(uint32_t)) / sizeof(uint32_t);
-        auto binary = std::make_unique<uint32_t[]>(binarySize);
+        auto binary = std::make_unique_for_overwrite<uint32_t[]>(binarySize);
         memcpy_s(binary.get(), binarySize * sizeof(uint32_t), bindlessSip.getBinary().data(), bindlessSip.getBinary().size());
 
         const auto allocType = AllocationType::kernelIsaInternal;
@@ -115,9 +114,13 @@ const SipKernel &BuiltIns::getSipKernel(Device &device, OsContext *context) {
                     binary[bindlessSip.getPidOffset()] = static_cast<uint32_t>((context->getOfflineDumpContextId(deviceIndex) >> 32) & 0xFFFFFFFF);
                 }
 
+                auto &rootDeviceEnvironment = device.getRootDeviceEnvironment();
+                auto &productHelper = device.getProductHelper();
+
                 DeviceBitfield copyBitfield{};
                 copyBitfield.set(deviceIndex);
-                copySuccess = MemoryTransferHelper::transferMemoryToAllocationBanks(device, sipAllocation, 0, binary.get(), bindlessSip.getBinary().size(), copyBitfield);
+                copySuccess = MemoryTransferHelper::transferMemoryToAllocationBanks(productHelper.isBlitCopyRequiredForLocalMemory(rootDeviceEnvironment, *sipAllocation),
+                                                                                    device, sipAllocation, 0, binary.get(), bindlessSip.getBinary().size(), copyBitfield);
                 DEBUG_BREAK_IF(!copySuccess);
             }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -24,6 +24,7 @@
 #include "shared/test/common/compiler_interface/linker_mock.h"
 #include "shared/test/common/device_binary_format/patchtokens_tests.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
+#include "shared/test/common/helpers/implicit_args_test_helper.h"
 #include "shared/test/common/helpers/mock_file_io.h"
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_compiler_product_helper.h"
@@ -265,7 +266,7 @@ HWTEST_F(ModuleTest, givenBlitterAvailableWhenCopyingPatchedSegmentsThenIsaIsTra
         &NEO::BlitHelperFunctions::blitMemoryToAllocation, mockBlitMemoryToAllocation);
 
     auto *neoMockDevice = NEO::MockDevice::createWithExecutionEnvironment<NEO::MockDevice>(&hwInfo, executionEnvironment, 0);
-    MockDeviceImp device(neoMockDevice, neoMockDevice->getExecutionEnvironment());
+    MockDeviceImp device(neoMockDevice);
     device.driverHandle = driverHandle.get();
 
     auto zebinData = std::make_unique<ZebinTestData::ZebinWithL0TestCommonModule>(device.getHwInfo());
@@ -304,7 +305,7 @@ HWTEST_F(ModuleTest, givenBlitterAvailableWhenCopyingPatchedSegmentsThenIsaIsTra
     }
 }
 
-using ModuleTestSupport = IsWithinProducts<IGFX_SKYLAKE, IGFX_TIGERLAKE_LP>;
+using ModuleTestSupport = IsGen12LP;
 
 HWTEST2_F(ModuleTest, givenNonPatchedTokenThenSurfaceBaseAddressIsCorrectlySet, ModuleTestSupport) {
     using RENDER_SURFACE_STATE = typename FamilyType::RENDER_SURFACE_STATE;
@@ -338,7 +339,7 @@ HWTEST2_F(ModuleTest, givenNonPatchedTokenThenSurfaceBaseAddressIsCorrectlySet, 
     auto surfaceStateAddressRaw = ptrOffset(kernelImp->getSurfaceStateHeapData(), argInfo.bindful);
     auto surfaceStateAddress = reinterpret_cast<RENDER_SURFACE_STATE *>(const_cast<unsigned char *>(surfaceStateAddressRaw));
     EXPECT_EQ(devicePtr, reinterpret_cast<void *>(surfaceStateAddress->getSurfaceBaseAddress()));
-    if constexpr (IsAtMostXeHpcCore::isMatched<productFamily>()) {
+    if constexpr (IsAtMostXeCore::isMatched<productFamily>()) {
         EXPECT_EQ(RENDER_SURFACE_STATE::COHERENCY_TYPE_GPU_COHERENT, surfaceStateAddress->getCoherencyType());
     }
 
@@ -373,6 +374,7 @@ HWTEST_F(ModuleTest, givenStatefulBufferWhenOffsetIsPatchedThenAllocBaseAddressI
 
     auto gpuAlloc = device->getDriverHandle()->getSvmAllocsManager()->getSVMAllocs()->get(devicePtr)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
     ASSERT_NE(nullptr, gpuAlloc);
+    const auto gpuAllocAddress = gpuAlloc->getGpuAddress();
 
     uint32_t argIndex = 0u;
     uint32_t offset = 0x1234;
@@ -385,7 +387,7 @@ HWTEST_F(ModuleTest, givenStatefulBufferWhenOffsetIsPatchedThenAllocBaseAddressI
     auto argInfo = kernelImp->getImmutableData()->getDescriptor().payloadMappings.explicitArgs[argIndex].as<NEO::ArgDescPointer>();
     auto surfaceStateAddressRaw = ptrOffset(kernelImp->getSurfaceStateHeapData(), argInfo.bindful);
     auto surfaceStateAddress = reinterpret_cast<RENDER_SURFACE_STATE *>(const_cast<unsigned char *>(surfaceStateAddressRaw));
-    EXPECT_EQ(devicePtr, reinterpret_cast<void *>(surfaceStateAddress->getSurfaceBaseAddress()));
+    EXPECT_EQ(gpuAllocAddress, surfaceStateAddress->getSurfaceBaseAddress());
 
     // Bindless arg
     surfaceStateAddress->setSurfaceBaseAddress(0);
@@ -396,7 +398,7 @@ HWTEST_F(ModuleTest, givenStatefulBufferWhenOffsetIsPatchedThenAllocBaseAddressI
     kernelImp->setBufferSurfaceState(argIndex, ptrOffset(devicePtr, offset), gpuAlloc);
 
     surfaceStateAddress = reinterpret_cast<RENDER_SURFACE_STATE *>(const_cast<unsigned char *>(kernelImp->getSurfaceStateHeapData()));
-    EXPECT_EQ(devicePtr, reinterpret_cast<void *>(surfaceStateAddress->getSurfaceBaseAddress()));
+    EXPECT_EQ(gpuAllocAddress, surfaceStateAddress->getSurfaceBaseAddress());
 
     Kernel::fromHandle(kernelHandle)->destroy();
 
@@ -445,7 +447,7 @@ HWTEST_F(ModuleTest, givenBufferWhenOffsetIsNotPatchedThenPassedPtrIsSetAsBaseAd
     context->freeMem(devicePtr);
 }
 
-HWTEST_F(ModuleTest, givenBufferWhenOffsetIsNotPatchedThenSizeIsDecereasedByOffset) {
+HWTEST_F(ModuleTest, givenBufferWhenOffsetIsNotPatchedThenSizeIsDecreasedByOffset) {
     using RENDER_SURFACE_STATE = typename FamilyType::RENDER_SURFACE_STATE;
     ze_kernel_handle_t kernelHandle;
 
@@ -469,6 +471,7 @@ HWTEST_F(ModuleTest, givenBufferWhenOffsetIsNotPatchedThenSizeIsDecereasedByOffs
 
     auto gpuAlloc = device->getDriverHandle()->getSvmAllocsManager()->getSVMAllocs()->get(devicePtr)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
     ASSERT_NE(nullptr, gpuAlloc);
+    const auto devicePtrOffsetInAlloc = ptrDiff(devicePtr, gpuAlloc->getGpuAddress());
 
     uint32_t argIndex = 0u;
     uint32_t offset = 0x1234;
@@ -481,7 +484,8 @@ HWTEST_F(ModuleTest, givenBufferWhenOffsetIsNotPatchedThenSizeIsDecereasedByOffs
     auto surfaceStateAddressRaw = ptrOffset(kernelImp->getSurfaceStateHeapData(), argInfo.bindful);
     auto surfaceStateAddress = reinterpret_cast<RENDER_SURFACE_STATE *>(const_cast<unsigned char *>(surfaceStateAddressRaw));
     SurfaceStateBufferLength length = {0};
-    length.length = static_cast<uint32_t>((gpuAlloc->getUnderlyingBufferSize() - offset) - 1);
+    const auto totalOffset = offset + devicePtrOffsetInAlloc;
+    length.length = static_cast<uint32_t>((gpuAlloc->getUnderlyingBufferSize() - totalOffset) - 1);
     EXPECT_EQ(surfaceStateAddress->getWidth(), static_cast<uint32_t>(length.surfaceState.width + 1));
     EXPECT_EQ(surfaceStateAddress->getHeight(), static_cast<uint32_t>(length.surfaceState.height + 1));
     EXPECT_EQ(surfaceStateAddress->getDepth(), static_cast<uint32_t>(length.surfaceState.depth + 1));
@@ -680,7 +684,7 @@ HWTEST2_F(ModuleUncachedBufferTest,
     EXPECT_EQ(devicePtr, reinterpret_cast<void *>(surfaceStateAddress->getSurfaceBaseAddress()));
 
     auto gmmHelper = device->getNEODevice()->getGmmHelper();
-    uint32_t expectedMocs = gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED);
+    uint32_t expectedMocs = gmmHelper->getUncachedMOCS();
 
     EXPECT_EQ(expectedMocs, surfaceStateAddress->getMemoryObjectControlState());
 
@@ -723,6 +727,7 @@ struct DerivedModuleImp : public L0::ModuleImp {
 };
 
 HWTEST_F(ModuleTest, whenMultipleModulesCreatedThenModulesShareIsaAllocation) {
+    USE_REAL_FILE_SYSTEM();
     DebugManagerStateRestore restorer;
     debugManager.flags.EnableLocalMemory.set(1);
     uint8_t binary[10];
@@ -1899,7 +1904,7 @@ TEST_F(ModuleDynamicLinkTests, givenModuleWithInternalRelocationAndUnresolvedExt
 
     uint32_t internalRelocationOffset = 0x10;
     linkerInput->textRelocations.push_back({{implicitArgsRelocationSymbolName, internalRelocationOffset, LinkerInput::RelocationInfo::Type::address, SegmentType::instructions}});
-    uint32_t expectedInternalRelocationValue = ImplicitArgs::getSize();
+    uint32_t expectedInternalRelocationValue = ImplicitArgsTestHelper::getImplicitArgsSize(neoDevice->getGfxCoreHelper().getImplicitArgsVersion());
 
     uint32_t externalRelocationOffset = 0x20;
     constexpr auto externalSymbolName = "unresolved";
@@ -3268,9 +3273,11 @@ HWTEST_F(ModuleTranslationUnitTest, GivenRebuildFlagWhenCreatingModuleFromNative
 HWTEST_F(ModuleTranslationUnitTest, WhenCreatingFromNativeBinaryThenSetsUpRequiredTargetProductProperly) {
     ZebinTestData::ValidEmptyProgram emptyProgram;
 
-    const auto &hwInfo = device->getNEODevice()->getHardwareInfo();
+    auto copyHwInfo = device->getNEODevice()->getHardwareInfo();
+    auto &compilerProductHelper = device->getCompilerProductHelper();
+    compilerProductHelper.adjustHwInfoForIgc(copyHwInfo);
 
-    emptyProgram.elfHeader->machine = hwInfo.platform.eProductFamily;
+    emptyProgram.elfHeader->machine = copyHwInfo.platform.eProductFamily;
     L0::ModuleTranslationUnit moduleTuValid(this->device);
     ze_result_t result = ZE_RESULT_ERROR_MODULE_BUILD_FAILURE;
     result = moduleTuValid.createFromNativeBinary(reinterpret_cast<const char *>(emptyProgram.storage.data()), emptyProgram.storage.size(), "");
@@ -3280,6 +3287,7 @@ HWTEST_F(ModuleTranslationUnitTest, WhenCreatingFromNativeBinaryThenSetsUpRequir
     EXPECT_EQ(0, strcmp(pStr, emptyString.c_str()));
     EXPECT_EQ(result, ZE_RESULT_SUCCESS);
 
+    emptyProgram.elfHeader->machine = copyHwInfo.platform.eProductFamily;
     ++emptyProgram.elfHeader->machine;
     L0::ModuleTranslationUnit moduleTuInvalid(this->device);
     result = moduleTuInvalid.createFromNativeBinary(reinterpret_cast<const char *>(emptyProgram.storage.data()), emptyProgram.storage.size(), "");
@@ -3327,9 +3335,11 @@ HWTEST_F(ModuleTranslationUnitTest, WhenCreatingFromNativeBinaryThenSetsUpPacked
 HWTEST_F(ModuleTranslationUnitTest, WhenCreatingFromZebinThenDontAppendAllowZebinFlagToBuildOptions) {
     ZebinTestData::ValidEmptyProgram zebin;
 
-    const auto &hwInfo = device->getNEODevice()->getHardwareInfo();
+    auto copyHwInfo = device->getNEODevice()->getHardwareInfo();
+    auto &compilerProductHelper = device->getCompilerProductHelper();
+    compilerProductHelper.adjustHwInfoForIgc(copyHwInfo);
 
-    zebin.elfHeader->machine = hwInfo.platform.eProductFamily;
+    zebin.elfHeader->machine = copyHwInfo.platform.eProductFamily;
     L0::ModuleTranslationUnit moduleTu(this->device);
     ze_result_t result = ZE_RESULT_ERROR_MODULE_BUILD_FAILURE;
     result = moduleTu.createFromNativeBinary(reinterpret_cast<const char *>(zebin.storage.data()), zebin.storage.size(), "");
@@ -3339,7 +3349,7 @@ HWTEST_F(ModuleTranslationUnitTest, WhenCreatingFromZebinThenDontAppendAllowZebi
     EXPECT_STREQ(expectedOptions, moduleTu.options.c_str());
 }
 
-HWTEST2_F(ModuleTranslationUnitTest, givenLargeGrfAndSimd16WhenProcessingBinaryThenKernelGroupSizeReducedToFitWithinSubslice, IsWithinXeGfxFamily) {
+HWTEST2_F(ModuleTranslationUnitTest, givenLargeGrfAndSimd16WhenProcessingBinaryThenKernelGroupSizeReducedToFitWithinSubslice, IsXeCore) {
     std::string validZeInfo = std::string("version :\'") + versionToString(NEO::Zebin::ZeInfo::zeInfoDecoderVersion) + R"===('
 kernels:
     - name : kernel_with_default_maxWGS
@@ -3386,7 +3396,7 @@ kernels:
     EXPECT_EQ(ZE_RESULT_SUCCESS, reducedKernel.setGroupSize(groupSize[0], groupSize[1], groupSize[2]));
 }
 
-HWTEST2_F(ModuleTranslationUnitTest, givenLargeGrfAndSimd16WhenProcessingBinaryThenSuggestedKernelGroupSizeFitsWithinSubslice, IsWithinXeGfxFamily) {
+HWTEST2_F(ModuleTranslationUnitTest, givenLargeGrfAndSimd16WhenProcessingBinaryThenSuggestedKernelGroupSizeFitsWithinSubslice, IsXeCore) {
     std::string validZeInfo = std::string("version :\'") + versionToString(NEO::Zebin::ZeInfo::zeInfoDecoderVersion) + R"===('
 kernels:
     - name : kernel_with_default_maxWGS
@@ -3601,7 +3611,7 @@ HWTEST_F(ModuleTranslationUnitTest, givenInternalOptionsThenLSCCachePolicyIsSet)
     }
 }
 
-HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetToWbWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetToWbWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.OverrideL1CachePolicyInSurfaceStateAndStateless.set(2);
     auto pMockCompilerInterface = new MockCompilerInterface;
@@ -3617,6 +3627,7 @@ HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetToWbWhenGetInternalOptions
 }
 
 HWTEST_F(ModuleTranslationUnitTest, givenDumpZebinWhenBuildingFromSpirvThenZebinElfDumped) {
+    USE_REAL_FILE_SYSTEM();
     DebugManagerStateRestore restorer;
     debugManager.flags.DumpZEBin.set(1);
 
@@ -3662,7 +3673,7 @@ HWTEST_F(ModuleTranslationUnitTest, givenDumpZebinWhenBuildingFromSpirvThenZebin
     removeVirtualFile(fileName);
 }
 
-HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetForceAllResourcesUncachedWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetForceAllResourcesUncachedWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.OverrideL1CachePolicyInSurfaceStateAndStateless.set(2);
     debugManager.flags.ForceAllResourcesUncached.set(true);
@@ -3678,7 +3689,7 @@ HWTEST2_F(ModuleTranslationUnitTest, givenDebugFlagSetForceAllResourcesUncachedW
     EXPECT_NE(pMockCompilerInterface->inputInternalOptions.find("-cl-store-cache-default=2 -cl-load-cache-default=2"), std::string::npos);
 }
 
-HWTEST2_F(ModuleTranslationUnitTest, givenAtLeastXeHpgCoreWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeHpgCore) {
+HWTEST2_F(ModuleTranslationUnitTest, givenAtLeastXeHpgCoreWhenGetInternalOptionsThenCorrectBuildOptionIsSet, IsAtLeastXeCore) {
     auto pMockCompilerInterface = new MockCompilerInterface;
     auto &rootDeviceEnvironment = this->neoDevice->executionEnvironment->rootDeviceEnvironments[this->neoDevice->getRootDeviceIndex()];
     rootDeviceEnvironment->compilerInterface.reset(pMockCompilerInterface);
@@ -3881,7 +3892,7 @@ TEST_F(ModuleTest, givenInternalOptionsWhenBindlessDisabledThenBindlesOptionsNot
 
     module->createBuildOptions("", buildOptions, internalBuildOptions);
 
-    EXPECT_FALSE(NEO::CompilerOptions::contains(internalBuildOptions, NEO::CompilerOptions::bindlessMode));
+    EXPECT_EQ(device->getCompilerProductHelper().isHeaplessModeEnabled(*defaultHwInfo), NEO::CompilerOptions::contains(internalBuildOptions, NEO::CompilerOptions::bindlessMode));
 }
 
 TEST_F(ModuleTest, givenSrcOptLevelInSrcNamesWhenMovingBuildOptionsThenOptionIsRemovedFromSrcNamesAndTranslatedOptionsStoredInDstNames) {
@@ -4604,7 +4615,7 @@ TEST_F(ModuleTests, givenConstDataStringSectionWhenLinkingModuleThenSegmentIsPat
     EXPECT_EQ(static_cast<size_t>(stringsAddr), *reinterpret_cast<size_t *>(patchAddr));
 }
 
-TEST_F(ModuleTests, givenImplicitArgsRelocationAndStackCallsWhenLinkingBuiltinModuleThenSegmentIsNotPatchedAndImplicitArgsAreNotRequired) {
+TEST_F(ModuleTests, givenImplicitArgsRelocationWhenLinkingBuiltinModuleThenSegmentIsPatchedWithZeroAndImplicitArgsAreNotRequired) {
     auto pModule = std::make_unique<WhiteBox<Module>>(device, nullptr, ModuleType::builtin);
 
     char data[64]{};
@@ -4616,7 +4627,6 @@ TEST_F(ModuleTests, givenImplicitArgsRelocationAndStackCallsWhenLinkingBuiltinMo
     kernelImmData->setIsaPerKernelAllocation(pModule->allocateKernelsIsaMemory(kernelInfo->heapInfo.kernelHeapSize));
     kernelImmData->initialize(kernelInfo, device, 0, nullptr, nullptr, true);
 
-    kernelImmData->kernelDescriptor->kernelAttributes.flags.useStackCalls = true;
     auto isaCpuPtr = reinterpret_cast<char *>(kernelImmData->isaGraphicsAllocation->getUnderlyingBuffer());
     pModule->kernelImmDatas.push_back(std::move(kernelImmData));
     pModule->translationUnit->programInfo.kernelInfos.push_back(kernelInfo);
@@ -4727,6 +4737,7 @@ TEST_F(ModuleTests, givenFullyLinkedModuleWhenCreatingKernelThenDebugMsgOnPrivat
     std::string output = testing::internal::GetCapturedStderr();
     std::ostringstream expectedOutput;
     expectedOutput << "computeUnits for each thread: " << std::to_string(this->device->getDeviceInfo().computeUnitsUsedForScratch) << "\n"
+                   << "global memory size: " << std::to_string(this->device->getDeviceInfo().globalMemSize) << "\n"
                    << "perHwThreadPrivateMemorySize: 0\t totalPrivateMemorySize: 0\n"
                    << "perHwThreadScratchSize: 0\t totalScratchSize: 0\n"
                    << "perHwThreadPrivateScratchSize: 0\t totalPrivateScratchSize: 0\n";
@@ -4760,7 +4771,7 @@ TEST_F(ModuleTests, givenImplicitArgsRelocationAndStackCallsWhenLinkingModuleThe
     auto status = pModule->linkBinary();
     EXPECT_TRUE(status);
 
-    EXPECT_EQ(ImplicitArgs::getSize(), *reinterpret_cast<uint32_t *>(ptrOffset(isaCpuPtr, 0x8)));
+    EXPECT_EQ(ImplicitArgsTestHelper::getImplicitArgsSize(device->getGfxCoreHelper().getImplicitArgsVersion()), *reinterpret_cast<uint32_t *>(ptrOffset(isaCpuPtr, 0x8)));
 
     EXPECT_TRUE(kernelInfo->kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs);
 }
@@ -4794,6 +4805,37 @@ TEST_F(ModuleTests, givenImplicitArgsRelocationAndNoDebuggerOrStackCallsWhenLink
     EXPECT_EQ(0u, *reinterpret_cast<uint32_t *>(ptrOffset(isaCpuPtr, 0x8)));
 
     EXPECT_FALSE(kernelInfo->kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs);
+}
+
+TEST_F(ModuleTests, givenRequiredImplicitArgsInKernelAndNoDebuggerOrStackCallsWhenLinkingModuleThenImplicitArgsRequiredRemainSet) {
+    auto pModule = std::make_unique<Module>(device, nullptr, ModuleType::user);
+    EXPECT_EQ(nullptr, neoDevice->getDebugger());
+
+    char data[64]{};
+    auto kernelInfo = new KernelInfo();
+    kernelInfo->heapInfo.kernelHeapSize = 64;
+    kernelInfo->heapInfo.pKernelHeap = data;
+
+    std::unique_ptr<WhiteBox<::L0::KernelImmutableData>> kernelImmData{new WhiteBox<::L0::KernelImmutableData>(this->device)};
+    kernelImmData->setIsaPerKernelAllocation(pModule->allocateKernelsIsaMemory(kernelInfo->heapInfo.kernelHeapSize));
+    kernelImmData->initialize(kernelInfo, device, 0, nullptr, nullptr, false);
+
+    kernelImmData->kernelDescriptor->kernelAttributes.flags.useStackCalls = false;
+    auto isaCpuPtr = reinterpret_cast<char *>(kernelImmData->isaGraphicsAllocation->getUnderlyingBuffer());
+    pModule->kernelImmDatas.push_back(std::move(kernelImmData));
+    pModule->translationUnit->programInfo.kernelInfos.push_back(kernelInfo);
+    auto linkerInput = std::make_unique<::WhiteBox<NEO::LinkerInput>>();
+    linkerInput->traits.requiresPatchingOfInstructionSegments = true;
+    linkerInput->textRelocations.push_back({{implicitArgsRelocationSymbolName, 0x8, LinkerInput::RelocationInfo::Type::addressLow, SegmentType::instructions}});
+    pModule->translationUnit->programInfo.linkerInput = std::move(linkerInput);
+
+    kernelInfo->kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs = true;
+    auto status = pModule->linkBinary();
+    EXPECT_TRUE(status);
+
+    EXPECT_NE(0u, *reinterpret_cast<uint32_t *>(ptrOffset(isaCpuPtr, 0x8)));
+
+    EXPECT_TRUE(kernelInfo->kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs);
 }
 
 TEST_F(ModuleTests, givenModuleWithGlobalAndConstAllocationsWhenGettingModuleAllocationsThenAllAreReturned) {
@@ -4915,9 +4957,13 @@ kernels:
       execution_env :
         simd_size : 8
 )===";
+    auto copyHwInfo = device->getHwInfo();
+    auto &compilerProductHelper = device->getCompilerProductHelper();
+    compilerProductHelper.adjustHwInfoForIgc(copyHwInfo);
+
     MockElfEncoder<> elfEncoder;
     elfEncoder.getElfFileHeader().type = NEO::Elf::ET_REL;
-    elfEncoder.getElfFileHeader().machine = productFamily;
+    elfEncoder.getElfFileHeader().machine = copyHwInfo.platform.eProductFamily;
     elfEncoder.appendSection(NEO::Elf::SHT_PROGBITS, NEO::Zebin::Elf::SectionNames::textPrefix.str() + "kernel1", std::string{});
     elfEncoder.appendSection(NEO::Elf::SHT_PROGBITS, NEO::Zebin::Elf::SectionNames::textPrefix.str() + "kernel2", std::string{});
     elfEncoder.appendSection(NEO::Zebin::Elf::SHT_ZEBIN_ZEINFO, NEO::Zebin::Elf::SectionNames::zeInfo, zeInfo);
@@ -4989,9 +5035,11 @@ TEST_F(ModuleWithZebinTest, givenNonZebinaryFormatWhenGettingDebugInfoThenDebugZ
 HWTEST_F(ModuleWithZebinTest, givenZebinWithKernelCallingExternalFunctionThenUpdateKernelsBarrierCount) {
     ZebinTestData::ZebinWithExternalFunctionsInfo zebin;
 
-    const auto &hwInfo = device->getNEODevice()->getHardwareInfo();
+    auto copyHwInfo = device->getHwInfo();
+    auto &compilerProductHelper = device->getCompilerProductHelper();
+    compilerProductHelper.adjustHwInfoForIgc(copyHwInfo);
 
-    zebin.setProductFamily(static_cast<uint16_t>(hwInfo.platform.eProductFamily));
+    zebin.setProductFamily(static_cast<uint16_t>(copyHwInfo.platform.eProductFamily));
 
     ze_module_desc_t moduleDesc = {};
     moduleDesc.format = ZE_MODULE_FORMAT_NATIVE;
@@ -5039,7 +5087,7 @@ TEST_F(ModuleKernelImmDatasTest, givenDeviceOOMWhenMemoryManagerFailsToAllocateM
 };
 
 using MultiTileModuleTest = Test<MultiTileModuleFixture>;
-HWTEST2_F(MultiTileModuleTest, givenTwoKernelPrivateAllocsWhichExceedGlobalMemSizeOfSingleTileButNotEntireGlobalMemSizeThenPrivateMemoryShouldBeAllocatedPerDispatch, MatchAny) {
+HWTEST_F(MultiTileModuleTest, givenTwoKernelPrivateAllocsWhichExceedGlobalMemSizeOfSingleTileButNotEntireGlobalMemSizeThenPrivateMemoryShouldBeAllocatedPerDispatch) {
     auto devInfo = device->getNEODevice()->getDeviceInfo();
     auto kernelsNb = 2u;
     uint32_t margin128KB = 131072u;

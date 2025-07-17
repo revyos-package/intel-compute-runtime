@@ -60,7 +60,7 @@ set(CLOC_LIB_SRCS_LIB
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_product_helper.h
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_product_helper.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_product_helper_base.inl
-    ${NEO_SHARED_DIRECTORY}/helpers/compiler_aot_config_bdw_and_later.inl
+    ${NEO_SHARED_DIRECTORY}/helpers/compiler_aot_config_tgllp_and_later.inl
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_product_helper_before_xe_hpc.inl
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_product_helper_xe_hpc_and_later.inl
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_options_parser.cpp
@@ -100,6 +100,8 @@ set(CLOC_LIB_SRCS_LIB
     ${OCLOC_DIRECTORY}/source/multi_command.h
     ${OCLOC_DIRECTORY}/source/ocloc_api.cpp
     ${OCLOC_DIRECTORY}/source/ocloc_api.h
+    ${OCLOC_DIRECTORY}/source/offline_compiler_ext.h
+    ${OCLOC_DIRECTORY}/source${BRANCH_DIR_SUFFIX}/offline_compiler_ext.cpp
     ${OCLOC_DIRECTORY}/source/ocloc_arg_helper.cpp
     ${OCLOC_DIRECTORY}/source/ocloc_arg_helper.h
     ${OCLOC_DIRECTORY}/source/ocloc_concat.cpp
@@ -121,6 +123,10 @@ set(CLOC_LIB_SRCS_LIB
     ${OCLOC_DIRECTORY}/source/offline_compiler.cpp
     ${OCLOC_DIRECTORY}/source/offline_compiler.h
     ${OCLOC_DIRECTORY}/source/offline_compiler_helper.cpp
+    ${NEO_SOURCE_DIR}/shared/source/debug_settings/debug_settings_manager.cpp
+    ${NEO_SOURCE_DIR}/shared/source/utilities/debug_settings_reader.cpp
+    ${NEO_SOURCE_DIR}/shared/source/utilities/debug_file_reader.cpp
+    ${NEO_SOURCE_DIR}/shared/source/os_interface/debug_env_reader.cpp
     ${OCLOC_DIRECTORY}/source/offline_compiler_options.cpp
     ${OCLOC_DIRECTORY}/source/offline_linker.cpp
     ${OCLOC_DIRECTORY}/source/offline_linker.h
@@ -146,6 +152,7 @@ if(WIN32)
        ${NEO_SHARED_DIRECTORY}/ail/windows/ail_configuration_windows.cpp
        ${NEO_SHARED_DIRECTORY}/compiler_interface/windows/compiler_cache_windows.cpp
        ${NEO_SHARED_DIRECTORY}/compiler_interface/windows/os_compiler_cache_helper.cpp
+       ${NEO_SHARED_DIRECTORY}/debug_settings/windows/debug_variables_helper.cpp
        ${NEO_SHARED_DIRECTORY}/dll/windows${BRANCH_DIR_SUFFIX}/options_windows.cpp
        ${NEO_SHARED_DIRECTORY}/dll/windows/options_windows.inl
        ${NEO_SHARED_DIRECTORY}/os_interface/windows/os_inc.h
@@ -155,24 +162,29 @@ if(WIN32)
        ${NEO_SHARED_DIRECTORY}/os_interface/windows/sys_calls.cpp
        ${NEO_SHARED_DIRECTORY}/utilities/windows/directory.cpp
        ${NEO_SHARED_DIRECTORY}/ail/windows${BRANCH_DIR_SUFFIX}/ail_ov_comp_wa_windows.cpp
+       ${NEO_SHARED_DIRECTORY}/os_interface/windows/debug_registry_reader.cpp
        ${OCLOC_DIRECTORY}/source/windows/ocloc_supported_devices_helper_windows.cpp
+       ${OCLOC_DIRECTORY}/source/windows/ocloc_reg_path.cpp
   )
 else()
   list(APPEND CLOC_LIB_SRCS_LIB
        ${NEO_SHARED_DIRECTORY}/ail/linux/ail_configuration_linux.cpp
        ${NEO_SHARED_DIRECTORY}/compiler_interface/linux/compiler_cache_linux.cpp
        ${NEO_SHARED_DIRECTORY}/compiler_interface/linux/os_compiler_cache_helper.cpp
+       ${NEO_SHARED_DIRECTORY}/debug_settings/linux/debug_variables_helper.cpp
        ${NEO_SHARED_DIRECTORY}/dll/linux${BRANCH_DIR_SUFFIX}/options_linux.cpp
        ${NEO_SHARED_DIRECTORY}/dll/linux/options_linux.inl
        ${NEO_SHARED_DIRECTORY}/os_interface/linux/os_inc.h
+       ${NEO_SHARED_DIRECTORY}/os_interface/linux/os_library_helper.cpp
        ${NEO_SHARED_DIRECTORY}/os_interface/linux/os_library_linux.cpp
        ${NEO_SHARED_DIRECTORY}/os_interface/linux/os_library_linux.h
+       ${NEO_SHARED_DIRECTORY}/os_interface/linux/settings_reader_create.cpp
        ${NEO_SHARED_DIRECTORY}/helpers/linux/path.cpp
        ${NEO_SHARED_DIRECTORY}/os_interface/linux/sys_calls_linux.cpp
        ${NEO_SHARED_DIRECTORY}/utilities/linux/directory.cpp
        ${NEO_SHARED_DIRECTORY}/ail/linux/ail_ov_comp_wa_linux.cpp
-       ${OCLOC_DIRECTORY}/source/linux/os_library_ocloc_helper.cpp
        ${OCLOC_DIRECTORY}/source/linux/ocloc_supported_devices_helper_linux.cpp
+       ${OCLOC_DIRECTORY}/source/linux/ocloc_reg_path.cpp
   )
 endif()
 
@@ -336,7 +348,9 @@ set(CLOC_LIB_SRCS
     ${NEO_SHARED_DIRECTORY}/helpers/file_io.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/file_io_load.cpp
 )
-add_library(${OCLOC_NAME}_lib SHARED ${CLOC_LIB_SRCS})
+add_library(${OCLOC_NAME}_lib SHARED ${CLOC_LIB_SRCS}
+            ${NEO_SOURCE_DIR}/shared/source/utilities/debug_settings_reader_creator.cpp
+)
 add_subdirectories()
 
 create_project_source_tree(${OCLOC_NAME}_lib)

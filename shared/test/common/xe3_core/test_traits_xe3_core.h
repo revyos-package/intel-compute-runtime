@@ -20,7 +20,6 @@ struct TestTraits<IGFX_XE3_CORE> {
     static constexpr bool programOnlyChangedFieldsInComputeStateMode = true;
     static constexpr bool iohInSbaSupported = false;
     static constexpr bool auxTranslationSupported = false;
-    static constexpr bool deviceEnqueueSupport = false;
     static constexpr bool fusedEuDispatchSupported = false;
     static constexpr bool numberOfWalkersInCfeStateSupported = false;
     static constexpr bool forceGpuNonCoherent = false;
@@ -28,5 +27,7 @@ struct TestTraits<IGFX_XE3_CORE> {
     static constexpr bool isPipeControlExtendedPriorToNonPipelinedStateCommandSupported = false;
     static constexpr bool largeGrfModeInStateComputeModeSupported = false;
     static constexpr bool heaplessAllowed = false;
+    static constexpr bool heaplessRequired = false;
     static constexpr bool isUsingNonDefaultIoctls = false;
+    static constexpr bool bindingTableStateSupported = true;
 };

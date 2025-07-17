@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -18,9 +18,9 @@ namespace L0 {
 
 static constexpr std::string_view globalSymbolOaMaxBufferSize = "OABufferMaxSize";
 static constexpr std::string_view globalSymbolOaMaxTimestamp = "MaxTimestamp";
+static constexpr std::string_view globalSymbolOaGpuTimestampFrequency = "GpuTimestampFrequency";
 
 struct MetricEnumeration {
-    static const uint32_t oaSourceId = 0x0A;
     MetricEnumeration(OaMetricSourceImp &metricSource);
     virtual ~MetricEnumeration();
 
@@ -113,7 +113,7 @@ struct MetricEnumeration {
     uint32_t getMetricTierNumber(const uint32_t sourceUsageFlagsMask) const;
     zet_metric_type_t
     getMetricType(const MetricsDiscovery::TInformationType sourceInformationType) const;
-    zet_metric_group_sampling_type_flag_t getSamplingTypeFromApiMask(const uint32_t apiMask);
+    zet_metric_group_sampling_type_flags_t getSamplingTypeFromApiMask(const uint32_t apiMask);
     std::vector<MetricProgrammable *> &getProgrammables() {
         return metricProgrammables;
     }

@@ -11,6 +11,7 @@
 #include "shared/source/compiler_interface/intermediate_representations.h"
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/array_count.h"
+#include "shared/source/helpers/file_io.h"
 #include "shared/source/helpers/hash.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/string.h"
@@ -372,6 +373,7 @@ TEST(CompilerCacheTests, GivenEmptyBinaryWhenCachingThenBinaryIsNotCached) {
 }
 
 TEST(CompilerCacheTests, GivenNonExistantConfigWhenLoadingFromCacheThenNullIsReturned) {
+    VariableBackup<decltype(NEO::IoFunctions::fopenPtr)> mockFopen(&NEO::IoFunctions::fopenPtr, [](const char *filename, const char *mode) -> FILE * { return NULL; });
     CompilerCache cache(CompilerCacheConfig{});
     size_t size;
     auto ret = cache.loadCachedBinary("----do-not-exists----", size);
@@ -409,6 +411,8 @@ TEST(CompilerInterfaceCachedTests, GivenNoCachedBinaryWhenBuildingThenErrorIsRet
 }
 
 TEST(CompilerInterfaceCachedTests, GivenCachedBinaryWhenBuildingThenSuccessIsReturned) {
+    USE_REAL_FILE_SYSTEM();
+
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
 
     auto src = "#include \"header.h\"\n__kernel k() {}";
@@ -497,11 +501,15 @@ class CompilerInterfaceOclElfCacheTest : public ::testing::Test, public Compiler
     using CompilerCacheHelper::processPackedCacheBinary;
 
     void SetUp() override {
+        hwInfoBackup.reset(new VariableBackup<HardwareInfo>(defaultHwInfo.get()));
         std::unique_ptr<CompilerCacheMock> cache(new CompilerCacheMock());
         cache->config.enabled = true;
         compilerInterface = std::make_unique<MockCompilerInterface>();
         bool initRet = compilerInterface->initialize(std::move(cache), true);
         ASSERT_TRUE(initRet);
+
+        auto compilerProductHelper = CompilerProductHelper::create(defaultHwInfo->platform.eProductFamily);
+        compilerProductHelper->adjustHwInfoForIgc(*defaultHwInfo);
 
         mockCompilerCache = static_cast<CompilerCacheMock *>(compilerInterface->cache.get());
 
@@ -548,6 +556,7 @@ class CompilerInterfaceOclElfCacheTest : public ::testing::Test, public Compiler
 
     std::unique_ptr<MockCompilerInterface> compilerInterface;
     CompilerCacheMock *mockCompilerCache;
+    std::unique_ptr<VariableBackup<HardwareInfo>> hwInfoBackup;
 };
 
 TEST_F(CompilerInterfaceOclElfCacheTest, givenIncorrectBinaryCausingPackDeviceBinaryToReturnEmptyVectorWhenPackAndCacheBinaryThenBinaryIsNotStoredInCache) {
@@ -635,6 +644,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, givenNonEmptyTranslationOutputWhenProce
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesWhenBuildingThenPackBinaryOnCacheSaveAndUnpackBinaryOnLoadFromCache) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsDeviceBinary);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
@@ -669,6 +680,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesWhenBuildingThen
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesWhenLoadedCacheDoesNotUnpackCorrectlyThenDoNotEndInCacheAndContinueCompilation) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsInvalidDeviceBinary);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
@@ -700,6 +713,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesWhenLoadedCacheD
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesAndDebugDataWhenBuildingThenPackBinaryOnCacheSaveAndUnpackBinaryOnLoadFromCache) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsDeviceBinaryDebugData);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
@@ -734,6 +749,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, GivenKernelWithIncludesAndDebugDataWhen
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenBinaryWhenBuildingThenPackBinaryOnCacheSaveAndUnpackBinaryOnLoadFromCache) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsDeviceBinary);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
@@ -768,6 +785,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, GivenBinaryWhenBuildingThenPackBinaryOn
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenBinaryWhenLoadedCacheDoesNotUnpackCorrectlyThenDoNotEndInCacheAndContinueCompilation) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsInvalidDeviceBinary);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
@@ -796,6 +815,8 @@ TEST_F(CompilerInterfaceOclElfCacheTest, GivenBinaryWhenLoadedCacheDoesNotUnpack
 }
 
 TEST_F(CompilerInterfaceOclElfCacheTest, GivenBinaryAndDebugDataWhenBuildingThenPackBinaryOnCacheSaveAndUnpackBinaryOnLoadFromCache) {
+    USE_REAL_FILE_SYSTEM();
+
     gEnvironment->igcPushDebugVars(igcDebugVarsDeviceBinaryDebugData);
 
     TranslationInput inputArgs{IGC::CodeType::oclC, IGC::CodeType::oclGenBin};

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -29,68 +29,82 @@
 using namespace NEO;
 
 typedef UltCommandStreamReceiverTest CommandStreamReceiverFlushTaskXeHPAndLaterTests;
+using CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw = UltCommandStreamReceiverTestWithCsrT<MockCsrHw>;
+using CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw2 = UltCommandStreamReceiverTestWithCsrT<MockCsrHw2>;
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, whenReprogrammingSshThenBindingTablePoolIsProgrammed) {
-    auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
-    if (commandStreamReceiver.heaplessModeEnabled) {
+    if constexpr (FamilyType::isHeaplessRequired()) {
         GTEST_SKIP();
+    } else {
+        auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
+        if (commandStreamReceiver.heaplessModeEnabled) {
+            GTEST_SKIP();
+        }
+        flushTask(commandStreamReceiver);
+        parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
+        auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        ASSERT_NE(nullptr, bindingTablePoolAlloc);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
+        EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
+        EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
+                  bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
     }
-    flushTask(commandStreamReceiver);
-    parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
-    auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    ASSERT_NE(nullptr, bindingTablePoolAlloc);
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
-    EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
-    EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
-              bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, whenReprogrammingSshThenBindingTablePoolIsProgrammedWithCachingOffWhenDebugKeyPresent) {
-    DebugManagerStateRestore restorer;
-    debugManager.flags.DisableCachingForHeaps.set(1);
-
-    auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
-    if (commandStreamReceiver.heaplessModeEnabled) {
+    if constexpr (FamilyType::isHeaplessRequired()) {
         GTEST_SKIP();
-    }
+    } else {
+        DebugManagerStateRestore restorer;
+        debugManager.flags.DisableCachingForHeaps.set(1);
 
-    flushTask(commandStreamReceiver);
-    parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
-    auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    ASSERT_NE(nullptr, bindingTablePoolAlloc);
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
-    EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
-    EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED),
-              bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
+        auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
+        if (commandStreamReceiver.heaplessModeEnabled) {
+            GTEST_SKIP();
+        }
+
+        flushTask(commandStreamReceiver);
+        parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
+        auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        ASSERT_NE(nullptr, bindingTablePoolAlloc);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
+        EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
+        EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED),
+                  bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, whenNotReprogrammingSshThenBindingTablePoolIsNotProgrammed) {
-    auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
-    if (commandStreamReceiver.heaplessModeEnabled) {
+    if constexpr (FamilyType::isHeaplessRequired()) {
         GTEST_SKIP();
+    } else {
+        auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
+        if (commandStreamReceiver.heaplessModeEnabled) {
+            GTEST_SKIP();
+        }
+
+        flushTask(commandStreamReceiver);
+        parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
+        auto stateBaseAddress = getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
+        EXPECT_NE(nullptr, stateBaseAddress);
+        auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        ASSERT_NE(nullptr, bindingTablePoolAlloc);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
+        EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
+        EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
+                  bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
+
+        auto offset = commandStreamReceiver.getCS(0).getUsed();
+        // make SBA dirty (using ioh as dsh and dsh as ioh just to force SBA reprogramming)
+        commandStreamReceiver.flushTask(commandStream, 0, &ioh, &dsh, &ssh, taskLevel, flushTaskFlags, *pDevice);
+
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(commandStreamReceiver.getCS(0), offset);
+        stateBaseAddress = hwParser.getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
+        EXPECT_NE(nullptr, stateBaseAddress);
+        bindingTablePoolAlloc = hwParser.getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        EXPECT_EQ(nullptr, bindingTablePoolAlloc);
     }
-
-    flushTask(commandStreamReceiver);
-    parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
-    auto stateBaseAddress = getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
-    EXPECT_NE(nullptr, stateBaseAddress);
-    auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    ASSERT_NE(nullptr, bindingTablePoolAlloc);
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
-    EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
-    EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
-              bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
-
-    auto offset = commandStreamReceiver.getCS(0).getUsed();
-    // make SBA dirty (using ioh as dsh and dsh as ioh just to force SBA reprogramming)
-    commandStreamReceiver.flushTask(commandStream, 0, &ioh, &dsh, &ssh, taskLevel, flushTaskFlags, *pDevice);
-
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(commandStreamReceiver.getCS(0), offset);
-    stateBaseAddress = hwParser.getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
-    EXPECT_NE(nullptr, stateBaseAddress);
-    bindingTablePoolAlloc = hwParser.getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    EXPECT_EQ(nullptr, bindingTablePoolAlloc);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenStateBaseAddressWhenItIsRequiredThenThereIsPipeControlPriorToItWithTextureCacheFlushAndHdc) {
@@ -144,7 +158,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     EXPECT_TRUE(UnitTestHelper<FamilyType>::getPipeControlHdcPipelineFlush(*pipeControlCmd));
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenSBACommandToProgramOnSingleCCSSetupThenThereIsPipeControlPriorToIt, IsWithinXeGfxFamily) {
+HWTEST2_F(CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenSBACommandToProgramOnSingleCCSSetupThenThereIsPipeControlPriorToIt, IsXeCore) {
     using STATE_BASE_ADDRESS = typename FamilyType::STATE_BASE_ADDRESS;
 
     hardwareInfo.gtSystemInfo.CCSInfo.NumberOfCCSEnabled = 1;
@@ -165,31 +179,35 @@ HWTEST2_F(CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenSBACommandToProg
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, whenNotReprogrammingSshButInitProgrammingFlagsThenBindingTablePoolIsProgrammed) {
-    auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
-    if (commandStreamReceiver.heaplessModeEnabled) {
+    if constexpr (FamilyType::isHeaplessRequired()) {
         GTEST_SKIP();
+    } else {
+        auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
+        if (commandStreamReceiver.heaplessModeEnabled) {
+            GTEST_SKIP();
+        }
+        flushTask(commandStreamReceiver);
+        parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
+        auto stateBaseAddress = getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
+        EXPECT_NE(nullptr, stateBaseAddress);
+        auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        ASSERT_NE(nullptr, bindingTablePoolAlloc);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
+        EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
+        EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
+                  bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
+
+        auto offset = commandStreamReceiver.getCS(0).getUsed();
+        commandStreamReceiver.initProgrammingFlags();
+        flushTask(commandStreamReceiver);
+
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(commandStreamReceiver.getCS(0), offset);
+        stateBaseAddress = hwParser.getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
+        EXPECT_NE(nullptr, stateBaseAddress);
+        bindingTablePoolAlloc = hwParser.getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
+        EXPECT_NE(nullptr, bindingTablePoolAlloc);
     }
-    flushTask(commandStreamReceiver);
-    parseCommands<FamilyType>(commandStreamReceiver.getCS(0));
-    auto stateBaseAddress = getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
-    EXPECT_NE(nullptr, stateBaseAddress);
-    auto bindingTablePoolAlloc = getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    ASSERT_NE(nullptr, bindingTablePoolAlloc);
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(ssh.getCpuBase()), bindingTablePoolAlloc->getBindingTablePoolBaseAddress());
-    EXPECT_EQ(ssh.getHeapSizeInPages(), bindingTablePoolAlloc->getBindingTablePoolBufferSize());
-    EXPECT_EQ(pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER),
-              bindingTablePoolAlloc->getSurfaceObjectControlStateIndexToMocsTables());
-
-    auto offset = commandStreamReceiver.getCS(0).getUsed();
-    commandStreamReceiver.initProgrammingFlags();
-    flushTask(commandStreamReceiver);
-
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(commandStreamReceiver.getCS(0), offset);
-    stateBaseAddress = hwParser.getCommand<typename FamilyType::STATE_BASE_ADDRESS>();
-    EXPECT_NE(nullptr, stateBaseAddress);
-    bindingTablePoolAlloc = hwParser.getCommand<typename FamilyType::_3DSTATE_BINDING_TABLE_POOL_ALLOC>();
-    EXPECT_NE(nullptr, bindingTablePoolAlloc);
 }
 
 using isXeHPOrAbove = IsAtLeastProduct<IGFX_XE_HP_SDV>;
@@ -253,7 +271,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
 
     // we do level change that will emit PPC, fill all the space so only BB end fits.
     taskLevel++;
-    auto ppcSize = MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier(false);
+    auto ppcSize = MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier();
     auto fillSize = MemoryConstants::cacheLineSize - ppcSize - sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
     csrCommandStream.getSpace(fillSize);
     auto expectedUsedSize = 2 * MemoryConstants::cacheLineSize;
@@ -278,13 +296,15 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Gi
     EXPECT_EQ(usedBefore, usedAfter);
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenDeviceWithThreadGroupPreemptionSupportThenDontSendMediaVfeStateIfNotDirty) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw, givenDeviceWithThreadGroupPreemptionSupportThenDontSendMediaVfeStateIfNotDirty) {
     DebugManagerStateRestore dbgRestore;
     debugManager.flags.ForcePreemptionMode.set(static_cast<int32_t>(PreemptionMode::ThreadGroup));
 
-    auto commandStreamReceiver = new MockCsrHw<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
     pDevice->setPreemptionMode(PreemptionMode::ThreadGroup);
-    pDevice->resetCommandStreamReceiver(commandStreamReceiver);
+    auto commandStreamReceiver = static_cast<MockCsrHw<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
+    if (commandStreamReceiver->getHeaplessStateInitEnabled()) {
+        GTEST_SKIP();
+    }
 
     // Configure the CSR to not need to submit any state or commands.
     configureCSRtoNonDirtyState<FamilyType>(true);
@@ -356,36 +376,28 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Wh
     GenCmdList::iterator itor = cmdList.begin();
     int counterPC = 0;
     while (itor != cmdList.end()) {
-        auto pipeControl = genCmdCast<typename FamilyType::PIPE_CONTROL *>(*itor);
-        if (pipeControl) {
-            switch (counterPC) {
-            case 0: // First pipe control with CS Stall
-                EXPECT_EQ(bool(pipeControl->getCommandStreamerStallEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getDcFlushEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getRenderTargetCacheFlushEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getInstructionCacheInvalidateEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getTextureCacheInvalidationEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getPipeControlFlushEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getVfCacheInvalidationEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getConstantCacheInvalidationEnable()), false);
-                EXPECT_EQ(bool(pipeControl->getStateCacheInvalidationEnable()), false);
-                break;
-            case 1: // Second pipe control with all flushes
-                EXPECT_EQ(bool(pipeControl->getCommandStreamerStallEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getDcFlushEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getRenderTargetCacheFlushEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getInstructionCacheInvalidateEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getTextureCacheInvalidationEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getPipeControlFlushEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getVfCacheInvalidationEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getConstantCacheInvalidationEnable()), true);
-                EXPECT_EQ(bool(pipeControl->getStateCacheInvalidationEnable()), true);
-            default:
-                break;
-            }
+        if (counterPC == 0 && isStallingBarrier<FamilyType>(itor)) {
             counterPC++;
+            itor++;
+            continue;
         }
-
+        auto pipeControl = genCmdCast<typename FamilyType::PIPE_CONTROL *>(*itor);
+        if (pipeControl != nullptr) {
+            // Second pipe control with all flushes
+            EXPECT_EQ(1, counterPC);
+            EXPECT_EQ(bool(pipeControl->getCommandStreamerStallEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getDcFlushEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getRenderTargetCacheFlushEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getInstructionCacheInvalidateEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getTextureCacheInvalidationEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getPipeControlFlushEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getVfCacheInvalidationEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getConstantCacheInvalidationEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getStateCacheInvalidationEnable()), true);
+            EXPECT_EQ(bool(pipeControl->getTlbInvalidate()), true);
+            counterPC++;
+            break;
+        }
         ++itor;
     }
 
@@ -448,7 +460,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Wh
     typedef typename FamilyType::STATE_BASE_ADDRESS STATE_BASE_ADDRESS;
     auto gmmHelper = pDevice->getGmmHelper();
     auto stateHeapMocs = gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
-    auto l1CacheOnMocs = gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CONST);
+    auto l1CacheOnMocs = gmmHelper->getL1EnabledMOCS();
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
 
     if (commandStreamReceiver.heaplessStateInitialized) {
@@ -472,11 +484,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Wh
     EXPECT_EQ(stateHeapMocs, cmd.getInstructionMemoryObjectControlState());
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, GivenBlockingWhenFlushingTaskThenPipeControlProgrammedCorrectly) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw, GivenBlockingWhenFlushingTaskThenPipeControlProgrammedCorrectly) {
     typedef typename FamilyType::PIPE_CONTROL PIPE_CONTROL;
     CommandQueueHw<FamilyType> commandQueue(nullptr, pClDevice, 0, false);
-    auto commandStreamReceiver = new MockCsrHw<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(commandStreamReceiver);
+    auto commandStreamReceiver = static_cast<MockCsrHw<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
+    commandStreamReceiver->heaplessStateInitialized = true;
 
     // Configure the CSR to not need to submit any state or commands
     configureCSRtoNonDirtyState<FamilyType>(true);
@@ -485,6 +497,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Gi
     auto blocking = true;
     auto &commandStreamTask = commandQueue.getCS(1024);
     auto &commandStreamCSR = commandStreamReceiver->getCS();
+    auto sizeUsedBeforeFlushCSR = commandStreamCSR.getUsed();
+
     commandStreamReceiver->streamProperties.stateComputeMode.isCoherencyRequired.value = 0;
 
     DispatchFlags dispatchFlags = DispatchFlagsHelper::createDefaultDispatchFlags();
@@ -504,7 +518,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Gi
 
     // Verify that taskCS got modified, while csrCS remained intact
     EXPECT_GT(commandStreamTask.getUsed(), 0u);
-    EXPECT_EQ(0u, commandStreamCSR.getUsed());
+    EXPECT_EQ(sizeUsedBeforeFlushCSR, commandStreamCSR.getUsed());
 
     // Parse command list to verify that PC got added to taskCS
     cmdList.clear();
@@ -514,17 +528,17 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, Gi
 
     // Parse command list to verify that PC wasn't added to csrCS
     cmdList.clear();
-    parseCommands<FamilyType>(commandStreamCSR, 0);
+    parseCommands<FamilyType>(commandStreamCSR, sizeUsedBeforeFlushCSR);
     auto numberOfPC = getCommandsList<PIPE_CONTROL>().size();
     EXPECT_EQ(0u, numberOfPC);
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenCsrInNonDirtyStateWhenflushTaskIsCalledThenNoFlushIsCalled) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw2, givenCsrInNonDirtyStateWhenflushTaskIsCalledThenNoFlushIsCalled) {
     CommandQueueHw<FamilyType> commandQueue(nullptr, pClDevice, 0, false);
     auto &commandStream = commandQueue.getCS(4096u);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
+    mockCsr->heaplessStateInitialized = true;
 
     configureCSRtoNonDirtyState<FamilyType>(true);
 
@@ -543,12 +557,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     EXPECT_EQ(0u, mockCsr->flushCalledCount);
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenCsrInNonDirtyStateAndBatchingModeWhenflushTaskIsCalledWithDisabledPreemptionThenSubmissionIsNotRecorded) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw2, givenCsrInNonDirtyStateAndBatchingModeWhenflushTaskIsCalledWithDisabledPreemptionThenSubmissionIsNotRecorded) {
     CommandQueueHw<FamilyType> commandQueue(nullptr, pClDevice, 0, false);
     auto &commandStream = commandQueue.getCS(4096u);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
 
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
 
@@ -569,7 +582,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
                        dispatchFlags,
                        *pDevice);
 
-    EXPECT_EQ(0u, mockCsr->flushCalledCount);
+    EXPECT_EQ(mockCsr->getHeaplessStateInitEnabled() ? 1u : 0u, mockCsr->flushCalledCount);
 
     EXPECT_TRUE(mockedSubmissionsAggregator->peekCmdBufferList().peekIsEmpty());
 
@@ -578,15 +591,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     EXPECT_EQ(0u, surfacesForResidency.size());
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenCsrInBatchingModeWhenRecordedBatchBufferIsBeingSubmittedThenFlushIsCalledWithRecordedCommandBuffer) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw2, givenCsrInBatchingModeWhenRecordedBatchBufferIsBeingSubmittedThenFlushIsCalledWithRecordedCommandBuffer) {
     CommandQueueHw<FamilyType> commandQueue(nullptr, pClDevice, 0, false);
     auto &commandStream = commandQueue.getCS(4096u);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
+    mockCsr->getResidencyAllocations().clear();
+    mockCsr->heaplessStateInitialized = true;
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -597,8 +611,6 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     dispatchFlags.guardCommandBufferWithPipeControl = true;
 
     mockCsr->streamProperties.stateComputeMode.isCoherencyRequired.value = 0;
-
-    commandStream.getSpace(4);
 
     mockCsr->flushTask(commandStream,
                        4,
@@ -623,6 +635,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     csrSurfaceCount -= pDevice->getHardwareInfo().capabilityTable.supportsImages ? 0 : 1;
     csrSurfaceCount += mockCsr->globalFenceAllocation ? 1 : 0;
     csrSurfaceCount += mockCsr->clearColorAllocation ? 1 : 0;
+    csrSurfaceCount += pDevice->getRTMemoryBackedBuffer() ? 1 : 0;
 
     EXPECT_EQ(4u + csrSurfaceCount, cmdBuffer->surfaces.size());
 
@@ -650,9 +663,9 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, gi
     }
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTests, givenNothingToFlushWhenFlushTaskCalledThenDontFlushStamp) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCsr);
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverFlushTaskXeHPAndLaterTestsWithMockCsrHw2, givenNothingToFlushWhenFlushTaskCalledThenDontFlushStamp) {
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
+    mockCsr->heaplessStateInitialized = true;
 
     configureCSRtoNonDirtyState<FamilyType>(true);
 

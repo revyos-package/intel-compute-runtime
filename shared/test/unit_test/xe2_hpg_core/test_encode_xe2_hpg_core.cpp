@@ -8,6 +8,7 @@
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_container/encode_surface_state.h"
 #include "shared/source/command_stream/stream_properties.h"
+#include "shared/source/gmm_helper/cache_settings_helper.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/gmm_helper/gmm_lib.h"
 #include "shared/source/helpers/definitions/command_encoder_args.h"
@@ -59,10 +60,13 @@ XE2_HPG_CORETEST_F(CommandEncodeXe2HpgCoreTest, givenDebugVariableSetwhenProgram
     auto statePrefetchCmd = reinterpret_cast<STATE_PREFETCH *>(buffer);
 
     constexpr uint64_t gpuVa = 0x100000;
-    constexpr uint32_t mocsIndexForL3 = (1 << 1);
     constexpr size_t numCachelines = 3;
 
     const GraphicsAllocation allocation(0, 1u /*num gmms*/, AllocationType::buffer, nullptr, gpuVa, 0, 4096, MemoryPool::localMemory, MemoryManager::maxOsContextCount);
+
+    auto rootDeviceEnv = mockExecutionEnvironment.rootDeviceEnvironments[0].get();
+    auto usage = CacheSettingsHelper::getGmmUsageType(allocation.getAllocationType(), false, rootDeviceEnv->getProductHelper(), rootDeviceEnv->getHardwareInfo());
+    uint32_t mocs = rootDeviceEnv->getGmmHelper()->getMOCS(usage);
 
     static constexpr std::array<uint32_t, 7> expectedSizes = {{
         MemoryConstants::cacheLineSize - 1,
@@ -92,7 +96,7 @@ XE2_HPG_CORETEST_F(CommandEncodeXe2HpgCoreTest, givenDebugVariableSetwhenProgram
             EXPECT_EQ(statePrefetchCmd[i].getAddress(), gpuVa + (i * MemoryConstants::pageSize64k));
             EXPECT_FALSE(statePrefetchCmd[i].getKernelInstructionPrefetch());
             EXPECT_FALSE(statePrefetchCmd[i].getParserStall());
-            EXPECT_EQ(mocsIndexForL3, statePrefetchCmd[i].getMemoryObjectControlState());
+            EXPECT_EQ(mocs, statePrefetchCmd[i].getMemoryObjectControlState());
 
             if (programmedSize > expectedSize) {
                 // cacheline alignemnt
@@ -373,7 +377,7 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenDefaultSettingForFenceWhenKe
     dispatchInterface->getCrossThreadDataSizeResult = 0;
 
     EncodeDispatchKernelArgs dispatchArgs = createDefaultDispatchKernelArgs(pDevice, dispatchInterface.get(), dims, false);
-    dispatchArgs.isKernelUsingSystemAllocation = true;
+    dispatchArgs.postSyncArgs.isUsingSystemAllocation = true;
 
     EncodeDispatchKernel<FamilyType>::template encode<DefaultWalkerType>(*cmdContainer.get(), dispatchArgs);
 
@@ -399,7 +403,7 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenDefaultSettingForFenceWhenEv
     dispatchInterface->getCrossThreadDataSizeResult = 0;
 
     EncodeDispatchKernelArgs dispatchArgs = createDefaultDispatchKernelArgs(pDevice, dispatchInterface.get(), dims, false);
-    dispatchArgs.isHostScopeSignalEvent = true;
+    dispatchArgs.postSyncArgs.isHostScopeSignalEvent = true;
 
     EncodeDispatchKernel<FamilyType>::template encode<DefaultWalkerType>(*cmdContainer.get(), dispatchArgs);
 
@@ -425,8 +429,8 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenDefaultSettingForFenceWhenKe
     dispatchInterface->getCrossThreadDataSizeResult = 0;
 
     EncodeDispatchKernelArgs dispatchArgs = createDefaultDispatchKernelArgs(pDevice, dispatchInterface.get(), dims, false);
-    dispatchArgs.isKernelUsingSystemAllocation = true;
-    dispatchArgs.isHostScopeSignalEvent = true;
+    dispatchArgs.postSyncArgs.isUsingSystemAllocation = true;
+    dispatchArgs.postSyncArgs.isHostScopeSignalEvent = true;
 
     EncodeDispatchKernel<FamilyType>::template encode<DefaultWalkerType>(*cmdContainer.get(), dispatchArgs);
 
@@ -438,7 +442,7 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenDefaultSettingForFenceWhenKe
 
     auto walkerCmd = genCmdCast<DefaultWalkerType *>(*itor);
     auto &postSyncData = walkerCmd->getPostSync();
-    EXPECT_TRUE(postSyncData.getSystemMemoryFenceRequest());
+    EXPECT_EQ(postSyncData.getSystemMemoryFenceRequest(), pDevice->getProductHelper().isGlobalFenceInPostSyncRequired(pDevice->getHardwareInfo()));
 }
 
 XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenCleanHeapsAndSlmNotChangedAndUncachedMocsRequestedThenSBAIsProgrammedAndMocsAreSet) {
@@ -464,7 +468,7 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenCleanHeapsAndSlmNotChangedAn
     auto cmdSba = genCmdCast<STATE_BASE_ADDRESS *>(*itor);
     auto gmmHelper = cmdContainer->getDevice()->getGmmHelper();
     EXPECT_EQ(cmdSba->getStatelessDataPortAccessMemoryObjectControlState(),
-              (gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED)));
+              (gmmHelper->getUncachedMOCS()));
 }
 
 XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenDebugFlagSetWhenAdjustIsCalledThenUpdateRequiredScratchSizeField) {
@@ -624,11 +628,7 @@ XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenSurfaceStateAndAuxSurfaceMod
     auto originalAuxMode = surfaceState.getAuxiliarySurfaceMode();
 
     EncodeSurfaceState<FamilyType>::setAuxParamsForMCSCCS(&surfaceState, releaseHelper.get());
-    if (releaseHelper->isDisablingMsaaRequired()) {
-        EXPECT_EQ(surfaceState.getAuxiliarySurfaceMode(), EncodeSurfaceState<FamilyType>::AUXILIARY_SURFACE_MODE::AUXILIARY_SURFACE_MODE_AUX_NONE);
-    } else {
-        EXPECT_EQ(surfaceState.getAuxiliarySurfaceMode(), originalAuxMode);
-    }
+    EXPECT_EQ(surfaceState.getAuxiliarySurfaceMode(), originalAuxMode);
 }
 
 XE2_HPG_CORETEST_F(EncodeKernelXe2HpgCoreTest, givenSurfaceStateAndAuxSurfaceModeOverrideRequiredIsTrueWhenAuxParamsForMCSCCSAreSetThenCorrectAuxModeIsSet) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,7 +8,6 @@
 #include "shared/source/utilities/numeric.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
-#include "level_zero/core/source/sampler/sampler_hw.h"
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_sampler.h"
 
@@ -30,7 +29,7 @@ const auto samplerIsNormalized = ::testing::Values(
     true,
     false);
 
-using SamplerCreateSupport = IsWithinProducts<IGFX_SKYLAKE, IGFX_TIGERLAKE_LP>;
+using SamplerCreateSupport = IsGen12LP;
 
 class SamplerCreateTest
     : public Test<DeviceFixture>,
@@ -58,7 +57,7 @@ HWTEST2_P(SamplerCreateTest, givenDifferentDescriptorValuesThenSamplerIsCorrectl
     desc.filterMode = filterMode;
     desc.isNormalized = isNormalized;
 
-    auto sampler = new MockSamplerHw<gfxCoreFamily>();
+    auto sampler = new MockSamplerHw<FamilyType::gfxCoreFamily>();
     EXPECT_NE(nullptr, sampler);
 
     sampler->initialize(device, &desc);
@@ -200,7 +199,7 @@ HWTEST2_F(ContextCreateSamplerTest, givenInvalidAddressModeThenSamplerIsNotCreat
     desc.filterMode = filterMode;
     desc.isNormalized = isNormalized;
 
-    L0::Sampler *sampler = Sampler::create(gfxCoreFamily, device, &desc);
+    L0::Sampler *sampler = Sampler::create(FamilyType::gfxCoreFamily, device, &desc);
 
     EXPECT_EQ(nullptr, sampler);
 }
@@ -217,7 +216,7 @@ HWTEST2_F(ContextCreateSamplerTest, givenInvalidFilterModeThenSamplerIsNotCreate
     desc.filterMode = filterMode;
     desc.isNormalized = isNormalized;
 
-    L0::Sampler *sampler = Sampler::create(gfxCoreFamily, device, &desc);
+    L0::Sampler *sampler = Sampler::create(FamilyType::gfxCoreFamily, device, &desc);
 
     EXPECT_EQ(nullptr, sampler);
 }
@@ -258,7 +257,7 @@ HWTEST2_F(SamplerInitTest, whenInitializeSamplerAndForceSamplerLowFilteringPreci
     desc.filterMode = filterMode;
     desc.isNormalized = isNormalized;
 
-    auto sampler = static_cast<MockSamplerHw<gfxCoreFamily> *>((*samplerFactory[productFamily])());
+    auto sampler = static_cast<MockSamplerHw<FamilyType::gfxCoreFamily> *>((*samplerFactory[productFamily])());
     sampler->initialize(device, &desc);
 
     EXPECT_EQ(SAMPLER_STATE::LOW_QUALITY_FILTER_DISABLE, sampler->samplerState.getLowQualityFilter());
@@ -280,7 +279,7 @@ HWTEST2_F(SamplerInitTest, whenInitializeSamplerAndForceSamplerLowFilteringPreci
     desc.filterMode = filterMode;
     desc.isNormalized = isNormalized;
 
-    auto sampler = static_cast<MockSamplerHw<gfxCoreFamily> *>((*samplerFactory[productFamily])());
+    auto sampler = static_cast<MockSamplerHw<FamilyType::gfxCoreFamily> *>((*samplerFactory[productFamily])());
     sampler->initialize(device, &desc);
 
     EXPECT_EQ(SAMPLER_STATE::LOW_QUALITY_FILTER_ENABLE, sampler->samplerState.getLowQualityFilter());

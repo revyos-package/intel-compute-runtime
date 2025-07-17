@@ -1,12 +1,11 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/source/command_stream/command_stream_receiver.h"
-#include "shared/source/command_stream/command_stream_receiver_with_aub_dump.h"
 #include "shared/source/execution_environment/execution_environment.h"
 #include "shared/test/common/fixtures/mock_aub_center_fixture.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
@@ -16,12 +15,18 @@
 #include "shared/test/common/libult/create_command_stream.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
+namespace NEO {
+struct HardwareInfo;
+} // namespace NEO
+
 using namespace NEO;
 
 struct CreateCommandStreamReceiverTest : public ::testing::TestWithParam<CommandStreamReceiverType> {};
 
 HWTEST_P(CreateCommandStreamReceiverTest, givenCreateCommandStreamWhenCsrIsSetToValidTypeThenTheFuntionReturnsCommandStreamReceiver) {
     DebugManagerStateRestore stateRestorer;
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
     HardwareInfo *hwInfo = nullptr;
     ExecutionEnvironment *executionEnvironment = getExecutionEnvironmentImpl(hwInfo, 1);
     ASSERT_NE(nullptr, executionEnvironment->memoryManager.get());

@@ -6,6 +6,7 @@
  */
 
 #pragma once
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/utilities/arrayref.h"
 #include "shared/source/utilities/spinlock.h"
 #include "shared/source/utilities/stackvec.h"
@@ -110,13 +111,9 @@ enum class CachingMode {
     preProcess
 };
 
-class CompilerInterface {
+class CompilerInterface : NEO::NonCopyableAndNonMovableClass {
   public:
     CompilerInterface();
-    CompilerInterface(const CompilerInterface &) = delete;
-    CompilerInterface &operator=(const CompilerInterface &) = delete;
-    CompilerInterface(CompilerInterface &&) = delete;
-    CompilerInterface &operator=(CompilerInterface &&) = delete;
     virtual ~CompilerInterface();
 
     template <typename CompilerInterfaceT = CompilerInterface>
@@ -208,12 +205,10 @@ class CompilerInterface {
     MOCKABLE_VIRTUAL CIF::RAII::UPtr_t<IGC::IgcOclTranslationCtxTagOCL> createFinalizerTranslationCtx(const Device &device,
                                                                                                       IGC::CodeType::CodeType_t inType,
                                                                                                       IGC::CodeType::CodeType_t outType);
-    bool isFclAvailable() const {
-        return (fcl.entryPoint.get() != nullptr);
-    }
-
+    bool isFclAvailable(const Device *device);
     bool isIgcAvailable(const Device *device);
     bool isFinalizerAvailable(const Device *device);
+    bool useIgcAsFcl(const Device *device);
 
     const CompilerLibraryEntry *getCustomCompilerLibrary(const char *libName);
 
@@ -244,9 +239,11 @@ class CompilerInterface {
         bool requiresFcl = (IGC::CodeType::oclC == translationSrc);
         bool requiresIgc = (IGC::CodeType::oclC != translationSrc) || ((IGC::CodeType::spirV != translationDst) && (IGC::CodeType::llvmBc != translationDst) && (IGC::CodeType::llvmLl != translationDst));
         bool requiresFinalizer = (finalizerInputType != IGC::CodeType::undefined) && ((translationDst == IGC::CodeType::oclGenBin) || (translationSrc == finalizerInputType));
-        return (isFclAvailable() || (false == requiresFcl)) && (isIgcAvailable(device) || (false == requiresIgc)) && ((false == requiresFinalizer) || isFinalizerAvailable(device));
+        return (isFclAvailable(device) || (false == requiresFcl)) && (isIgcAvailable(device) || (false == requiresIgc)) && ((false == requiresFinalizer) || isFinalizerAvailable(device));
     }
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<CompilerInterface>);
 
 class CompilerCacheHelper {
   public:

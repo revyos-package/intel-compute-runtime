@@ -8,6 +8,7 @@
 #include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/helpers/aligned_memory.h"
+#include "shared/source/helpers/file_io.h"
 #include "shared/source/memory_manager/allocations_list.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/memory_manager/surface.h"
@@ -53,9 +54,6 @@ struct EnqueueSvmTest : public ClDeviceFixture,
     }
 
     void TearDown() override {
-        if (defaultHwInfo->capabilityTable.ftrSvm == false) {
-            return;
-        }
         context->getSVMAllocsManager()->freeSVMAlloc(ptrSVM);
         CommandQueueFixture::tearDown();
         ClDeviceFixture::tearDown();
@@ -911,6 +909,7 @@ TEST_F(EnqueueSvmTest, givenEnqueueSVMMemFillWhenPatternAllocationIsObtainedThen
 }
 
 TEST_F(EnqueueSvmTest, GivenSvmAllocationWhenEnqueingKernelThenSuccessIsReturned) {
+    USE_REAL_FILE_SYSTEM();
     auto svmData = context->getSVMAllocsManager()->getSVMAlloc(ptrSVM);
     ASSERT_NE(nullptr, svmData);
     GraphicsAllocation *svmAllocation = svmData->gpuAllocations.getGraphicsAllocation(context->getDevice(0)->getRootDeviceIndex());
@@ -939,6 +938,7 @@ TEST_F(EnqueueSvmTest, GivenSvmAllocationWhenEnqueingKernelThenSuccessIsReturned
 }
 
 TEST_F(EnqueueSvmTest, givenEnqueueTaskBlockedOnUserEventWhenItIsEnqueuedThenSurfacesAreMadeResident) {
+    USE_REAL_FILE_SYSTEM();
     auto svmData = context->getSVMAllocsManager()->getSVMAlloc(ptrSVM);
     ASSERT_NE(nullptr, svmData);
     GraphicsAllocation *svmAllocation = svmData->gpuAllocations.getGraphicsAllocation(context->getDevice(0)->getRootDeviceIndex());
@@ -1087,10 +1087,6 @@ HWTEST_F(EnqueueSvmTest, WhenMigratingMemoryThenSvmMigrateMemCommandTypeIsUsed) 
 }
 
 TEST(CreateSvmAllocTests, givenVariousSvmAllocationPropertiesWhenAllocatingSvmThenSvmIsCorrectlyAllocated) {
-    if (!defaultHwInfo->capabilityTable.ftrSvm) {
-        return;
-    }
-
     DebugManagerStateRestore dbgRestore;
     SVMAllocsManager::SvmAllocationProperties svmAllocationProperties;
 
@@ -1128,9 +1124,6 @@ struct EnqueueSvmTestLocalMemory : public ClDeviceFixture,
     }
 
     void TearDown() override {
-        if (defaultHwInfo->capabilityTable.ftrSvm == false) {
-            return;
-        }
         context->getSVMAllocsManager()->freeSVMAlloc(svmPtr);
         context.reset(nullptr);
         ClDeviceFixture::tearDown();
@@ -2414,16 +2407,13 @@ struct StagingBufferTest : public EnqueueSvmTest {
     }
 
     void TearDown() override {
-        if (defaultHwInfo->capabilityTable.ftrSvm == false) {
-            return;
-        }
         svmManager = this->context->getSVMAllocsManager();
         svmManager->freeSVMAlloc(dstPtr);
         delete[] srcPtr;
         EnqueueSvmTest::TearDown();
     }
 
-    static constexpr size_t stagingBufferSize = MemoryConstants::megaByte * 2;
+    static constexpr size_t stagingBufferSize = MemoryConstants::pageSize;
     static constexpr size_t copySize = stagingBufferSize * 4;
     static constexpr size_t expectedNumOfCopies = copySize / stagingBufferSize;
 

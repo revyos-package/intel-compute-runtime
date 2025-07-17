@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -29,7 +29,7 @@ class FabricDevice {
 
 class FabricPort : _zes_fabric_port_handle_t {
   public:
-    ~FabricPort() override = default;
+    virtual ~FabricPort() = default;
     virtual ze_result_t fabricPortGetProperties(zes_fabric_port_properties_t *pProperties) = 0;
     virtual ze_result_t fabricPortGetLinkType(zes_fabric_link_type_t *pLinkType) = 0;
     virtual ze_result_t fabricPortGetConfig(zes_fabric_port_config_t *pConfig) = 0;
@@ -45,7 +45,7 @@ class FabricPort : _zes_fabric_port_handle_t {
     }
 };
 
-struct FabricPortHandleContext : NEO::NonCopyableOrMovableClass {
+struct FabricPortHandleContext : NEO::NonCopyableAndNonMovableClass {
     FabricPortHandleContext(OsSysman *pOsSysman);
     ~FabricPortHandleContext();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -147,7 +147,7 @@ bool RegistryReader::getSettingStringCommon(const char *settingName, std::string
                                              &regSize);
         if (ERROR_SUCCESS == success) {
             if (regType == REG_SZ || regType == REG_MULTI_SZ) {
-                auto regData = std::make_unique<char[]>(regSize);
+                auto regData = std::make_unique_for_overwrite<char[]>(regSize);
                 success = SysCalls::regQueryValueExA(key,
                                                      settingName,
                                                      NULL,
@@ -160,7 +160,7 @@ bool RegistryReader::getSettingStringCommon(const char *settingName, std::string
                 }
             } else if (regType == REG_BINARY) {
                 size_t charCount = regSize / sizeof(wchar_t);
-                auto regData = std::make_unique<wchar_t[]>(charCount);
+                auto regData = std::make_unique_for_overwrite<wchar_t[]>(charCount);
                 success = SysCalls::regQueryValueExA(key,
                                                      settingName,
                                                      NULL,
@@ -188,7 +188,6 @@ std::string RegistryReader::getSetting(const char *settingName, const std::strin
     std::string keyValue = value;
 
     if (!(getSettingStringCommon(settingName, keyValue))) {
-        char *envValue;
 
         auto prefixString = ApiSpecificConfig::getPrefixStrings();
         auto prefixType = ApiSpecificConfig::getPrefixTypes();
@@ -197,7 +196,8 @@ std::string RegistryReader::getSetting(const char *settingName, const std::strin
         for (const auto &prefix : prefixString) {
             std::string neoKey = prefix;
             neoKey += settingName;
-            envValue = IoFunctions::getenvPtr(neoKey.c_str());
+            auto envValue = IoFunctions::getEnvironmentVariable(neoKey.c_str());
+
             if (envValue) {
                 keyValue.assign(envValue);
                 type = prefixType[i];
@@ -214,7 +214,8 @@ std::string RegistryReader::getSetting(const char *settingName, const std::strin
     std::string keyValue = value;
 
     if (!(getSettingStringCommon(settingName, keyValue))) {
-        const char *envValue = IoFunctions::getenvPtr(settingName);
+        const char *envValue = IoFunctions::getEnvironmentVariable(settingName);
+
         if (envValue) {
             keyValue.assign(envValue);
         }

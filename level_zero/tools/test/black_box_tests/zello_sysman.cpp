@@ -523,10 +523,14 @@ void testSysmanEcc(ze_device_handle_t &device) {
     }
 
     zes_device_ecc_properties_t getProps = {};
+    zes_device_ecc_default_properties_ext_t extProps = {};
+    extProps.stype = ZES_STRUCTURE_TYPE_DEVICE_ECC_DEFAULT_PROPERTIES_EXT;
+    getProps.pNext = &extProps;
     VALIDATECALL(zesDeviceGetEccState(device, &getProps));
     if (verbose) {
         std::cout << "getStateProps.pendingState " << getProps.pendingState << std::endl;
         std::cout << "getStateProps.currentState " << getProps.currentState << std::endl;
+        std::cout << "getStateProps.defaultState " << extProps.defaultState << std::endl;
         std::cout << "getStateProps.pendingAction " << getProps.pendingAction << std::endl;
     }
 
@@ -1052,6 +1056,7 @@ std::string getMemoryType(zes_mem_type_t memType) {
         {ZES_MEM_TYPE_LPDDR3, "ZES_MEM_TYPE_LPDDR3"},
         {ZES_MEM_TYPE_LPDDR4, "ZES_MEM_TYPE_LPDDR4"},
         {ZES_MEM_TYPE_LPDDR5, "ZES_MEM_TYPE_LPDDR5"},
+        {ZES_MEM_TYPE_GDDR6, "ZES_MEM_TYPE_GDDR6"},
         {ZES_MEM_TYPE_SRAM, "ZES_MEM_TYPE_SRAM"},
         {ZES_MEM_TYPE_L1, "ZES_MEM_TYPE_L1"},
         {ZES_MEM_TYPE_L3, "ZES_MEM_TYPE_L3"},
@@ -1078,6 +1083,16 @@ std::string getMemoryHealth(zes_mem_health_t memHealth) {
         return mgetMemoryHealth.at(memHealth);
 }
 
+std::string getMemoryLocation(zes_mem_loc_t memLocation) {
+    if (memLocation == ZES_MEM_LOC_DEVICE) {
+        return "ZES_MEM_LOC_DEVICE";
+    } else if (memLocation == ZES_MEM_LOC_SYSTEM) {
+        return "ZES_MEM_LOC_SYSTEM";
+    } else {
+        return "NOT SUPPORTED MEMORY LOCATION SET";
+    }
+}
+
 void testSysmanMemory(ze_device_handle_t &device) {
     std::cout << std::endl
               << " ----  Memory tests ---- " << std::endl;
@@ -1100,8 +1115,10 @@ void testSysmanMemory(ze_device_handle_t &device) {
             std::cout << "Memory Type = " << getMemoryType(memoryProperties.type) << std::endl;
             std::cout << "On Subdevice = " << static_cast<uint32_t>(memoryProperties.onSubdevice) << std::endl;
             std::cout << "Subdevice Id = " << memoryProperties.subdeviceId << std::endl;
+            std::cout << "Memory Location = " << getMemoryLocation(memoryProperties.location) << std::endl;
             std::cout << "Memory Size = " << memoryProperties.physicalSize << std::endl;
             std::cout << "Number of channels = " << memoryProperties.numChannels << std::endl;
+            std::cout << "Memory busWidth = " << memoryProperties.busWidth << std::endl;
         }
 
         VALIDATECALL(zesMemoryGetState(handle, &memoryState));
@@ -1622,12 +1639,12 @@ void testSysmanVfTelemetry(ze_device_handle_t &device) {
         }
 
         // Get Mem utilization
+        std::cout << std::endl
+                  << "----- Memory Activity Stats ----- " << std::endl;
         count = 0;
         VALIDATECALL(zesVFManagementGetVFMemoryUtilizationExp2(handle, &count, nullptr));
         std::vector<zes_vf_util_mem_exp2_t> memUtils(count);
         VALIDATECALL(zesVFManagementGetVFMemoryUtilizationExp2(handle, &count, memUtils.data()));
-        std::cout << std::endl
-                  << "----- Memory Activity Stats ----- " << std::endl;
         for (uint32_t it = 0; it < count; it++) {
             if (verbose) {
                 std::cout << "Location of the Memory = " << getMemoryModuleLocation(memUtils[it].vfMemLocation) << std::endl;
@@ -1635,12 +1652,12 @@ void testSysmanVfTelemetry(ze_device_handle_t &device) {
             }
         }
 
+        std::cout << std::endl
+                  << "----- Engine Activity Stats ----- " << std::endl;
         count = 0;
         VALIDATECALL(zesVFManagementGetVFEngineUtilizationExp2(handle, &count, nullptr));
         std::vector<zes_vf_util_engine_exp2_t> engineUtils(count);
         VALIDATECALL(zesVFManagementGetVFEngineUtilizationExp2(handle, &count, engineUtils.data()));
-        std::cout << std::endl
-                  << "----- Engine Activity Stats ----- " << std::endl;
         for (uint32_t it = 0; it < count; it++) {
             if (verbose) {
                 std::cout << "Engine Type = " << getEngineType(engineUtils[it].vfEngineType) << std::endl;

@@ -10,7 +10,7 @@
 #include <level_zero/ze_api.h>
 #include <level_zero/zes_api.h>
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <map>
 #include <memory>
@@ -29,6 +29,7 @@ class LinuxSysmanImp;
 class PlatformMonitoringTech;
 class SysmanKmdInterface;
 class FirmwareUtil;
+class SysFsAccessInterface;
 
 enum class RasInterfaceType;
 enum class SysfsValueUnit;
@@ -50,6 +51,7 @@ class SysmanProductHelper {
     // Frequency
     virtual void getFrequencyStepSize(double *pStepSize) = 0;
     virtual bool isFrequencySetRangeSupported() = 0;
+    virtual zes_freq_throttle_reason_flags_t getThrottleReasons(LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) = 0;
 
     // Memory
     virtual ze_result_t getMemoryProperties(zes_mem_properties_t *pProperties, LinuxSysmanImp *pLinuxSysmanImp, NEO::Drm *pDrm, SysmanKmdInterface *pSysmanKmdInterface, uint32_t subDeviceId, bool isSubdevice) = 0;
@@ -78,17 +80,16 @@ class SysmanProductHelper {
     virtual uint64_t setPowerLimitValue(int32_t value) = 0;
     virtual zes_limit_unit_t getPowerLimitUnit() = 0;
     virtual bool isPowerSetLimitSupported() = 0;
-    virtual std::string getCardCriticalPowerLimitFile() = 0;
-    virtual SysfsValueUnit getCardCriticalPowerLimitNativeUnit() = 0;
-
-    // Diagnostics
-    virtual bool isDiagnosticsSupported() = 0;
+    virtual std::string getPackageCriticalPowerLimitFile() = 0;
+    virtual SysfsValueUnit getPackageCriticalPowerLimitNativeUnit() = 0;
+    virtual ze_result_t getPowerEnergyCounter(zes_power_energy_counter_t *pEnergy, LinuxSysmanImp *pLinuxSysmanImp, zes_power_domain_t powerDomain, uint32_t subDeviceId) = 0;
 
     // standby
     virtual bool isStandbySupported(SysmanKmdInterface *pSysmanKmdInterface) = 0;
 
     // Firmware
     virtual void getDeviceSupportedFwTypes(FirmwareUtil *pFwInterface, std::vector<std::string> &fwTypes) = 0;
+    virtual bool isLateBindingSupported() = 0;
 
     // Ecc
     virtual bool isEccConfigurationSupported() = 0;
@@ -100,6 +101,14 @@ class SysmanProductHelper {
     // Pci
     virtual ze_result_t getPciProperties(zes_pci_properties_t *pProperties) = 0;
     virtual ze_result_t getPciStats(zes_pci_stats_t *pStats, LinuxSysmanImp *pLinuxSysmanImp) = 0;
+
+    // Engine
+    virtual bool isAggregationOfSingleEnginesSupported() = 0;
+    virtual ze_result_t getGroupEngineBusynessFromSingleEngines(LinuxSysmanImp *pLinuxSysmanImp, zes_engine_stats_t *pStats, zes_engine_group_t &engineGroup) = 0;
+
+    // Vf Management
+    virtual bool isVfMemoryUtilizationSupported() = 0;
+    virtual ze_result_t getVfLocalMemoryQuota(SysFsAccessInterface *pSysfsAccess, uint64_t &lMemQuota, const uint32_t &vfId) = 0;
 
     virtual ~SysmanProductHelper() = default;
     virtual const std::map<std::string, std::map<std::string, uint64_t>> *getGuidToKeyOffsetMap() = 0;

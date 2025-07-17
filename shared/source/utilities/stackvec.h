@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -108,7 +108,7 @@ class StackVec { // NOLINT(clang-analyzer-optin.performance.Padding)
         return *this;
     }
 
-    StackVec(StackVec &&rhs) {
+    StackVec(StackVec &&rhs) noexcept {
         onStackMem = reinterpret_cast<DataType *const>(onStackMemRawBytes);
         if (rhs.usesDynamicMem()) {
             this->dynamicMem = rhs.dynamicMem;
@@ -122,7 +122,7 @@ class StackVec { // NOLINT(clang-analyzer-optin.performance.Padding)
         rhs.clear();
     }
 
-    StackVec &operator=(StackVec &&rhs) {
+    StackVec &operator=(StackVec &&rhs) noexcept {
         if (this == &rhs) {
             return *this;
         }
@@ -149,6 +149,14 @@ class StackVec { // NOLINT(clang-analyzer-optin.performance.Padding)
         rhs.clear();
 
         return *this;
+    }
+
+    template <typename T>
+    constexpr iterator insert(const_iterator pos, T &&value) {
+        auto offset = pos - begin();
+        push_back(std::forward<T>(value));
+        std::rotate(begin() + offset, end() - 1, end());
+        return begin() + offset;
     }
 
     template <typename RhsT>
@@ -332,11 +340,18 @@ class StackVec { // NOLINT(clang-analyzer-optin.performance.Padding)
         return reinterpret_cast<uintptr_t>(this->onStackMem) != reinterpret_cast<uintptr_t>(onStackMemRawBytes) && this->dynamicMem;
     }
 
-    auto data() {
+    DataType *data() {
         if (usesDynamicMem()) {
             return dynamicMem->data();
         }
         return reinterpret_cast<DataType *>(onStackMemRawBytes);
+    }
+
+    const DataType *data() const {
+        if (usesDynamicMem()) {
+            return dynamicMem->data();
+        }
+        return reinterpret_cast<const DataType *>(onStackMemRawBytes);
     }
 
   private:

@@ -7,15 +7,17 @@
 
 #include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/test/common/fixtures/cpu_page_fault_manager_tests_fixture.h"
-#include "shared/test/common/mocks/mock_graphics_allocation.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/test_macros/test_checks_shared.h"
 
-#include "opencl/source/command_queue/command_queue.h"
 #include "opencl/test/unit_test/mocks/mock_cl_device.h"
 #include "opencl/test/unit_test/mocks/mock_command_queue.h"
 
 #include "gtest/gtest.h"
+
+namespace NEO {
+class MemoryManager;
+} // namespace NEO
 
 using namespace NEO;
 
@@ -50,7 +52,7 @@ TEST_F(PageFaultManagerTest, givenUnifiedMemoryAllocWhenSynchronizeMemoryThenEnq
     REQUIRE_SVM_OR_SKIP(executionEnvironment.rootDeviceEnvironments[0]->getHardwareInfo());
 
     auto memoryManager = std::make_unique<MockMemoryManager>(executionEnvironment);
-    auto svmAllocsManager = std::make_unique<SVMAllocsManager>(memoryManager.get(), false);
+    auto svmAllocsManager = std::make_unique<SVMAllocsManager>(memoryManager.get());
     auto device = std::unique_ptr<MockClDevice>(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr)});
     auto rootDeviceIndex = device->getRootDeviceIndex();
     RootDeviceIndicesContainer rootDeviceIndices = {rootDeviceIndex};
@@ -88,7 +90,7 @@ TEST_F(PageFaultManagerTest, givenUnifiedMemoryAllocWhenGpuTransferIsInvokedThen
         int insertSvmMapOperationCalled = 0;
     };
     auto memoryManager = std::make_unique<MockMemoryManager>(executionEnvironment);
-    auto svmAllocsManager = std::make_unique<MockSVMAllocsManager>(memoryManager.get(), false);
+    auto svmAllocsManager = std::make_unique<MockSVMAllocsManager>(memoryManager.get());
     auto device = std::unique_ptr<MockClDevice>(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr)});
     auto rootDeviceIndex = device->getRootDeviceIndex();
     RootDeviceIndicesContainer rootDeviceIndices = {rootDeviceIndex};
@@ -111,7 +113,7 @@ TEST_F(PageFaultManagerTest, givenUnifiedMemoryAllocWhenAllowCPUMemoryEvictionIs
     REQUIRE_SVM_OR_SKIP(executionEnvironment.rootDeviceEnvironments[0]->getHardwareInfo());
 
     auto memoryManager = std::make_unique<MockMemoryManager>(executionEnvironment);
-    auto svmAllocsManager = std::make_unique<SVMAllocsManager>(memoryManager.get(), false);
+    auto svmAllocsManager = std::make_unique<SVMAllocsManager>(memoryManager.get());
     auto device = std::unique_ptr<MockClDevice>(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr)});
     auto rootDeviceIndex = device->getRootDeviceIndex();
     RootDeviceIndicesContainer rootDeviceIndices = {rootDeviceIndex};

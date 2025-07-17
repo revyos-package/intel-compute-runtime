@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace NEO {
 enum class ImagePlane;
@@ -51,6 +52,7 @@ class Gmm {
     void queryImageParams(ImageInfo &inputOutputImgInfo);
 
     void applyAuxFlagsForBuffer(bool preferCompression);
+    void applyExtraAuxInitFlag();
     void applyMemoryFlags(const StorageInfo &storageInfo);
     void applyAppResource(const StorageInfo &storageInfo);
 
@@ -71,16 +73,15 @@ class Gmm {
     GMM_RESCREATE_PARAMS resourceParams = {};
     std::unique_ptr<GmmResourceInfo> gmmResourceInfo;
 
-    const char *getUsageTypeString();
+    std::string getUsageTypeString();
     void setCompressionEnabled(bool compresionEnabled) { this->compressionEnabled = compresionEnabled; }
     bool isCompressionEnabled() const { return compressionEnabled; }
 
   protected:
     void applyAuxFlagsForImage(ImageInfo &imgInfo, bool preferCompressed);
     void setupImageResourceParams(ImageInfo &imgInfo, bool preferCompressed);
-    bool extraMemoryFlagsRequired();
+    MOCKABLE_VIRTUAL bool extraMemoryFlagsRequired();
     void applyExtraMemoryFlags(const StorageInfo &storageInfo);
-    void applyExtraInitFlag();
     void applyDebugOverrides();
     GmmHelper *gmmHelper = nullptr;
 

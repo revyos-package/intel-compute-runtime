@@ -97,6 +97,10 @@ lint:
         - ci
         '*/.clang-tidy':
         - ci
+        '.config':
+        - ci
+        '*/.config':
+        - ci
         '*.md':
         - documentation
         'level_zero/api/driver_experimental/public/*':
@@ -117,6 +121,10 @@ lint:
       directory:
         test:
         - test
+        target_unit_tests:
+        - test
+        target_aub_tests:
+        - test
         source:
         - feature
         - fix
@@ -132,6 +140,8 @@ lint:
         - ci
         ze_raytracing:
         - ci
+        aub_configs:
+        - test
         kernels_bin:
         - feature
         - fix

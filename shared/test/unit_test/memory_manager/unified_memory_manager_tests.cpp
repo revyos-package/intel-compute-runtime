@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/gfx_core_helper.h"
+#include "shared/source/unified_memory/usm_memory_support.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/mocks/mock_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_device.h"
@@ -23,7 +24,7 @@ using namespace NEO;
 TEST(SvmDeviceAllocationTest, givenGivenSvmAllocsManagerWhenObtainOwnershipCalledThenLockedUniqueLockReturned) {
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 1));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
 
     auto lock = svmManager->obtainOwnership();
     std::thread th1([&] {
@@ -69,7 +70,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenFreeSvmAllocationDeferThenAllocationsCou
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
     void *cmdQ = reinterpret_cast<void *>(0x12345);
@@ -99,7 +100,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenFreeSVMAllocIsDeferredThenFreedSubsequen
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
     void *cmdQ = reinterpret_cast<void *>(0x12345);
@@ -126,7 +127,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, GivenTwoRootDevicesWhenAllocatingSharedMemor
     auto device = deviceFactory->rootDevices[1];
     std::map<uint32_t, NEO::DeviceBitfield> deviceBitfieldsLocal;
     deviceBitfieldsLocal[1] = device->getDeviceBitfield();
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
     void *cmdQ = reinterpret_cast<void *>(0x12345);
@@ -152,7 +153,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenMultipleFreeSVMAllocDeferredThenFreedSub
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -186,7 +187,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenPointerWithOffsetPassedThenProperDataRet
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
 
     SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::deviceUnifiedMemory, 1, rootDeviceIndices, deviceBitfields);
     unifiedMemoryProperties.device = device;
@@ -207,7 +208,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenMultiplePointerWithOffsetPassedThenPrope
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
 
     SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::deviceUnifiedMemory, 1, rootDeviceIndices, deviceBitfields);
     unifiedMemoryProperties.device = device;
@@ -246,7 +247,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenKmdMigratedSharedAllocationWhenPrefetch
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
     void *cmdQ = reinterpret_cast<void *>(0x12345);
@@ -256,10 +257,8 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenKmdMigratedSharedAllocationWhenPrefetch
     auto ptr = svmManager->createSharedUnifiedMemoryAllocation(4096, unifiedMemoryProperties, &cmdQ);
     EXPECT_NE(nullptr, ptr);
 
-    auto svmData = svmManager->getSVMAlloc(ptr);
-
     csr->setActivePartitions(2);
-    svmManager->prefetchMemory(*device, *csr, *svmData);
+    svmManager->prefetchMemory(*device, *csr, ptr, 4096);
 
     auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
     EXPECT_TRUE(mockMemoryManager->setMemPrefetchCalled);
@@ -272,32 +271,143 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenKmdMigratedSharedAllocationWhenPrefetch
     svmManager->freeSVMAlloc(ptr);
 }
 
-TEST_F(SVMLocalMemoryAllocatorTest, givenEnableBOChunkingPrefetchWhenPrefetchMemoryIsCalledThenSetMemPrefetchCalled) {
+TEST_F(SVMLocalMemoryAllocatorTest, givenNonKmdMigratedSharedAllocationWhenPrefetchMemoryIsCalledThenSetMemPrefetchNotCalled) {
     DebugManagerStateRestore restore;
-    debugManager.flags.UseKmdMigration.set(1);
-    debugManager.flags.EnableBOChunkingDevMemPrefetch.set(true);
+    debugManager.flags.UseKmdMigration.set(0);
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
+    void *cmdQ = reinterpret_cast<void *>(0x12345);
 
-    SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::deviceUnifiedMemory, 1, rootDeviceIndices, deviceBitfields);
-    unifiedMemoryProperties.device = device;
+    SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::sharedUnifiedMemory, 1, rootDeviceIndices, deviceBitfields);
 
-    auto ptr = svmManager->createUnifiedMemoryAllocation(4096, unifiedMemoryProperties);
+    auto ptr = svmManager->createSharedUnifiedMemoryAllocation(4096, unifiedMemoryProperties, &cmdQ);
+    EXPECT_NE(nullptr, ptr);
+
+    csr->setActivePartitions(2);
+    svmManager->prefetchMemory(*device, *csr, ptr, 4096);
+
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    EXPECT_FALSE(mockMemoryManager->setMemPrefetchCalled);
+    EXPECT_EQ(0u, mockMemoryManager->memPrefetchSubDeviceIds.size());
+
+    svmManager->freeSVMAlloc(ptr);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenNonSharedUnifiedMemoryAllocationWhenPrefetchMemoryIsCalledThenSetMemPrefetchNotCalled) {
+    DebugManagerStateRestore restore;
+    debugManager.flags.UseKmdMigration.set(1);
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+    auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
+    csr->setupContext(*device->getDefaultEngine().osContext);
+    void *cmdQ = reinterpret_cast<void *>(0x12345);
+
+    SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::sharedUnifiedMemory, 1, rootDeviceIndices, deviceBitfields);
+
+    auto ptr = svmManager->createSharedUnifiedMemoryAllocation(4096, unifiedMemoryProperties, &cmdQ);
     EXPECT_NE(nullptr, ptr);
 
     auto svmData = svmManager->getSVMAlloc(ptr);
+    svmData->memoryType = InternalMemoryType::deviceUnifiedMemory;
 
     csr->setActivePartitions(2);
-    svmManager->prefetchMemory(*device, *csr, *svmData);
+    svmManager->prefetchMemory(*device, *csr, ptr, 4096);
 
     auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    EXPECT_TRUE(mockMemoryManager->setMemPrefetchCalled);
+    EXPECT_FALSE(mockMemoryManager->setMemPrefetchCalled);
+    EXPECT_EQ(0u, mockMemoryManager->memPrefetchSubDeviceIds.size());
 
     svmManager->freeSVMAlloc(ptr);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenPrefetchMemoryIsCalledThenPrefetchAllocationToSystemMemory) {
+    DebugManagerStateRestore restore;
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+    auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
+    auto &hwInfo = *device->getRootDeviceEnvironment().getMutableHardwareInfo();
+
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+    sharedSystemMemCapabilities = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+
+    csr->setupContext(*device->getDefaultEngine().osContext);
+
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1);
+
+    auto ptr = malloc(4096);
+    EXPECT_NE(nullptr, ptr);
+
+    svmManager->prefetchMemory(*device, *csr, ptr, 4096);
+
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    EXPECT_TRUE(mockMemoryManager->prefetchSharedSystemAllocCalled);
+
+    free(ptr);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenPrefetchMemoryIsCalledAndNotEnabledThenNoPrefetchAllocationToSystemMemory) {
+    DebugManagerStateRestore restore;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(0);
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+    auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
+    csr->setupContext(*device->getDefaultEngine().osContext);
+
+    auto ptr = malloc(4096);
+    EXPECT_NE(nullptr, ptr);
+
+    svmManager->prefetchMemory(*device, *csr, ptr, 4096);
+
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    EXPECT_FALSE(mockMemoryManager->prefetchSharedSystemAllocCalled);
+
+    free(ptr);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenSharedSystemMemAdviseIsCalledThenMemoryManagerSetSharedSystemMemAdviseIsCalled) {
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+
+    MemAdvise memAdviseOp = MemAdvise::setSystemMemoryPreferredLocation;
+    auto ptr = malloc(4096);
+    EXPECT_NE(nullptr, ptr);
+
+    svmManager->sharedSystemMemAdvise(*device, memAdviseOp, ptr, 4096);
+
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    EXPECT_TRUE(mockMemoryManager->setSharedSystemMemAdviseCalled);
+
+    free(ptr);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenSharedSystemAtomicAccessIsCalledThenMemoryManagerSetSharedSystemAtomicAccessIsCalled) {
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+
+    AtomicAccessMode mode = AtomicAccessMode::device;
+    auto ptr = malloc(4096);
+    EXPECT_NE(nullptr, ptr);
+
+    svmManager->sharedSystemAtomicAccess(*device, mode, ptr, 4096);
+
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    EXPECT_TRUE(mockMemoryManager->setSharedSystemAtomicAccessCalled);
+
+    free(ptr);
 }
 
 TEST_F(SVMLocalMemoryAllocatorTest, givenForceMemoryPrefetchForKmdMigratedSharedAllocationsWhenSVMAllocsIsCalledThenPrefetchSharedUnifiedMemoryInSvmAllocsManager) {
@@ -307,7 +417,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenForceMemoryPrefetchForKmdMigratedShared
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
     void *cmdQ = reinterpret_cast<void *>(0x12345);
@@ -330,7 +440,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentThenUnifiedMemoryAllocationsAr
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -356,7 +466,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentThenHostUnifiedMemoryAllocatio
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -382,7 +492,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentThenSharedUnifiedMemoryAllocat
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -415,7 +525,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentWhenLocalMemoryIsEnabledThenSh
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -447,7 +557,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenInternalAllocationWhenItIsMadeResidentT
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -484,7 +594,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenSubmitIndirectAllocationsAsPackCalledBut
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -515,7 +625,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenInternalAllocationWhenItIsMadeResidentT
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 
@@ -553,7 +663,7 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenInternalAllocationWhenNewAllocationIsCr
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
     auto device = deviceFactory->rootDevices[0];
     auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager, false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
     auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
     csr->setupContext(*device->getDefaultEngine().osContext);
 

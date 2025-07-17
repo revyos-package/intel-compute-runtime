@@ -1,20 +1,17 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/source/os_interface/linux/drm_allocation.h"
 #include "shared/source/os_interface/linux/drm_buffer_object.h"
-#include "shared/source/xe_hpc_core/hw_cmds_xe_hpc_core_base.h"
 #include "shared/test/common/mocks/mock_allocation_properties.h"
 #include "shared/test/common/os_interface/linux/drm_memory_manager_prelim_fixtures.h"
 #include "shared/test/common/os_interface/linux/drm_mock_cache_info.h"
 #include "shared/test/common/os_interface/linux/drm_mock_memory_info.h"
 #include "shared/test/common/test_macros/header/per_product_test_definitions.h"
-#include "shared/test/common/test_macros/test.h"
 
 #include "opencl/source/helpers/cl_memory_properties_helpers.h"
 #include "opencl/source/mem_obj/buffer.h"
@@ -32,7 +29,13 @@ struct BuffersWithClMemCacheClosTests : public DrmMemoryManagerLocalMemoryPrelim
         auto memoryInfo = new MockExtendedMemoryInfo(*mock);
 
         mock->memoryInfo.reset(memoryInfo);
-        mock->l3CacheInfo.reset(new MockCacheInfo(*mock->getIoctlHelper(), 1024, 2, 32));
+
+        CacheReservationParameters l2CacheParameters{};
+        CacheReservationParameters l3CacheParameters{};
+        l3CacheParameters.maxSize = 1024;
+        l3CacheParameters.maxNumRegions = 2;
+        l3CacheParameters.maxNumWays = 32;
+        mock->cacheInfo.reset(new MockCacheInfo(*mock->getIoctlHelper(), l2CacheParameters, l3CacheParameters));
 
         auto &multiTileArchInfo = executionEnvironment->rootDeviceEnvironments[rootDeviceIndex]->getMutableHardwareInfo()->gtSystemInfo.MultiTileArchInfo;
         multiTileArchInfo.TileCount = (memoryInfo->getDrmRegionInfos().size() - 1);

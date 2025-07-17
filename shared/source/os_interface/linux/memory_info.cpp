@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -17,6 +17,7 @@
 #include "shared/source/os_interface/linux/numa_library.h"
 #include "shared/source/os_interface/product_helper.h"
 
+#include <algorithm>
 #include <iostream>
 
 namespace NEO {
@@ -27,10 +28,16 @@ MemoryInfo::MemoryInfo(const RegionContainer &regionInfo, const Drm &inputDrm)
     const auto memoryClassSystem = ioctlHelper->getDrmParamValue(DrmParam::memoryClassSystem);
     const auto memoryClassDevice = ioctlHelper->getDrmParamValue(DrmParam::memoryClassDevice);
     UNRECOVERABLE_IF(this->systemMemoryRegion.region.memoryClass != memoryClassSystem);
-    std::copy_if(drmQueryRegions.begin(), drmQueryRegions.end(), std::back_inserter(localMemoryRegions),
-                 [&](const MemoryRegion &memoryRegionInfo) {
-                     return (memoryRegionInfo.region.memoryClass == memoryClassDevice);
-                 });
+
+    std::ranges::copy_if(drmQueryRegions, std::back_inserter(localMemoryRegions),
+                         [memoryClassDevice](const MemoryRegion &memoryRegionInfo) {
+                             return (memoryRegionInfo.region.memoryClass == memoryClassDevice);
+                         });
+
+    smallBarDetected = std::ranges::any_of(localMemoryRegions,
+                                           [](const MemoryRegion &region) {
+                                               return (region.cpuVisibleSize && region.cpuVisibleSize < region.probedSize);
+                                           });
 
     populateTileToLocalMemoryRegionIndexMap();
 
@@ -96,6 +103,12 @@ uint32_t MemoryInfo::getLocalMemoryRegionIndex(DeviceBitfield deviceBitfield) co
     }
     UNRECOVERABLE_IF(tileIndex >= tileToLocalMemoryRegionIndexMap.size());
     return tileToLocalMemoryRegionIndexMap[tileIndex];
+}
+
+uint64_t MemoryInfo::getLocalMemoryRegionSize(uint32_t tileIndex) const {
+    UNRECOVERABLE_IF(tileIndex >= tileToLocalMemoryRegionIndexMap.size());
+    const auto regionIndex{tileToLocalMemoryRegionIndexMap[tileIndex]};
+    return localMemoryRegions[regionIndex].probedSize;
 }
 
 MemoryClassInstance MemoryInfo::getMemoryRegionClassAndInstance(DeviceBitfield deviceBitfield, const HardwareInfo &hwInfo) {

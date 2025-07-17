@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,17 +8,14 @@
 #include "level_zero/core/test/unit_tests/fixtures/memory_ipc_fixture.h"
 
 #include "shared/source/gmm_helper/gmm_helper.h"
-#include "shared/source/memory_manager/gfx_partition.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/mocks/mock_compilers.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 
 #include "level_zero/core/source/context/context_imp.h"
-#include "level_zero/core/source/device/device_imp.h"
 #include "level_zero/core/source/driver/driver_handle_imp.h"
+#include "level_zero/core/test/common/ult_helpers_l0.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_built_ins.h"
-#include "level_zero/core/test/unit_tests/mocks/mock_kernel.h"
 
 #include "gtest/gtest.h"
 
@@ -197,6 +194,7 @@ void MemoryExportImportWSLTest::SetUp() {
 }
 
 void MemoryExportImportWSLTest::TearDown() {
+    L0UltHelper::cleanupUsmAllocPoolsAndReuse(driverHandle.get());
     driverHandle->setMemoryManager(prevMemoryManager);
     delete currMemoryManager;
 }
@@ -507,6 +505,7 @@ NEO::GraphicsAllocation *MemoryManagerIpcImplicitScalingMock::createGraphicsAllo
 void MemoryExportImportImplicitScalingTest::SetUp() {
     DebugManagerStateRestore restorer;
     debugManager.flags.EnableImplicitScaling.set(1);
+    debugManager.flags.EnableWalkerPartition.set(1);
 
     neoDevice =
         NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get());
@@ -521,7 +520,7 @@ void MemoryExportImportImplicitScalingTest::SetUp() {
     driverHandle->setMemoryManager(currMemoryManager);
 
     prevSvmAllocsManager = driverHandle->svmAllocsManager;
-    currSvmAllocsManager = new NEO::SVMAllocsManager(currMemoryManager, false);
+    currSvmAllocsManager = new NEO::SVMAllocsManager(currMemoryManager);
     driverHandle->svmAllocsManager = currSvmAllocsManager;
 
     device = driverHandle->devices[0];
@@ -535,8 +534,39 @@ void MemoryExportImportImplicitScalingTest::SetUp() {
 }
 
 void MemoryExportImportImplicitScalingTest::TearDown() {
+    // cleanup pool before restoring svm manager
+    for (auto device : driverHandle->devices) {
+        device->getNEODevice()->cleanupUsmAllocationPool();
+        device->getNEODevice()->resetUsmAllocationPool(nullptr);
+    }
     driverHandle->svmAllocsManager = prevSvmAllocsManager;
     delete currSvmAllocsManager;
+    driverHandle->setMemoryManager(prevMemoryManager);
+    delete currMemoryManager;
+}
+
+void MemoryGetIpcHandlePidfdTest::SetUp() {
+    neoDevice =
+        NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get());
+    auto mockBuiltIns = new MockBuiltins();
+    MockRootDeviceEnvironment::resetBuiltins(neoDevice->executionEnvironment->rootDeviceEnvironments[0].get(), mockBuiltIns);
+    NEO::DeviceVector devices;
+    devices.push_back(std::unique_ptr<NEO::Device>(neoDevice));
+    driverHandle = std::make_unique<DriverHandleImp>();
+    driverHandle->initialize(std::move(devices));
+    prevMemoryManager = driverHandle->getMemoryManager();
+    currMemoryManager = new MemoryManagerOpenIpcMock(*neoDevice->executionEnvironment);
+    driverHandle->setMemoryManager(currMemoryManager);
+    device = driverHandle->devices[0];
+
+    context = std::make_unique<ContextImp>(driverHandle.get());
+    EXPECT_NE(context, nullptr);
+    context->getDevices().insert(std::make_pair(device->getRootDeviceIndex(), device->toHandle()));
+    auto neoDevice = device->getNEODevice();
+    context->rootDeviceIndices.pushUnique(neoDevice->getRootDeviceIndex());
+    context->deviceBitfields.insert({neoDevice->getRootDeviceIndex(), neoDevice->getDeviceBitfield()});
+}
+void MemoryGetIpcHandlePidfdTest::TearDown() {
     driverHandle->setMemoryManager(prevMemoryManager);
     delete currMemoryManager;
 }

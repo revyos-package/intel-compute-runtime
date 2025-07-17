@@ -30,7 +30,7 @@ class DeviceAllocNodeType {
 
     static constexpr size_t defaultAllocatorTagCount = 128;
 
-    static constexpr AllocationType getAllocationType() { return deviceAlloc ? NEO::AllocationType::timestampPacketTagBuffer : NEO::AllocationType::bufferHostMemory; }
+    static constexpr AllocationType getAllocationType() { return deviceAlloc ? NEO::AllocationType::gpuTimestampDeviceBuffer : NEO::AllocationType::timestampPacketTagBuffer; }
 
     static constexpr TagNodeType getTagNodeType() { return TagNodeType::counter64b; }
 
@@ -84,7 +84,9 @@ class InOrderExecInfo : public NEO::NonCopyableClass {
     void reset();
     bool isExternalMemoryExecInfo() const { return deviceCounterNode == nullptr; }
     void setLastWaitedCounterValue(uint64_t value) {
-        lastWaitedCounterValue = std::max(value, lastWaitedCounterValue);
+        if (!isExternalMemoryExecInfo()) {
+            lastWaitedCounterValue = std::max(value, lastWaitedCounterValue);
+        }
     }
 
     bool isCounterAlreadyDone(uint64_t waitValue) const {
@@ -111,7 +113,6 @@ class InOrderExecInfo : public NEO::NonCopyableClass {
 
     uint64_t counterValue = 0;
     uint64_t lastWaitedCounterValue = 0;
-
     uint64_t regularCmdListSubmissionCounter = 0;
     uint64_t deviceAddress = 0;
     uint64_t *hostAddress = nullptr;
@@ -140,7 +141,11 @@ enum class PatchCmdType {
     sdi,
     semaphore,
     walker,
-    pipeControl
+    pipeControl,
+    xyCopyBlt,
+    xyBlockCopyBlt,
+    xyColorBlt,
+    memSet
 };
 
 template <typename GfxFamily>
@@ -171,6 +176,12 @@ struct PatchCmd {
             break;
         case PatchCmdType::pipeControl:
             patchPipeControl(appendCounterValue);
+            break;
+        case PatchCmdType::xyCopyBlt:
+        case PatchCmdType::xyBlockCopyBlt:
+        case PatchCmdType::xyColorBlt:
+        case PatchCmdType::memSet:
+            patchBlitterCommand(appendCounterValue, patchCmdType);
             break;
         default:
             UNRECOVERABLE_IF(true);
@@ -217,6 +228,7 @@ struct PatchCmd {
     }
 
     void patchComputeWalker(uint64_t appendCounterValue);
+    void patchBlitterCommand(uint64_t appendCounterValue, PatchCmdType patchCmdType);
 
     void patchPipeControl(uint64_t appendCounterValue) {
         auto pcCmd = reinterpret_cast<typename GfxFamily::PIPE_CONTROL *>(cmd1);

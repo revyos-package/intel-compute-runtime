@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,42 +9,14 @@
 
 #include "shared/source/helpers/definitions/command_encoder_args.h"
 
+#include "level_zero/core/source/cmdlist/command_to_patch.h"
+
+#include "cmdlist_launch_params_ext.h"
+
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace L0 {
-
-struct CommandToPatch {
-    enum CommandType {
-        FrontEndState,
-        PauseOnEnqueueSemaphoreStart,
-        PauseOnEnqueueSemaphoreEnd,
-        PauseOnEnqueuePipeControlStart,
-        PauseOnEnqueuePipeControlEnd,
-        ComputeWalker,
-        SignalEventPostSyncPipeControl,
-        WaitEventSemaphoreWait,
-        TimestampEventPostSyncStoreRegMem,
-        CbEventTimestampPostSyncSemaphoreWait,
-        CbEventTimestampClearStoreDataImm,
-        CbWaitEventSemaphoreWait,
-        CbWaitEventLoadRegisterImm,
-        ComputeWalkerInlineDataScratch,
-        ComputeWalkerImplicitArgsScratch,
-        NoopSpace,
-        Invalid
-    };
-    void *pDestination = nullptr;
-    void *pCommand = nullptr;
-    size_t offset = 0;
-    CommandType type = Invalid;
-    size_t inOrderPatchListIndex = 0;
-    size_t patchSize = 0;
-    uint64_t baseAddress = 0;
-};
-
-using CommandToPatchContainer = std::vector<CommandToPatch>;
 
 struct CmdListKernelLaunchParams {
     void *outWalker = nullptr;
@@ -52,8 +24,10 @@ struct CmdListKernelLaunchParams {
     void *hostPayloadBuffer = nullptr;
     CommandToPatch *outSyncCommand = nullptr;
     CommandToPatchContainer *outListCommands = nullptr;
+    CmdListKernelLaunchParamsExt launchParamsExt{};
     size_t syncBufferPatchIndex = std::numeric_limits<size_t>::max();
     size_t regionBarrierPatchIndex = std::numeric_limits<size_t>::max();
+    size_t scratchAddressPatchIndex = std::numeric_limits<size_t>::max();
     uint32_t externalPerThreadScratchSize[2] = {0U, 0U};
     NEO::RequiredPartitionDim requiredPartitionDim = NEO::RequiredPartitionDim::none;
     NEO::RequiredDispatchWalkOrder requiredDispatchWalkOrder = NEO::RequiredDispatchWalkOrder::none;
@@ -67,6 +41,7 @@ struct CmdListKernelLaunchParams {
     bool isKernelSplitOperation = false;
     bool isBuiltInKernel = false;
     bool isDestinationAllocationInSystemMemory = false;
+    bool isDestinationAllocationImported = false;
     bool isHostSignalScopeEvent = false;
     bool isExpLaunchKernel = false;
     bool skipInOrderNonWalkerSignaling = false;
@@ -76,11 +51,6 @@ struct CmdListKernelLaunchParams {
     bool omitAddingEventResidency = false;
     bool omitAddingWaitEventsResidency = false;
     bool makeKernelCommandView = false;
-};
-
-struct CmdListMemoryCopyParams {
     bool relaxedOrderingDispatch = false;
-    bool forceDisableCopyOnlyInOrderSignaling = false;
-    bool copyOffloadAllowed = false;
 };
 } // namespace L0

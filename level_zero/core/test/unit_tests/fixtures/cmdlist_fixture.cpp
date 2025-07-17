@@ -7,17 +7,14 @@
 
 #include "level_zero/core/test/unit_tests/fixtures/cmdlist_fixture.h"
 
-#include "shared/source/built_ins/sip.h"
 #include "shared/source/command_container/cmdcontainer.h"
 #include "shared/source/command_container/implicit_scaling.h"
-#include "shared/source/helpers/bindless_heaps_helper.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/ray_tracing_helper.h"
 #include "shared/source/indirect_heap/indirect_heap.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/os_interface/os_interface.h"
-#include "shared/source/os_interface/product_helper.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_device.h"
 
@@ -130,7 +127,6 @@ void ModuleMutableCommandListFixture::setUpImpl() {
 
     commandList.reset(CommandList::whiteboxCast(CommandList::create(productFamily, device, engineGroupType, 0u, returnValue, false)));
     commandListImmediate.reset(CommandList::whiteboxCast(CommandList::createImmediate(productFamily, device, &queueDesc, false, engineGroupType, returnValue)));
-    commandListImmediate->isFlushTaskSubmissionEnabled = true;
 
     mockKernelImmData = std::make_unique<MockImmutableData>(0u);
     createModuleFromMockBinary(0u, false, mockKernelImmData.get());
@@ -170,12 +166,13 @@ void FrontEndCommandListFixtureInit::setUp(int32_t dispatchCmdBufferPrimary) {
 
     debugManager.flags.DispatchCmdlistCmdBufferPrimary.set(dispatchCmdBufferPrimary);
     debugManager.flags.EnableFrontEndTracking.set(1);
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
+
     ModuleMutableCommandListFixture::setUp(REVISION_B);
 }
 
 void CmdListPipelineSelectStateFixture::setUp() {
     debugManager.flags.EnablePipelineSelectTracking.set(1);
+    debugManager.flags.EnableFrontEndTracking.set(0);
     ModuleMutableCommandListFixture::setUp();
 
     auto result = ZE_RESULT_SUCCESS;
@@ -275,7 +272,6 @@ void CommandListGlobalHeapsFixtureInit::tearDown() {
 void ImmediateCmdListSharedHeapsFixture::setUp() {
     constexpr uint32_t storeAllocations = 4;
 
-    debugManager.flags.EnableFlushTaskSubmission.set(1);
     debugManager.flags.EnableImmediateCmdListHeapSharing.set(1);
     debugManager.flags.SelectCmdListHeapAddressModel.set(static_cast<int32_t>(NEO::HeapAddressModel::privateHeaps));
     debugManager.flags.SetAmountOfReusableAllocations.set(storeAllocations);
@@ -303,7 +299,9 @@ void ImmediateCmdListSharedHeapsFixture::setUp() {
         mockKernelImmData->kernelInfo->kernelDescriptor.payloadMappings.samplerTable.tableOffset = 16;
         mockKernelImmData->kernelInfo->kernelDescriptor.payloadMappings.samplerTable.borderColor = 0;
 
-        kernel->dynamicStateHeapDataSize = static_cast<uint32_t>(16 * 2 + mockKernelImmData->kernelInfo->kernelDescriptor.payloadMappings.samplerTable.tableOffset);
+        auto surfaceStateSize = device->getNEODevice()->getGfxCoreHelper().getSamplerStateSize();
+
+        kernel->dynamicStateHeapDataSize = static_cast<uint32_t>(surfaceStateSize * 2 + mockKernelImmData->kernelInfo->kernelDescriptor.payloadMappings.samplerTable.tableOffset);
         kernel->dynamicStateHeapData.reset(new uint8_t[kernel->dynamicStateHeapDataSize]);
 
         mockKernelImmData->mockKernelDescriptor->payloadMappings.samplerTable = mockKernelImmData->kernelInfo->kernelDescriptor.payloadMappings.samplerTable;
@@ -401,6 +399,9 @@ void ImmediateCmdListSharedHeapsFlushTaskFixtureInit::validateDispatchFlags(bool
 bool AppendFillFixture::MockDriverFillHandle::findAllocationDataForRange(const void *buffer,
                                                                          size_t size,
                                                                          NEO::SvmAllocationData *&allocData) {
+    if (forceFalseFromfindAllocationDataForRange) {
+        return false;
+    }
     mockAllocation.reset(new NEO::MockGraphicsAllocation(const_cast<void *>(buffer), size));
     data.gpuAllocations.addAllocation(mockAllocation.get());
     allocData = &data;
@@ -614,7 +615,6 @@ void CommandQueueThreadArbitrationPolicyFixture::setUp() {
 void CommandQueueThreadArbitrationPolicyFixture::tearDown() {
     commandList->destroy();
     commandQueue->destroy();
-    L0::globalDriver = nullptr;
 }
 
 void CommandListScratchPatchFixtureInit::setUpParams(int32_t globalStatelessMode, int32_t heaplessStateInitEnabled, bool scratchAddressPatchingEnabled) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -42,7 +42,9 @@ struct MockRootDeviceEnvironment : public RootDeviceEnvironment {
 
 struct MockExecutionEnvironment : ExecutionEnvironment {
     using ExecutionEnvironment::adjustCcsCountImpl;
+    using ExecutionEnvironment::configureCcsMode;
     using ExecutionEnvironment::directSubmissionController;
+    using ExecutionEnvironment::memoryManager;
     using ExecutionEnvironment::rootDeviceEnvironments;
 
     ~MockExecutionEnvironment() override = default;

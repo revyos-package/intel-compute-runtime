@@ -7,6 +7,7 @@
 
 #include "shared/test/common/mocks/mock_driver_info.h"
 #include "shared/test/common/mocks/mock_driver_model.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/test_macros/test.h"
 
 #include "level_zero/sysman/source/shared/linux/kmd_interface/sysman_kmd_interface.h"
@@ -33,8 +34,13 @@ inline static int mockStatFailure(const std::string &filePath, struct stat *stat
     return -1;
 }
 
-inline static int mockStatSuccess(const std::string &filePath, struct stat *statbuf) noexcept {
+inline static int mockStatFailure2(const std::string &filePath, struct stat *statbuf) noexcept {
     statbuf->st_mode = S_IWUSR | S_IRUSR;
+    return 0;
+}
+
+inline static int mockStatSuccess(const std::string &filePath, struct stat *statbuf) noexcept {
+    statbuf->st_mode = S_IWUSR | S_IRUSR | S_IFREG;
     return 0;
 }
 
@@ -235,6 +241,7 @@ TEST_F(SysmanDeviceFixture, GivenPublicFsAccessClassWhenCallingCanWriteWithInval
 
 TEST_F(SysmanDeviceFixture, GivenValidPathnameWhenCallingFsAccessExistsThenSuccessIsReturned) {
     VariableBackup<bool> allowFakeDevicePathBackup(&SysCalls::allowFakeDevicePath, true);
+    VariableBackup<decltype(NEO::SysCalls::sysCallsStat)> mockStat(&NEO::SysCalls::sysCallsStat, &mockStatSuccess);
     auto fsAccess = &pLinuxSysmanImp->getFsAccess();
 
     char cwd[PATH_MAX];
@@ -242,11 +249,36 @@ TEST_F(SysmanDeviceFixture, GivenValidPathnameWhenCallingFsAccessExistsThenSucce
     EXPECT_TRUE(fsAccess->fileExists(path));
 }
 
+TEST_F(SysmanDeviceFixture, GivenStatCallFailsWhenCallingFsAccessExistsThenErrorIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsStat)> mockStat(&NEO::SysCalls::sysCallsStat, &mockStatFailure);
+    auto fsAccess = &pLinuxSysmanImp->getSysfsAccess();
+
+    std::string path = "";
+    EXPECT_FALSE(fsAccess->fileExists(path));
+}
+
+TEST_F(SysmanDeviceFixture, GivenPathIsNotOfFileTypeWhenCallingFsAccessExistsThenErrorIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsStat)> mockStat(&NEO::SysCalls::sysCallsStat, &mockStatFailure2);
+    auto fsAccess = &pLinuxSysmanImp->getSysfsAccess();
+
+    std::string path = "";
+    EXPECT_FALSE(fsAccess->fileExists(path));
+}
+
 TEST_F(SysmanDeviceFixture, GivenInvalidPathnameWhenCallingFsAccessExistsThenErrorIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsStat)> mockStat(&NEO::SysCalls::sysCallsStat, &mockStatSuccess);
     auto fsAccess = &pLinuxSysmanImp->getFsAccess();
 
     std::string path = "noSuchFileOrDirectory";
     EXPECT_FALSE(fsAccess->fileExists(path));
+}
+
+TEST_F(SysmanDeviceFixture, GivenInvalidPathnameWhenCallingSysFsAccessScanDirEntriesThenErrorIsReturned) {
+    auto pSysFsAccess = &pLinuxSysmanImp->getSysfsAccess();
+
+    std::string path = "noSuchDirectory";
+    std::vector<std::string> listFiles;
+    EXPECT_NE(ZE_RESULT_SUCCESS, pSysFsAccess->scanDirEntries(path, listFiles));
 }
 
 TEST_F(SysmanDeviceFixture, GivenSysfsAccessClassAndIntegerWhenCallingReadOnMultipleFilesThenSuccessIsReturned) {
@@ -409,6 +441,7 @@ TEST_F(SysmanDeviceFixture, GivenSysfsAccessClassAndOpenSysCallFailsWhenCallingR
 }
 
 TEST_F(SysmanDeviceFixture, GivenValidPidWhenCallingProcfsAccessIsAliveThenSuccessIsReturned) {
+    VariableBackup<decltype(NEO::SysCalls::sysCallsStat)> mockStat(&NEO::SysCalls::sysCallsStat, &mockStatSuccess);
     VariableBackup<bool> allowFakeDevicePathBackup(&SysCalls::allowFakeDevicePath, true);
     auto procfsAccess = &pLinuxSysmanImp->getProcfsAccess();
 
@@ -497,6 +530,85 @@ TEST(SysmanErrorCodeTest, GivenDifferentErrorCodesWhenCallingGetResultThenVerify
     EXPECT_EQ(ZE_RESULT_ERROR_NOT_AVAILABLE, LinuxSysmanImp::getResult(ENOENT));
     EXPECT_EQ(ZE_RESULT_ERROR_HANDLE_OBJECT_IN_USE, LinuxSysmanImp::getResult(EBUSY));
     EXPECT_EQ(ZE_RESULT_ERROR_UNKNOWN, LinuxSysmanImp::getResult(EEXIST));
+}
+
+TEST_F(SysmanDeviceFixture, GivenValidDeviceHandleWithInvalidPciDomainWhenCallingGenerateUuidFromPciBusInfoThenFalseIsReturned) {
+    std::array<uint8_t, NEO::ProductHelper::uuidSize> uuid{};
+    NEO::PhysicalDevicePciBusInfo pciBusInfo = {};
+    pciBusInfo.pciDomain = std::numeric_limits<uint32_t>::max();
+    uint32_t subDeviceId = 0;
+    bool result = pLinuxSysmanImp->generateUuidFromPciAndSubDeviceInfo(subDeviceId, pciBusInfo, uuid);
+    EXPECT_FALSE(result);
+}
+
+TEST_F(SysmanDeviceFixture, GivenNullOsInterfaceObjectWhenRetrievingUuidsOfDeviceThenNoUuidsAreReturned) {
+    auto execEnv = new NEO::ExecutionEnvironment();
+    execEnv->prepareRootDeviceEnvironments(1);
+    execEnv->rootDeviceEnvironments[0]->setHwInfoAndInitHelpers(NEO::defaultHwInfo.get());
+    execEnv->rootDeviceEnvironments[0]->osInterface = std::make_unique<NEO::OSInterface>();
+    execEnv->rootDeviceEnvironments[0]->osInterface->setDriverModel(std::make_unique<NEO::MockDriverModel>());
+
+    auto pSysmanDeviceImp = std::make_unique<L0::Sysman::SysmanDeviceImp>(execEnv, 0);
+    auto pLinuxSysmanImp = static_cast<PublicLinuxSysmanImp *>(pSysmanDeviceImp->pOsSysman);
+
+    auto &rootDeviceEnvironment = (pLinuxSysmanImp->getSysmanDeviceImp()->getRootDeviceEnvironmentRef());
+    rootDeviceEnvironment.osInterface = nullptr;
+
+    std::vector<std::string> uuids;
+    pLinuxSysmanImp->getDeviceUuids(uuids);
+    EXPECT_EQ(0u, uuids.size());
+}
+
+TEST_F(SysmanDeviceFixture, GivenInvalidPciBusInfoWhenRetrievingUuidThenFalseIsReturned) {
+    DebugManagerStateRestore restore;
+    auto execEnv = new NEO::ExecutionEnvironment();
+    execEnv->prepareRootDeviceEnvironments(1);
+    execEnv->rootDeviceEnvironments[0]->setHwInfoAndInitHelpers(NEO::defaultHwInfo.get());
+    execEnv->rootDeviceEnvironments[0]->osInterface = std::make_unique<NEO::OSInterface>();
+
+    auto driverModel = std::make_unique<NEO::MockDriverModel>();
+    driverModel->pciSpeedInfo = {1, 1, 1};
+    PhysicalDevicePciBusInfo pciBusInfo = {};
+    pciBusInfo.pciDomain = std::numeric_limits<uint32_t>::max();
+    driverModel->pciBusInfo = pciBusInfo;
+    execEnv->rootDeviceEnvironments[0]->osInterface->setDriverModel(std::move(driverModel));
+
+    auto pSysmanDeviceImp = std::make_unique<L0::Sysman::SysmanDeviceImp>(execEnv, 0);
+    auto pLinuxSysmanImp = static_cast<PublicLinuxSysmanImp *>(pSysmanDeviceImp->pOsSysman);
+
+    debugManager.flags.EnableChipsetUniqueUUID.set(0);
+
+    std::array<uint8_t, NEO::ProductHelper::uuidSize> uuid{};
+    uint32_t subDeviceId = 0;
+    bool result = pLinuxSysmanImp->getUuidFromSubDeviceInfo(subDeviceId, uuid);
+    EXPECT_FALSE(result);
+}
+
+struct MockSysmanLinuxProductHelper : public ProductHelperHw<IGFX_UNKNOWN> {
+    MockSysmanLinuxProductHelper() = default;
+    bool getUuid(DriverModel *driverModel, const uint32_t subDeviceCount, const uint32_t deviceIndex, std::array<uint8_t, ProductHelper::uuidSize> &uuid) const override {
+        auto pDrm = driverModel->as<Drm>();
+        if (pDrm->getFileDescriptor() >= 0) {
+            return true;
+        }
+        return false;
+    }
+};
+
+TEST_F(SysmanDeviceFixture, GivenValidDeviceWhenRetrievingUuidThenValidFdIsVerifiedInProductHelper) {
+    std::unique_ptr<ProductHelper> mockProductHelper = std::make_unique<MockSysmanLinuxProductHelper>();
+    auto pSysmanDeviceImp = std::make_unique<L0::Sysman::SysmanDeviceImp>(execEnv, 0);
+    auto pLinuxSysmanImp = static_cast<PublicLinuxSysmanImp *>(pSysmanDeviceImp->pOsSysman);
+
+    auto &rootDeviceEnvironment = (pLinuxSysmanImp->getSysmanDeviceImp()->getRootDeviceEnvironmentRef());
+    std::swap(rootDeviceEnvironment.productHelper, mockProductHelper);
+
+    std::array<uint8_t, NEO::ProductHelper::uuidSize> uuid{};
+    uint32_t subDeviceId = 0;
+    bool result = pLinuxSysmanImp->getUuidFromSubDeviceInfo(subDeviceId, uuid);
+    EXPECT_TRUE(result);
+
+    std::swap(rootDeviceEnvironment.productHelper, mockProductHelper);
 }
 
 } // namespace ult

@@ -1,11 +1,10 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#pragma once
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_stream/linear_stream.h"
 #include "shared/source/helpers/gfx_core_helper.h"
@@ -23,11 +22,11 @@ size_t EncodeComputeMode<Family>::getCmdSizeForComputeMode(const RootDeviceEnvir
     std::ignore = isExtendedWARequired;
 
     if (isBasicWARequired) {
-        size += MemorySynchronizationCommands<Family>::getSizeForSingleBarrier(false);
+        size += MemorySynchronizationCommands<Family>::getSizeForSingleBarrier();
     }
     size += sizeof(typename Family::STATE_COMPUTE_MODE);
     if (hasSharedHandles) {
-        size += MemorySynchronizationCommands<Family>::getSizeForSingleBarrier(false);
+        size += MemorySynchronizationCommands<Family>::getSizeForStallingBarrier();
     }
     if (productHelper.is3DPipelineSelectWARequired() && isRcs) {
         size += (2 * PreambleHelper<Family>::getCmdSizeForPipelineSelect(rootDeviceEnvironment));

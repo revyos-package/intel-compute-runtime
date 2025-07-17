@@ -1,18 +1,13 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/test/common/mocks/mock_allocation_properties.h"
-#include "shared/test/common/test_macros/test.h"
 
 #include "opencl/source/built_ins/builtins_dispatch_builder.h"
-#include "opencl/source/command_queue/enqueue_fill_buffer.h"
-#include "opencl/source/command_queue/enqueue_kernel.h"
-#include "opencl/source/command_queue/enqueue_read_buffer.h"
-#include "opencl/source/command_queue/enqueue_write_buffer.h"
 #include "opencl/source/command_queue/gpgpu_walker.h"
 #include "opencl/source/event/event.h"
 #include "opencl/source/helpers/hardware_commands_helper.h"
@@ -21,11 +16,11 @@
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
 #include "opencl/test/unit_test/fixtures/buffer_fixture.h"
 #include "opencl/test/unit_test/fixtures/hello_world_kernel_fixture.h"
-#include "opencl/test/unit_test/fixtures/image_fixture.h"
 #include "opencl/test/unit_test/fixtures/simple_arg_kernel_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_event.h"
 
 using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 struct GetSizeRequiredBufferTest : public CommandEnqueueFixture,
                                    public SimpleArgKernelFixture,
@@ -62,6 +57,7 @@ struct GetSizeRequiredBufferTest : public CommandEnqueueFixture,
 };
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenFillingBufferThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -115,6 +111,7 @@ HWTEST_F(GetSizeRequiredBufferTest, WhenFillingBufferThenHeapsAndCommandBufferCo
 }
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenCopyingBufferThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -167,6 +164,7 @@ HWTEST_F(GetSizeRequiredBufferTest, WhenCopyingBufferThenHeapsAndCommandBufferCo
 }
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenReadingBufferNonBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -220,6 +218,7 @@ HWTEST_F(GetSizeRequiredBufferTest, WhenReadingBufferNonBlockingThenHeapsAndComm
 }
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenReadingBufferBlockingThenThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -274,6 +273,7 @@ HWTEST_F(GetSizeRequiredBufferTest, WhenReadingBufferBlockingThenThenHeapsAndCom
 }
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenWritingBufferNonBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -325,6 +325,7 @@ HWTEST_F(GetSizeRequiredBufferTest, WhenWritingBufferNonBlockingThenHeapsAndComm
 }
 
 HWTEST_F(GetSizeRequiredBufferTest, WhenWritingBufferBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -435,10 +436,11 @@ HWTEST_F(GetSizeRequiredBufferTest, GivenOutEventForMultiDeviceContextWhenCalcul
     auto baseCommandStreamSize = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_MARKER, {}, false, false, false, *pCmdQ, multiDispatchInfo, false, false, false, nullptr);
     auto extendedCommandStreamSize = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_MARKER, {}, false, false, false, *pCmdQ, multiDispatchInfo, false, false, false, &clEvent);
 
-    EXPECT_EQ(baseCommandStreamSize + MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(pContext.getDevices()[0]->getRootDeviceEnvironment(), false), extendedCommandStreamSize);
+    EXPECT_EQ(baseCommandStreamSize + MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(pContext.getDevices()[0]->getRootDeviceEnvironment(), NEO::PostSyncMode::immediateData), extendedCommandStreamSize);
 }
 
-HWTEST_F(GetSizeRequiredBufferTest, givenMultipleKernelRequiringSshWhenTotalSizeIsComputedThenItIsProperlyAligned) {
+HWTEST2_F(GetSizeRequiredBufferTest, givenMultipleKernelRequiringSshWhenTotalSizeIsComputedThenItIsProperlyAligned, IsHeapfulSupported) {
+    USE_REAL_FILE_SYSTEM();
     auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer,
                                                                             pCmdQ->getClDevice());
     ASSERT_NE(nullptr, &builder);

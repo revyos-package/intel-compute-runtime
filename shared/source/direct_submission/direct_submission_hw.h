@@ -10,6 +10,7 @@
 #include "shared/source/command_stream/queue_throttle.h"
 #include "shared/source/helpers/completion_stamp.h"
 #include "shared/source/helpers/constants.h"
+#include "shared/source/utilities/cpuintrinsics.h"
 #include "shared/source/utilities/stackvec.h"
 
 #include <memory>
@@ -24,10 +25,7 @@ struct RingSemaphoreData {
     uint8_t reservedCacheline0[60];
     uint32_t tagAllocation;
     uint8_t reservedCacheline1[60];
-    uint32_t diagnosticModeCounter;
-    uint32_t reserved0Uint32;
-    uint64_t reserved1Uint64;
-    uint8_t reservedCacheline2[48];
+    uint8_t reservedCacheline2[64];
     uint64_t miFlushSpace;
     uint8_t reservedCacheline3[56];
     uint32_t pagingFenceCounter;
@@ -55,7 +53,6 @@ inline constexpr bool defaultDisableMonitorFence = true;
 } // namespace UllsDefaults
 
 struct BatchBuffer;
-class DirectSubmissionDiagnosticsCollector;
 class FlushStampTracker;
 class GraphicsAllocation;
 struct HardwareInfo;
@@ -96,7 +93,7 @@ class DirectSubmissionHw {
         return relaxedOrderingEnabled;
     }
 
-    virtual void flushMonitorFence(){};
+    virtual void flushMonitorFence(bool notifyKmd){};
 
     QueueThrottle getLastSubmittedThrottle() {
         return this->lastSubmittedThrottle;
@@ -106,14 +103,35 @@ class DirectSubmissionHw {
     uint32_t getRelaxedOrderingQueueSize() const { return currentRelaxedOrderingQueueSize; }
 
   protected:
+    struct SemaphoreFenceHelper : public NonCopyableAndNonMovableClass {
+        SemaphoreFenceHelper(const auto &directSubmission) : directSubmission(directSubmission) {
+            if (directSubmission.sfenceMode >= DirectSubmissionSfenceMode::beforeSemaphoreOnly) {
+                if (!directSubmission.miMemFenceRequired && !directSubmission.pciBarrierPtr && !directSubmission.hwInfo->capabilityTable.isIntegratedDevice) {
+                    CpuIntrinsics::mfence();
+                } else {
+                    CpuIntrinsics::sfence();
+                }
+            }
+        }
+        ~SemaphoreFenceHelper() {
+            if (directSubmission.sfenceMode == DirectSubmissionSfenceMode::beforeAndAfterSemaphore) {
+                CpuIntrinsics::sfence();
+            }
+        }
+
+        const DirectSubmissionHw<GfxFamily, Dispatcher> &directSubmission;
+    };
+
     static constexpr size_t prefetchSize = 8 * MemoryConstants::cacheLineSize;
     static constexpr size_t prefetchNoops = prefetchSize / sizeof(uint32_t);
     bool allocateResources();
     MOCKABLE_VIRTUAL void deallocateResources();
     MOCKABLE_VIRTUAL bool makeResourcesResident(DirectSubmissionAllocations &allocations);
-    virtual bool allocateOsResources() = 0;
-    virtual bool submit(uint64_t gpuAddress, size_t size) = 0;
+    virtual bool allocateOsResources();
+    virtual bool submit(uint64_t gpuAddress, size_t size, const ResidencyContainer *allocationsForResidency) = 0;
     virtual bool handleResidency() = 0;
+    virtual void handleRingRestartForUllsLightResidency(const ResidencyContainer *allocationsForResidency){};
+    virtual void handleResidencyContainerForUllsLightNewRingAllocation(ResidencyContainer *allocationsForResidency){};
     void handleNewResourcesSubmission();
     bool isNewResourceHandleNeeded();
     size_t getSizeNewResourceHandler();
@@ -122,14 +140,15 @@ class DirectSubmissionHw {
     void switchRingBuffersNeeded(size_t size, ResidencyContainer *allocationsForResidency);
     uint64_t switchRingBuffers(ResidencyContainer *allocationsForResidency);
     virtual void handleSwitchRingBuffers(ResidencyContainer *allocationsForResidency) = 0;
-    GraphicsAllocation *switchRingBuffersAllocations();
+    GraphicsAllocation *switchRingBuffersAllocations(ResidencyContainer *allocationsForResidency);
 
     constexpr static uint64_t updateTagValueFail = std::numeric_limits<uint64_t>::max();
     virtual uint64_t updateTagValue(bool requireMonitorFence) = 0;
     virtual bool dispatchMonitorFenceRequired(bool requireMonitorFence);
     virtual void getTagAddressValue(TagData &tagData) = 0;
+    virtual void getTagAddressValueForRingSwitch(TagData &tagData) = 0;
     void unblockGpu();
-    bool submitCommandBufferToGpu(bool needStart, uint64_t gpuAddress, size_t size, bool needWait);
+    bool submitCommandBufferToGpu(bool needStart, uint64_t gpuAddress, size_t size, bool needWait, const ResidencyContainer *allocationsForResidency);
     bool copyCommandBufferIntoRing(BatchBuffer &batchBuffer);
 
     void cpuCachelineFlush(void *ptr, size_t size);
@@ -182,12 +201,11 @@ class DirectSubmissionHw {
     void dispatchSystemMemoryFenceAddress();
     size_t getSizeSystemMemoryFenceAddress();
 
-    void createDiagnostic();
-    void initDiagnostic(bool &submitOnInit);
-    MOCKABLE_VIRTUAL void performDiagnosticMode();
-    void dispatchDiagnosticModeSection();
-    size_t getDiagnosticModeSection();
     void setImmWritePostSyncOffset();
+    virtual void dispatchStopRingBufferSection(){};
+    virtual size_t dispatchStopRingBufferSectionSize() {
+        return 0;
+    };
 
     virtual bool isCompleted(uint32_t ringBufferIndex) = 0;
 
@@ -196,11 +214,12 @@ class DirectSubmissionHw {
     virtual void makeGlobalFenceAlwaysResident(){};
     struct RingBufferUse {
         RingBufferUse() = default;
-        RingBufferUse(FlushStamp completionFence, GraphicsAllocation *ringBuffer) : completionFence(completionFence), ringBuffer(ringBuffer){};
+        RingBufferUse(FlushStamp completionFence, FlushStamp completionFenceForSwitch, GraphicsAllocation *ringBuffer) : completionFence(completionFence), completionFenceForSwitch(completionFenceForSwitch), ringBuffer(ringBuffer){};
 
         constexpr static uint32_t initialRingBufferCount = 2u;
 
         FlushStamp completionFence = 0ull;
+        FlushStamp completionFenceForSwitch = 0ull;
         GraphicsAllocation *ringBuffer = nullptr;
     };
     std::vector<RingBufferUse> ringBuffers;
@@ -211,7 +230,6 @@ class DirectSubmissionHw {
     uint32_t maxRingBufferCount = std::numeric_limits<uint32_t>::max();
 
     LinearStream ringCommandStream;
-    std::unique_ptr<DirectSubmissionDiagnosticsCollector> diagnostic;
 
     uint64_t semaphoreGpuVa = 0u;
     uint64_t gpuVaForMiFlush = 0u;
@@ -233,12 +251,10 @@ class DirectSubmissionHw {
     GraphicsAllocation *relaxedOrderingSchedulerAllocation = nullptr;
     void *semaphorePtr = nullptr;
     volatile RingSemaphoreData *semaphoreData = nullptr;
-    volatile void *workloadModeOneStoreAddress = nullptr;
     uint32_t *pciBarrierPtr = nullptr;
+    volatile TagAddressType *tagAddress;
 
     uint32_t currentQueueWorkCount = 1u;
-    uint32_t workloadMode = 0;
-    uint32_t workloadModeOneExpectedValue = 0u;
     uint32_t activeTiles = 1u;
     uint32_t immWritePostSyncOffset = 0u;
     uint32_t currentRelaxedOrderingQueueSize = 0;
@@ -263,5 +279,6 @@ class DirectSubmissionHw {
     bool relaxedOrderingInitialized = false;
     bool relaxedOrderingSchedulerRequired = false;
     bool inputMonitorFenceDispatchRequirement = true;
+    bool notifyKmdDuringMonitorFence = false;
 };
 } // namespace NEO

@@ -16,7 +16,7 @@
 #include "shared/test/unit_test/os_interface/product_helper_tests.h"
 
 #include "aubstream/product_family.h"
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 
 using namespace NEO;
 
@@ -53,15 +53,11 @@ ADLNTEST_F(AdlnHwInfo, givenBoolWhenCallAdlnHardwareInfoSetupThenFeatureTableAnd
 
         EXPECT_EQ(setParamBool, featureTable.flags.ftrGpGpuMidBatchPreempt);
         EXPECT_EQ(setParamBool, featureTable.flags.ftrGpGpuThreadGroupLevelPreempt);
+        EXPECT_FALSE(featureTable.flags.ftrHeaplessMode);
 
         EXPECT_EQ(setParamBool, workaroundTable.flags.wa4kAlignUVOffsetNV12LinearSurface);
         EXPECT_EQ(setParamBool, workaroundTable.flags.waUntypedBufferCompression);
     }
-}
-
-ADLNTEST_F(AdlnHwInfo, whenPlatformIsAdlnThenExpectSvmIsSet) {
-    const HardwareInfo &hardwareInfo = ADLN::hwInfo;
-    EXPECT_TRUE(hardwareInfo.capabilityTable.ftrSvm);
 }
 
 using AdlnProductHelper = ProductHelperTest;

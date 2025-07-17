@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,10 +9,12 @@
 #include "shared/source/os_interface/sys_calls_common.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <iostream>
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace NEO {
 namespace SysCalls {
@@ -54,5 +56,8 @@ struct dirent *readdir(DIR *dir);
 int closedir(DIR *dir);
 off_t lseek(int fd, off_t offset, int whence) noexcept;
 long sysconf(int name);
+int mkfifo(const char *pathname, mode_t mode);
+int pidfdopen(pid_t pid, unsigned int flags);
+int pidfdgetfd(int pidfd, int targetfd, unsigned int flags);
 } // namespace SysCalls
 } // namespace NEO

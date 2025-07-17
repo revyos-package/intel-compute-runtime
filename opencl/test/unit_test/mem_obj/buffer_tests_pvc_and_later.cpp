@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,7 +9,6 @@
 #include "shared/source/helpers/bit_helpers.h"
 #include "shared/source/memory_manager/gfx_partition.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/test_macros/hw_test.h"
 #include "shared/test/common/utilities/base_object_utils.h"
@@ -21,6 +20,10 @@
 #include "opencl/test/unit_test/mocks/mock_cl_device.h"
 #include "opencl/test/unit_test/mocks/mock_context.h"
 #include "opencl/test/unit_test/mocks/mock_platform.h"
+
+namespace NEO {
+class Device;
+} // namespace NEO
 
 using namespace NEO;
 
@@ -114,10 +117,6 @@ HWTEST2_F(PvcAndLaterBufferTests, givenCompressedBufferInSystemAndBlitterSupport
     UltClDeviceFactory deviceFactory{1, 0};
     auto pDevice = deviceFactory.rootDevices[0];
     auto pMockContext = std::make_unique<MockContext>(pDevice);
-
-    if (pDevice->getProductHelper().isDcFlushMitigated()) {
-        debugManager.flags.AllowDcFlush.set(1);
-    }
 
     static_cast<MockMemoryManager *>(pDevice->getExecutionEnvironment()->memoryManager.get())->enable64kbpages[0] = true;
     static_cast<MockMemoryManager *>(pDevice->getExecutionEnvironment()->memoryManager.get())->localMemorySupported[0] = false;

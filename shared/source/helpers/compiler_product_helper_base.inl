@@ -5,8 +5,6 @@
  *
  */
 
-#pragma once
-
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/helpers/cache_policy.h"
 #include "shared/source/helpers/compiler_product_helper.h"
@@ -17,6 +15,9 @@
 #include "shared/source/release_helper/release_helper.h"
 
 namespace NEO {
+
+template <PRODUCT_FAMILY gfxProduct>
+CompilerProductHelperHw<gfxProduct>::CompilerProductHelperHw() = default;
 
 template <PRODUCT_FAMILY gfxProduct>
 bool CompilerProductHelperHw<gfxProduct>::isMidThreadPreemptionSupported(const HardwareInfo &hwInfo) const {
@@ -138,26 +139,6 @@ std::string CompilerProductHelperHw<gfxProduct>::getDeviceExtensions(const Hardw
         extensions += "cl_intel_packed_yuv ";
     }
 
-    auto supportsVme = hwInfo.capabilityTable.supportsVme;
-    if (debugManager.flags.EnableIntelVme.get() != -1) {
-        supportsVme = !!debugManager.flags.EnableIntelVme.get();
-    }
-
-    if (supportsVme) {
-        extensions += "cl_intel_motion_estimation cl_intel_device_side_avc_motion_estimation ";
-        if (ocl21FeaturesEnabled) {
-            extensions += "cl_intel_spirv_device_side_avc_motion_estimation ";
-        }
-    }
-
-    auto supportsAdvancedVme = hwInfo.capabilityTable.supportsVme;
-    if (debugManager.flags.EnableIntelAdvancedVme.get() != -1) {
-        supportsAdvancedVme = !!debugManager.flags.EnableIntelAdvancedVme.get();
-    }
-    if (supportsAdvancedVme) {
-        extensions += "cl_intel_advanced_motion_estimation ";
-    }
-
     if (hwInfo.capabilityTable.ftrSupportsInteger64BitAtomics) {
         extensions += "cl_khr_int64_base_atomics ";
         extensions += "cl_khr_int64_extended_atomics ";
@@ -243,7 +224,7 @@ StackVec<OclCVersion, 5> CompilerProductHelperHw<gfxProduct>::getDeviceOpenCLCVe
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool CompilerProductHelperHw<gfxProduct>::isHeaplessModeEnabled() const {
+bool CompilerProductHelperHw<gfxProduct>::isHeaplessModeEnabled(const HardwareInfo &hwInfo) const {
     return false;
 }
 
@@ -329,13 +310,31 @@ bool CompilerProductHelperHw<gfxProduct>::isBindlessAddressingDisabled(const Rel
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+bool CompilerProductHelperHw<gfxProduct>::isForceBindlessRequired(const HardwareInfo &hwInfo) const {
+    return this->isHeaplessModeEnabled(hwInfo);
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 const char *CompilerProductHelperHw<gfxProduct>::getCustomIgcLibraryName() const {
+    if (debugManager.flags.IgcLibraryName.get() != "unk") {
+        return debugManager.flags.IgcLibraryName.getRef().c_str();
+    }
     return nullptr;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool CompilerProductHelperHw<gfxProduct>::useIgcAsFcl() const {
+    return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
 const char *CompilerProductHelperHw<gfxProduct>::getFinalizerLibraryName() const {
     return nullptr;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+IGC::CodeType::CodeType_t CompilerProductHelperHw<gfxProduct>::getPreferredIntermediateRepresentation() const {
+    return IGC::CodeType::spirV;
 }
 
 } // namespace NEO

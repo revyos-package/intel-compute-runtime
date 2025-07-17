@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -18,9 +18,18 @@
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+
+#ifndef SYS_pidfd_getfd
+#define SYS_pidfd_getfd 438
+#endif
 
 namespace NEO {
 
@@ -184,11 +193,24 @@ int closedir(DIR *dir) {
     return ::closedir(dir);
 }
 
+int pidfdopen(pid_t pid, unsigned int flags) {
+    long retval = ::syscall(SYS_pidfd_open, pid, flags);
+    return static_cast<int>(retval);
+}
+
+int pidfdgetfd(int pidfd, int targetfd, unsigned int flags) {
+    long retval = ::syscall(SYS_pidfd_getfd, pidfd, targetfd, flags);
+    return static_cast<int>(retval);
+}
+
 off_t lseek(int fd, off_t offset, int whence) noexcept {
     return ::lseek(fd, offset, whence);
 }
 long sysconf(int name) {
     return ::sysconf(name);
+}
+int mkfifo(const char *pathname, mode_t mode) {
+    return ::mkfifo(pathname, mode);
 }
 } // namespace SysCalls
 } // namespace NEO

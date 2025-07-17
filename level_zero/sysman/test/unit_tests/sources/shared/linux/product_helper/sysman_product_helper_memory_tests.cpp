@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -1019,23 +1019,17 @@ HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCal
             memcpy(buf, validOobmsmGuid.data(), count);
         } else if (fd == 6) {
             switch (offset) {
-            case 368:
+            case 376:
                 count = (readFailCount == 2) ? -1 : sizeof(uint32_t);
                 break;
-            case 372:
+            case 380:
                 count = (readFailCount == 3) ? -1 : sizeof(uint32_t);
                 break;
-            case 376:
+            case 392:
                 count = (readFailCount == 4) ? -1 : sizeof(uint32_t);
                 break;
-            case 380:
-                count = (readFailCount == 5) ? -1 : sizeof(uint32_t);
-                break;
-            case 392:
-                count = (readFailCount == 6) ? -1 : sizeof(uint32_t);
-                break;
             case 396:
-                count = (readFailCount == 7) ? -1 : sizeof(uint32_t);
+                count = (readFailCount == 5) ? -1 : sizeof(uint32_t);
                 break;
             case 3688:
                 memcpy(buf, &mockMsuBitMask, count);
@@ -1053,7 +1047,7 @@ HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCal
     uint32_t subdeviceId = 0;
     auto pSysmanProductHelper = L0::Sysman::SysmanProductHelper::create(defaultHwInfo->platform.eProductFamily);
     zes_mem_bandwidth_t memBandwidth;
-    while (readFailCount <= 7) {
+    while (readFailCount <= 5) {
         EXPECT_EQ(ZE_RESULT_ERROR_NOT_AVAILABLE, pSysmanProductHelper->getMemoryBandwidth(&memBandwidth, pLinuxSysmanImp, subdeviceId));
         readFailCount++;
     }
@@ -1091,12 +1085,14 @@ HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCal
 }
 
 HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCallingGetMemoryBandwidthThenValidValuesAreReturned, IsBMG) {
-    static uint32_t readCounterUpper = 0x3;
-    static uint32_t readCounterLower = 0xc;
-    static uint32_t writeCounterUpper = 0xe;
-    static uint32_t writeCounterLower = 0xa;
-    static uint32_t timeStampUpper = 0xb;
-    static uint32_t timeStampLower = 0x6;
+    static uint32_t readCounterUpper32Bit = 0x3;
+    static uint32_t readCounterLower32Bit = 0xc;
+    static uint32_t readCounterUpper64Bit = 0x4;
+    static uint32_t readCounterLower64Bit = 0xd;
+    static uint32_t writeCounterUpper32Bit = 0xe;
+    static uint32_t writeCounterLower32Bit = 0xa;
+    static uint32_t writeCounterUpper64Bit = 0xf;
+    static uint32_t writeCounterLower64Bit = 0xb;
     static uint32_t vramBandwidth = 0x6abc0000;
 
     VariableBackup<decltype(NEO::SysCalls::sysCallsReadlink)> mockReadLink(&NEO::SysCalls::sysCallsReadlink, &mockReadLinkSuccess);
@@ -1115,23 +1111,29 @@ HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCal
             memcpy(buf, validOobmsmGuid.data(), count);
         } else if (fd == 6) {
             switch (offset) {
-            case 368:
-                memcpy(buf, &timeStampUpper, count);
-                break;
-            case 372:
-                memcpy(buf, &timeStampLower, count);
-                break;
             case 376:
-                memcpy(buf, &readCounterUpper, count);
+                memcpy(buf, &readCounterUpper32Bit, count);
                 break;
             case 380:
-                memcpy(buf, &readCounterLower, count);
+                memcpy(buf, &readCounterLower32Bit, count);
+                break;
+            case 384:
+                memcpy(buf, &readCounterUpper64Bit, count);
+                break;
+            case 388:
+                memcpy(buf, &readCounterLower64Bit, count);
                 break;
             case 392:
-                memcpy(buf, &writeCounterUpper, count);
+                memcpy(buf, &writeCounterUpper32Bit, count);
                 break;
             case 396:
-                memcpy(buf, &writeCounterLower, count);
+                memcpy(buf, &writeCounterLower32Bit, count);
+                break;
+            case 400:
+                memcpy(buf, &writeCounterUpper64Bit, count);
+                break;
+            case 404:
+                memcpy(buf, &writeCounterLower64Bit, count);
                 break;
             case 3688:
                 memcpy(buf, &mockMsuBitMask, count);
@@ -1155,21 +1157,22 @@ HWTEST2_F(SysmanProductHelperMemoryTest, GivenSysmanProductHelperInstanceWhenCal
     zes_mem_bandwidth_t memBandwidth;
     EXPECT_EQ(ZE_RESULT_SUCCESS, pSysmanProductHelper->getMemoryBandwidth(&memBandwidth, pLinuxSysmanImp, subdeviceId));
 
-    uint64_t outputReadCounter = packInto64Bit(readCounterUpper, readCounterLower);
-    outputReadCounter = (outputReadCounter * transactionSize) / microFactor;
-    EXPECT_EQ(outputReadCounter, memBandwidth.readCounter);
+    uint64_t outputReadCounter32Bit = packInto64Bit(readCounterUpper32Bit, readCounterLower32Bit);
+    outputReadCounter32Bit *= 32;
+    uint64_t outputReadCounter64Bit = packInto64Bit(readCounterUpper64Bit, readCounterLower64Bit);
+    outputReadCounter64Bit *= 64;
+    EXPECT_EQ((outputReadCounter32Bit + outputReadCounter64Bit), memBandwidth.readCounter);
 
-    uint64_t outputWriteCounter = packInto64Bit(writeCounterUpper, writeCounterLower);
-    outputWriteCounter = (outputWriteCounter * transactionSize) / microFactor;
-    EXPECT_EQ(outputWriteCounter, memBandwidth.writeCounter);
-
-    uint64_t outputTimestamp = packInto64Bit(timeStampUpper, timeStampLower) * milliSecsToMicroSecs;
-    EXPECT_EQ(outputTimestamp, memBandwidth.timestamp);
+    uint64_t outputWriteCounter32Bit = packInto64Bit(writeCounterUpper32Bit, writeCounterLower32Bit) * 32;
+    uint64_t outputWriteCounter64Bit = packInto64Bit(writeCounterUpper64Bit, writeCounterLower64Bit) * 64;
+    EXPECT_EQ((outputWriteCounter32Bit + outputWriteCounter64Bit), memBandwidth.writeCounter);
 
     uint64_t outputMaxBandwidth = vramBandwidth;
     outputMaxBandwidth = outputMaxBandwidth >> 16;
     outputMaxBandwidth = static_cast<uint64_t>(outputMaxBandwidth) * megaBytesToBytes * 100;
     EXPECT_EQ(outputMaxBandwidth, memBandwidth.maxBandwidth);
+
+    EXPECT_GT(memBandwidth.timestamp, 0u);
 }
 
 } // namespace ult

@@ -39,6 +39,7 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     using MemoryManager::defaultEngineIndex;
     using MemoryManager::externalLocalMemoryUsageBankSelector;
     using MemoryManager::getAllocationData;
+    using MemoryManager::getLocalOnlyRequired;
     using MemoryManager::gfxPartitions;
     using MemoryManager::internalLocalMemoryUsageBankSelector;
     using MemoryManager::isNonSvmBuffer;
@@ -46,10 +47,13 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     using MemoryManager::overrideAllocationData;
     using MemoryManager::pageFaultManager;
     using MemoryManager::prefetchManager;
+    using MemoryManager::singleTemporaryAllocationsList;
     using MemoryManager::supportsMultiStorageResources;
+    using MemoryManager::temporaryAllocations;
     using MemoryManager::unMapPhysicalDeviceMemoryFromVirtualMemory;
     using MemoryManager::unMapPhysicalHostMemoryFromVirtualMemory;
     using MemoryManager::useNonSvmHostPtrAlloc;
+    using MemoryManager::usmReuseInfo;
     using OsAgnosticMemoryManager::allocateGraphicsMemoryForImageFromHostPtr;
     using MemoryManagerCreate<OsAgnosticMemoryManager>::MemoryManagerCreate;
     using MemoryManager::customHeapAllocators;
@@ -152,8 +156,13 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
         OsAgnosticMemoryManager::unlockResourceImpl(gfxAllocation);
     }
 
-    bool allocInUse(GraphicsAllocation &graphicsAllocation) override {
+    bool allocInUse(GraphicsAllocation &graphicsAllocation) const override {
         allocInUseCalled++;
+
+        if (callBaseAllocInUse) {
+            return OsAgnosticMemoryManager::allocInUse(graphicsAllocation);
+        }
+
         if (deferAllocInUse) {
             return true;
         }
@@ -212,10 +221,35 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
         return MemoryManager::setMemAdvise(gfxAllocation, flags, rootDeviceIndex);
     }
 
+    bool setSharedSystemMemAdvise(const void *ptr, const size_t size, MemAdvise memAdviseOp, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override {
+        setSharedSystemMemAdviseCalledCount++;
+        setSharedSystemMemAdviseCalled = true;
+        if (failSetSharedSystemMemAdvise) {
+            return false;
+        }
+        return MemoryManager::setSharedSystemMemAdvise(ptr, size, memAdviseOp, subDeviceIds, rootDeviceIndex);
+    }
+
     bool setMemPrefetch(GraphicsAllocation *gfxAllocation, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override {
         memPrefetchSubDeviceIds = subDeviceIds;
         setMemPrefetchCalled = true;
+        setMemPrefetchCalledCount++;
         return MemoryManager::setMemPrefetch(gfxAllocation, subDeviceIds, rootDeviceIndex);
+    }
+
+    bool setSharedSystemAtomicAccess(const void *ptr, const size_t size, AtomicAccessMode mode, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override {
+        setSharedSystemAtomicAccessCalledCount++;
+        setSharedSystemAtomicAccessCalled = true;
+        if (failSetSharedSystemAtomicAccess) {
+            return false;
+        }
+        return MemoryManager::setSharedSystemAtomicAccess(ptr, size, mode, subDeviceIds, rootDeviceIndex);
+    }
+
+    bool prefetchSharedSystemAlloc(const void *ptr, const size_t size, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) override {
+        memPrefetchSubDeviceIds = subDeviceIds;
+        prefetchSharedSystemAllocCalled = true;
+        return MemoryManager::prefetchSharedSystemAlloc(ptr, size, subDeviceIds, rootDeviceIndex);
     }
 
     bool hasPageFaultsEnabled(const Device &neoDevice) override;
@@ -301,7 +335,7 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     uint32_t unlockResourceCalled = 0u;
     uint32_t lockResourceCalled = 0u;
     uint32_t createGraphicsAllocationFromExistingStorageCalled = 0u;
-    uint32_t allocInUseCalled = 0u;
+    mutable uint32_t allocInUseCalled = 0u;
     uint32_t registerIpcExportedAllocationCalled = 0;
     int32_t overrideAllocateAsPackReturn = -1;
     std::vector<GraphicsAllocation *> allocationsFromExistingStorage{};
@@ -312,6 +346,9 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     uint32_t handleFenceCompletionCalled = 0u;
     uint32_t waitForEnginesCompletionCalled = 0u;
     uint32_t allocateGraphicsMemoryWithPropertiesCount = 0;
+    uint32_t setMemPrefetchCalledCount = 0;
+    uint32_t setSharedSystemMemAdviseCalledCount = 0;
+    uint32_t setSharedSystemAtomicAccessCalledCount = 0;
     osHandle capturedSharedHandle = 0u;
     bool allocationCreated = false;
     bool allocation64kbPageCreated = false;
@@ -329,7 +366,12 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     bool failAllocate32Bit = false;
     bool failLockResource = false;
     bool failSetMemAdvise = false;
+    bool failSetSharedSystemMemAdvise = false;
+    bool failSetSharedSystemAtomicAccess = false;
+    bool setSharedSystemMemAdviseCalled = false;
     bool setMemPrefetchCalled = false;
+    bool setSharedSystemAtomicAccessCalled = false;
+    bool prefetchSharedSystemAllocCalled = false;
     bool cpuCopyRequired = false;
     bool forceCompressed = false;
     bool forceFailureInPrimaryAllocation = false;
@@ -338,6 +380,7 @@ class MockMemoryManager : public MemoryManagerCreate<OsAgnosticMemoryManager> {
     bool singleFailureInAllocationWithHostPointer = false;
     bool isMockHostMemoryManager = false;
     bool deferAllocInUse = false;
+    bool callBaseAllocInUse = false;
     bool isMockEventPoolCreateMemoryManager = false;
     bool limitedGPU = false;
     bool returnFakeAllocation = false;

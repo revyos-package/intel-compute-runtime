@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -15,29 +15,32 @@
 namespace NEO {
 struct MockSVMAllocsManager : public SVMAllocsManager {
   public:
+    using SVMAllocsManager::insertSVMAlloc;
     using SVMAllocsManager::memoryManager;
     using SVMAllocsManager::mtxForIndirectAccess;
-    using SVMAllocsManager::multiOsContextSupport;
     using SVMAllocsManager::svmAllocs;
     using SVMAllocsManager::SVMAllocsManager;
     using SVMAllocsManager::svmDeferFreeAllocs;
     using SVMAllocsManager::svmMapOperations;
     using SVMAllocsManager::usmDeviceAllocationsCache;
-    using SVMAllocsManager::usmDeviceAllocationsCacheEnabled;
     using SVMAllocsManager::usmHostAllocationsCache;
-    using SVMAllocsManager::usmHostAllocationsCacheEnabled;
 
-    void prefetchMemory(Device &device, CommandStreamReceiver &commandStreamReceiver, SvmAllocationData &svmData) override {
-        SVMAllocsManager::prefetchMemory(device, commandStreamReceiver, svmData);
+    void prefetchMemory(Device &device, CommandStreamReceiver &commandStreamReceiver, const void *ptr, const size_t size) override {
+        SVMAllocsManager::prefetchMemory(device, commandStreamReceiver, ptr, size);
         prefetchMemoryCalled = true;
     }
     bool prefetchMemoryCalled = false;
 
     void *createUnifiedMemoryAllocation(size_t size, const UnifiedMemoryProperties &memoryProperties) override {
         requestedZeroedOutAllocation = memoryProperties.isInternalAllocation;
-        return SVMAllocsManager::createUnifiedMemoryAllocation(size, memoryProperties);
+        if (createUnifiedMemoryAllocationCallBase) {
+            return SVMAllocsManager::createUnifiedMemoryAllocation(size, memoryProperties);
+        }
+        return createUnifiedMemoryAllocationReturnValue;
     }
     bool requestedZeroedOutAllocation = false;
+    bool createUnifiedMemoryAllocationCallBase = true;
+    void *createUnifiedMemoryAllocationReturnValue = nullptr;
 };
 
 template <bool enableLocalMemory>
@@ -45,13 +48,9 @@ struct SVMMemoryAllocatorFixture {
     SVMMemoryAllocatorFixture() : executionEnvironment(defaultHwInfo.get()) {}
 
     void setUp() {
-        bool svmSupported = executionEnvironment.rootDeviceEnvironments[0]->getHardwareInfo()->capabilityTable.ftrSvm;
-        if (!svmSupported) {
-            GTEST_SKIP();
-        }
         executionEnvironment.initGmm();
         memoryManager = std::make_unique<MockMemoryManager>(false, enableLocalMemory, executionEnvironment);
-        svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager.get(), false);
+        svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager.get());
         if (enableLocalMemory) {
             memoryManager->pageFaultManager.reset(new MockPageFaultManager);
         }

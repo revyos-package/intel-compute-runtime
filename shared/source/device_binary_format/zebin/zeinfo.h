@@ -8,6 +8,7 @@
 #pragma once
 
 #include "shared/source/device_binary_format/yaml/yaml_parser.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/utilities/const_stringref.h"
 
 #include <array>
@@ -61,6 +62,9 @@ inline constexpr ConstStringRef workGroupWalkOrderDimensions("work_group_walk_or
 inline constexpr ConstStringRef threadSchedulingMode("thread_scheduling_mode");
 inline constexpr ConstStringRef hasSample("has_sample");
 inline constexpr ConstStringRef actualKernelStartOffset("actual_kernel_start_offset");
+inline constexpr ConstStringRef requireImplicitArgBuffer("require_iab");
+inline constexpr ConstStringRef hasLscStoresWithNonDefaultL1CacheControls("has_lsc_stores_with_non_default_l1_cache_controls");
+
 namespace ThreadSchedulingMode {
 inline constexpr ConstStringRef ageBased("age_based");
 inline constexpr ConstStringRef roundRobin("round_robin");
@@ -79,6 +83,7 @@ inline constexpr ConstStringRef invalidKernel("invalid_kernel");
 inline constexpr ConstStringRef vecTypeHint("vec_type_hint");
 inline constexpr ConstStringRef workgroupSizeHint("work_group_size_hint");
 inline constexpr ConstStringRef hintSuffix("_hint");
+inline constexpr ConstStringRef intelReqdThreadgroupDispatchSize("intel_reqd_thread_group_dispatch_size");
 } // namespace Attributes
 
 namespace DebugEnv {
@@ -133,6 +138,7 @@ inline constexpr ConstStringRef regionGroupDimension("region_group_dimension");
 inline constexpr ConstStringRef regionGroupWgCount("region_group_wg_count");
 inline constexpr ConstStringRef regionGroupBarrierBuffer("region_group_barrier_buffer");
 inline constexpr ConstStringRef inlineSampler("inline_sampler");
+inline constexpr ConstStringRef bufferSize("buffer_size");
 
 namespace Image {
 inline constexpr ConstStringRef width("image_width");
@@ -354,6 +360,8 @@ using SpillSizeT = int32_t;
 using LocalRegionSizeT = int32_t;
 using WalkOrderT = int32_t;
 using PartitionDimT = int32_t;
+using RequireImplicitArgBufferT = bool;
+using HasLscStoresWithNonDefaultL1CacheControlsT = bool;
 
 namespace Defaults {
 inline constexpr BarrierCountT barrierCount = 0;
@@ -388,6 +396,8 @@ inline constexpr SpillSizeT spillSize = 0;
 inline constexpr LocalRegionSizeT localRegionSize = -1;
 inline constexpr WalkOrderT dispatchWalkOrder = -1;
 inline constexpr PartitionDimT partitionDim = -1;
+inline constexpr RequireImplicitArgBufferT requireImplicitArgBuffer = false;
+inline constexpr HasLscStoresWithNonDefaultL1CacheControlsT hasLscStoresWithNonDefaultL1CacheControls = false;
 } // namespace Defaults
 
 inline constexpr ConstStringRef required[] = {
@@ -398,7 +408,7 @@ struct ExecutionEnvExt;
 ExecutionEnvExt *allocateExecEnvExt();
 void freeExecEnvExt(ExecutionEnvExt *);
 
-struct ExecutionEnvBaseT final {
+struct ExecutionEnvBaseT final : NEO::NonCopyableAndNonMovableClass {
     ExecutionEnvBaseT() {
         execEnvExt = allocateExecEnvExt();
     }
@@ -438,7 +448,11 @@ struct ExecutionEnvBaseT final {
     LocalRegionSizeT localRegionSize = Defaults::localRegionSize;
     WalkOrderT dispatchWalkOrder = Defaults::dispatchWalkOrder;
     PartitionDimT partitionDim = Defaults::partitionDim;
+    RequireImplicitArgBufferT requireImplicitArgBuffer = Defaults::requireImplicitArgBuffer;
+    HasLscStoresWithNonDefaultL1CacheControlsT hasLscStoresWithNonDefaultL1CacheControls = Defaults::hasLscStoresWithNonDefaultL1CacheControls;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<ExecutionEnvBaseT>);
 
 struct ExperimentalPropertiesBaseT {
     HasNonKernelArgLoadT hasNonKernelArgLoad = Defaults::hasNonKernelArgLoad;
@@ -455,12 +469,14 @@ using ReqdWorkgroupSizeT = std::array<int32_t, 3>;
 using InvalidKernelT = ConstStringRef;
 using WorkgroupSizeHint = std::array<int32_t, 3>;
 using VecTypeHintT = ConstStringRef;
+using IntelReqdThreadgroupDispatchSizeT = int32_t;
 
 namespace Defaults {
 inline constexpr IntelReqdSubgroupSizeT intelReqdSubgroupSize = 0;
 inline constexpr IntelReqdWorkgroupWalkOrder intelReqdWorkgroupWalkOrder = {0, 0, 0};
 inline constexpr ReqdWorkgroupSizeT reqdWorkgroupSize = {0, 0, 0};
 inline constexpr WorkgroupSizeHint workgroupSizeHint = {0, 0, 0};
+inline constexpr IntelReqdThreadgroupDispatchSizeT intelReqdThreadgroupDispatchSize = 0;
 } // namespace Defaults
 
 struct AttributesBaseT {
@@ -470,6 +486,7 @@ struct AttributesBaseT {
     std::optional<InvalidKernelT> invalidKernel;
     std::optional<WorkgroupSizeHint> workgroupSizeHint;
     std::optional<VecTypeHintT> vecTypeHint;
+    std::optional<IntelReqdThreadgroupDispatchSizeT> intelReqdThreadgroupDispatchSize;
     std::vector<std::pair<ConstStringRef, ConstStringRef>> otherHints;
 };
 } // namespace Attributes
@@ -537,6 +554,7 @@ enum ArgType : uint8_t {
     argTypeRegionGroupWgCount,
     argTypeRegionGroupBarrierBuffer,
     argTypeInlineSampler,
+    argTypeBufferSize,
     argTypeMax
 };
 

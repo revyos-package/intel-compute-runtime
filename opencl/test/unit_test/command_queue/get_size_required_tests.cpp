@@ -1,20 +1,14 @@
 /*
- * Copyright (C) 2018-2023 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/built_ins/built_ins.h"
 #include "shared/source/command_container/command_encoder.h"
-#include "shared/test/common/test_macros/test.h"
 
-#include "opencl/source/command_queue/command_queue_hw.h"
-#include "opencl/source/command_queue/enqueue_barrier.h"
-#include "opencl/source/command_queue/enqueue_marker.h"
 #include "opencl/source/event/event.h"
 #include "opencl/test/unit_test/command_queue/command_enqueue_fixture.h"
-#include "opencl/test/unit_test/mocks/mock_context.h"
 
 using namespace NEO;
 
@@ -72,9 +66,9 @@ HWTEST_F(GetSizeRequiredTest, WhenEnqueuingMarkerThenHeapsAndCommandBufferAreNot
     EXPECT_EQ(CL_SUCCESS, retVal);
 
     size_t expectedStreamSize = 0;
-    if (pCmdQ->getGpgpuCommandStreamReceiver().peekTimestampPacketWriteEnabled()) {
+    if (pCmdQ->getGpgpuCommandStreamReceiver().peekTimestampPacketWriteEnabled() && (!pCmdQ->getGpgpuCommandStreamReceiver().isUpdateTagFromWaitEnabled())) {
         expectedStreamSize = alignUp(MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(
-                                         pDevice->getRootDeviceEnvironment(), false),
+                                         pDevice->getRootDeviceEnvironment(), NEO::PostSyncMode::immediateData),
                                      MemoryConstants::cacheLineSize);
     }
     EXPECT_EQ(expectedStreamSize, commandStream.getUsed() - usedBeforeCS);
@@ -100,7 +94,7 @@ HWTEST_F(GetSizeRequiredTest, WhenEnqueuingBarrierThenHeapsAndCommandBufferAreNo
 
     size_t expectedStreamSize = 0;
     if (pCmdQ->getGpgpuCommandStreamReceiver().peekTimestampPacketWriteEnabled()) {
-        auto unalignedSize = MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(pDevice->getRootDeviceEnvironment(), false) +
+        auto unalignedSize = MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(pDevice->getRootDeviceEnvironment(), NEO::PostSyncMode::immediateData) +
                              EncodeStoreMemory<FamilyType>::getStoreDataImmSize() +
                              sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
         expectedStreamSize = alignUp(unalignedSize, MemoryConstants::cacheLineSize);

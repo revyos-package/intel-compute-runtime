@@ -1,11 +1,11 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/helpers/compiler_aot_config_bdw_and_later.inl"
+#include "shared/source/helpers/compiler_aot_config_tgllp_and_later.inl"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/compiler_product_helper_base.inl"
 #include "shared/source/helpers/compiler_product_helper_before_xe_hp.inl"
@@ -14,7 +14,7 @@
 #include "shared/source/helpers/compiler_product_helper_product_config_default.inl"
 #include "shared/source/helpers/compiler_product_helper_tgllp_and_later.inl"
 
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 
 namespace NEO {
 template <>

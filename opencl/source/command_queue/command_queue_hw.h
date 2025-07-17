@@ -243,6 +243,16 @@ class CommandQueueHw : public CommandQueue {
                              const cl_event *eventWaitList,
                              cl_event *event) override;
 
+    cl_int enqueueReadBufferImpl(Buffer *buffer,
+                                 cl_bool blockingRead,
+                                 size_t offset,
+                                 size_t size,
+                                 void *ptr,
+                                 GraphicsAllocation *mapAllocation,
+                                 cl_uint numEventsInWaitList,
+                                 const cl_event *eventWaitList,
+                                 cl_event *event, CommandStreamReceiver &csr) override;
+
     cl_int enqueueReadBufferRect(Buffer *buffer,
                                  cl_bool blockingRead,
                                  const size_t *bufferOrigin,
@@ -479,7 +489,6 @@ class CommandQueueHw : public CommandQueue {
   protected:
     MOCKABLE_VIRTUAL void enqueueHandlerHook(const unsigned int commandType, const MultiDispatchInfo &dispatchInfo){};
     MOCKABLE_VIRTUAL bool prepareCsrDependency(CsrDependencies &csrDeps, CsrDependencyContainer &dependencyTags, TimestampPacketDependencies &timestampPacketDependencies, TagAllocatorBase *allocator, bool blockQueue);
-    size_t calculateHostPtrSizeForImage(const size_t *region, size_t rowPitch, size_t slicePitch, Image *image);
 
     cl_int enqueueReadWriteBufferOnCpuWithMemoryTransfer(cl_command_type commandType, Buffer *buffer,
                                                          size_t offset, size_t size, void *ptr, cl_uint numEventsInWaitList,
@@ -546,9 +555,10 @@ class CommandQueueHw : public CommandQueue {
                                    CsrDependencies &csrDeps,
                                    KernelOperation *blockedCommandsData,
                                    TimestampPacketDependencies &timestampPacketDependencies,
-                                   bool relaxedOrderingEnabled);
+                                   bool relaxedOrderingEnabled,
+                                   bool blocking);
 
-    MOCKABLE_VIRTUAL bool isGpgpuSubmissionForBcsRequired(bool queueBlocked, TimestampPacketDependencies &timestampPacketDependencies, bool containsCrossEngineDependency) const;
+    MOCKABLE_VIRTUAL bool isGpgpuSubmissionForBcsRequired(bool queueBlocked, TimestampPacketDependencies &timestampPacketDependencies, bool containsCrossEngineDependency, bool textureCacheFlushRequired) const;
     void setupEvent(EventBuilder &eventBuilder, cl_event *outEvent, uint32_t cmdType);
 
     bool isBlitAuxTranslationRequired(const MultiDispatchInfo &multiDispatchInfo);

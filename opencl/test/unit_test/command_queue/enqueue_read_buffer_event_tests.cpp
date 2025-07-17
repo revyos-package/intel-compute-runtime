@@ -1,10 +1,11 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
+#include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/helpers/local_memory_access_modes.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 
@@ -12,7 +13,6 @@
 #include "opencl/source/event/event.h"
 #include "opencl/test/unit_test/fixtures/buffer_fixture.h"
 #include "opencl/test/unit_test/fixtures/hello_world_fixture.h"
-#include "opencl/test/unit_test/mocks/mock_cl_device.h"
 
 #include "gtest/gtest.h"
 
@@ -341,9 +341,14 @@ TEST_F(EnqueueReadBuffer, givenOutOfOrderQueueAndDisabledSupportCpuCopiesAndDstP
     ASSERT_NE(nullptr, event);
 
     auto pEvent = castToObject<Event>(event);
-    if (pCmdOOQ->getGpgpuCommandStreamReceiver().peekTimestampPacketWriteEnabled()) {
-        EXPECT_EQ(taskLevelEvent2 + 1, pCmdOOQ->taskLevel);
-        EXPECT_EQ(taskLevelEvent2 + 1, pEvent->taskLevel);
+    auto &csr = pCmdOOQ->getGpgpuCommandStreamReceiver();
+    if (csr.peekTimestampPacketWriteEnabled()) {
+        auto taskLevel = taskLevelEvent2;
+        if (!csr.isUpdateTagFromWaitEnabled()) {
+            taskLevel++;
+        }
+        EXPECT_EQ(taskLevel, pCmdOOQ->taskLevel);
+        EXPECT_EQ(taskLevel, pEvent->taskLevel);
     } else {
         EXPECT_EQ(19u, pCmdOOQ->taskLevel);
         EXPECT_EQ(19u, pEvent->taskLevel);

@@ -59,7 +59,6 @@
 #include "opencl/source/kernel/kernel_info_cl.h"
 #include "opencl/source/mem_obj/buffer.h"
 #include "opencl/source/mem_obj/image.h"
-#include "opencl/source/mem_obj/pipe.h"
 #include "opencl/source/memory_manager/mem_obj_surface.h"
 #include "opencl/source/program/program.h"
 #include "opencl/source/sampler/sampler.h"
@@ -82,7 +81,8 @@ Kernel::Kernel(Program *programArg, const KernelInfo &kernelInfoArg, ClDevice &c
     : executionEnvironment(programArg->getExecutionEnvironment()),
       program(programArg),
       clDevice(clDeviceArg),
-      kernelInfo(kernelInfoArg) {
+      kernelInfo(kernelInfoArg),
+      isBuiltIn(programArg->getIsBuiltIn()) {
     program->retain();
     program->retainForKernel();
     auto &deviceInfo = getDevice().getDevice().getDeviceInfo();
@@ -93,6 +93,7 @@ Kernel::Kernel(Program *programArg, const KernelInfo &kernelInfoArg, ClDevice &c
         maxKernelWorkGroupSize = static_cast<uint32_t>(deviceInfo.maxWorkGroupSize);
     }
     slmTotalSize = kernelInfoArg.kernelDescriptor.kernelAttributes.slmInlineSize;
+    this->implicitArgsVersion = getDevice().getGfxCoreHelper().getImplicitArgsVersion();
 }
 
 Kernel::~Kernel() {
@@ -205,9 +206,8 @@ cl_int Kernel::initialize() {
     if (kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs) {
         pImplicitArgs = std::make_unique<ImplicitArgs>();
         *pImplicitArgs = {};
-        pImplicitArgs->structSize = ImplicitArgs::getSize();
-        pImplicitArgs->structVersion = 0;
-        pImplicitArgs->simdWidth = maxSimdSize;
+        pImplicitArgs->initializeHeader(this->implicitArgsVersion);
+        pImplicitArgs->setSimdWidth(maxSimdSize);
     }
     auto ret = KernelHelper::checkIfThereIsSpaceForScratchOrPrivate(kernelDescriptor.kernelAttributes, &pClDevice->getDevice());
     if (ret == NEO::KernelHelper::ErrorCode::invalidKernel) {
@@ -246,7 +246,7 @@ cl_int Kernel::initialize() {
     // allocate our own SSH, if necessary
     sshLocalSize = heapInfo.surfaceStateHeapSize;
     if (sshLocalSize) {
-        pSshLocal = std::make_unique<char[]>(sshLocalSize);
+        pSshLocal = std::make_unique_for_overwrite<char[]>(sshLocalSize);
 
         // copy the ssh into our local copy
         memcpy_s(pSshLocal.get(), sshLocalSize,
@@ -436,7 +436,7 @@ cl_int Kernel::cloneKernel(Kernel *pSourceKernel) {
             break;
         case SVM_ALLOC_OBJ:
             setArgSvmAlloc(i, const_cast<void *>(pSourceKernel->getKernelArgInfo(i).value),
-                           (GraphicsAllocation *)pSourceKernel->getKernelArgInfo(i).object,
+                           reinterpret_cast<GraphicsAllocation *>(pSourceKernel->getKernelArgInfo(i).object),
                            pSourceKernel->getKernelArgInfo(i).allocId);
             break;
         case BUFFER_OBJ:
@@ -457,7 +457,7 @@ cl_int Kernel::cloneKernel(Kernel *pSourceKernel) {
     }
 
     if (pImplicitArgs) {
-        memcpy_s(pImplicitArgs.get(), ImplicitArgs::getSize(), pSourceKernel->getImplicitArgs(), ImplicitArgs::getSize());
+        memcpy_s(pImplicitArgs.get(), pImplicitArgs->getSize(), pSourceKernel->getImplicitArgs(), pImplicitArgs->getSize());
     }
     this->isBuiltIn = pSourceKernel->isBuiltIn;
 
@@ -732,13 +732,13 @@ cl_int Kernel::getSubGroupInfo(cl_kernel_sub_group_info paramName,
     }
     case CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE_KHR: {
         for (size_t i = 0; i < numDimensions; i++) {
-            wgs *= ((size_t *)inputValue)[i];
+            wgs *= reinterpret_cast<const size_t *>(inputValue)[i];
         }
         return changeGetInfoStatusToCLResultType(
             info.set<size_t>((wgs / maxSimdSize) + std::min(static_cast<size_t>(1), wgs % maxSimdSize))); // add 1 if WGS % maxSimdSize != 0
     }
     case CL_KERNEL_LOCAL_SIZE_FOR_SUB_GROUP_COUNT: {
-        auto subGroupsNum = *(size_t *)inputValue;
+        auto subGroupsNum = *reinterpret_cast<const size_t *>(inputValue);
         auto workGroupSize = subGroupsNum * largestCompiledSIMDSize;
         // return workgroup size in first dimension, the rest shall be 1 in positive case
         if (workGroupSize > maxRequiredWorkGroupSize) {
@@ -1208,7 +1208,7 @@ inline void Kernel::makeArgsResident(CommandStreamReceiver &commandStreamReceive
     for (decltype(numArgs) argIndex = 0; argIndex < numArgs; argIndex++) {
         if (kernelArguments[argIndex].object) {
             if (kernelArguments[argIndex].type == SVM_ALLOC_OBJ) {
-                auto pSVMAlloc = (GraphicsAllocation *)kernelArguments[argIndex].object;
+                auto pSVMAlloc = reinterpret_cast<GraphicsAllocation *>(kernelArguments[argIndex].object);
                 auto pageFaultManager = executionEnvironment.memoryManager->getPageFaultManager();
                 if (pageFaultManager &&
                     this->isUnifiedMemorySyncRequired) {
@@ -1231,88 +1231,10 @@ inline void Kernel::makeArgsResident(CommandStreamReceiver &commandStreamReceive
     }
 }
 
-void Kernel::performKernelTuning(CommandStreamReceiver &commandStreamReceiver, const Vec3<size_t> &lws, const Vec3<size_t> &gws, const Vec3<size_t> &offsets, TimestampPacketContainer *timestampContainer) {
-    auto performTunning = TunningType::disabled;
-
-    if (debugManager.flags.EnableKernelTunning.get() != -1) {
-        performTunning = static_cast<TunningType>(debugManager.flags.EnableKernelTunning.get());
-    }
-
-    if (performTunning == TunningType::full) {
-        KernelConfig config{gws, lws, offsets};
-
-        auto submissionDataIt = this->kernelSubmissionMap.find(config);
-        if (submissionDataIt == this->kernelSubmissionMap.end()) {
-            KernelSubmissionData submissionData;
-            submissionData.kernelStandardTimestamps = std::make_unique<TimestampPacketContainer>();
-            submissionData.kernelSubdeviceTimestamps = std::make_unique<TimestampPacketContainer>();
-            submissionData.status = TunningStatus::standardTunningInProgress;
-            submissionData.kernelStandardTimestamps->assignAndIncrementNodesRefCounts(*timestampContainer);
-            this->kernelSubmissionMap[config] = std::move(submissionData);
-            this->singleSubdevicePreferredInCurrentEnqueue = false;
-            return;
-        }
-
-        auto &submissionData = submissionDataIt->second;
-
-        if (submissionData.status == TunningStatus::tunningDone) {
-            this->singleSubdevicePreferredInCurrentEnqueue = submissionData.singleSubdevicePreferred;
-        }
-
-        if (submissionData.status == TunningStatus::subdeviceTunningInProgress) {
-            if (this->hasTunningFinished(submissionData)) {
-                submissionData.status = TunningStatus::tunningDone;
-                submissionData.kernelStandardTimestamps.reset();
-                submissionData.kernelSubdeviceTimestamps.reset();
-                this->singleSubdevicePreferredInCurrentEnqueue = submissionData.singleSubdevicePreferred;
-            } else {
-                this->singleSubdevicePreferredInCurrentEnqueue = false;
-            }
-        }
-
-        if (submissionData.status == TunningStatus::standardTunningInProgress) {
-            submissionData.status = TunningStatus::subdeviceTunningInProgress;
-            submissionData.kernelSubdeviceTimestamps->assignAndIncrementNodesRefCounts(*timestampContainer);
-            this->singleSubdevicePreferredInCurrentEnqueue = true;
-        }
-    }
-}
-
-bool Kernel::hasTunningFinished(KernelSubmissionData &submissionData) {
-    if (!this->hasRunFinished(submissionData.kernelStandardTimestamps.get()) ||
-        !this->hasRunFinished(submissionData.kernelSubdeviceTimestamps.get())) {
-        return false;
-    }
-
-    uint64_t globalStartTS = 0u;
-    uint64_t globalEndTS = 0u;
-
-    Event::getBoundaryTimestampValues(submissionData.kernelStandardTimestamps.get(), globalStartTS, globalEndTS);
-    auto standardTSDiff = globalEndTS - globalStartTS;
-
-    Event::getBoundaryTimestampValues(submissionData.kernelSubdeviceTimestamps.get(), globalStartTS, globalEndTS);
-    auto subdeviceTSDiff = globalEndTS - globalStartTS;
-
-    submissionData.singleSubdevicePreferred = standardTSDiff > subdeviceTSDiff;
-
-    return true;
-}
-
-bool Kernel::hasRunFinished(TimestampPacketContainer *timestampContainer) {
-    for (const auto &node : timestampContainer->peekNodes()) {
-        for (uint32_t i = 0; i < node->getPacketsUsed(); i++) {
-            if (node->getContextEndValue(i) == 1) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 bool Kernel::isSingleSubdevicePreferred() const {
     auto &gfxCoreHelper = this->getGfxCoreHelper();
 
-    return this->singleSubdevicePreferredInCurrentEnqueue || gfxCoreHelper.singleTileExecImplicitScalingRequired(this->usesSyncBuffer());
+    return gfxCoreHelper.singleTileExecImplicitScalingRequired(this->usesSyncBuffer());
 }
 
 void Kernel::setInlineSamplers() {
@@ -1453,7 +1375,7 @@ void Kernel::getResidency(std::vector<Surface *> &dst) {
                     this->isUnifiedMemorySyncRequired) {
                     needsMigration = true;
                 }
-                auto pSVMAlloc = (GraphicsAllocation *)kernelArguments[argIndex].object;
+                auto pSVMAlloc = reinterpret_cast<GraphicsAllocation *>(kernelArguments[argIndex].object);
                 dst.push_back(new GeneralSurface(pSVMAlloc, needsMigration));
             } else if (Kernel::isMemObj(kernelArguments[argIndex].type)) {
                 auto clMem = const_cast<cl_mem>(static_cast<const _cl_mem *>(kernelArguments[argIndex].object));
@@ -1528,6 +1450,7 @@ cl_int Kernel::setArgBuffer(uint32_t argIndex,
 
     const auto &arg = kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[argIndex];
     const auto &argAsPtr = arg.as<ArgDescPointer>();
+    patch<int64_t, int64_t>(0, crossThreadData, argAsPtr.bufferSize);
 
     if (clMem && *clMem) {
         auto clMemObj = *clMem;
@@ -1540,10 +1463,14 @@ cl_int Kernel::setArgBuffer(uint32_t argIndex,
             return CL_INVALID_MEM_OBJECT;
         }
 
+        patch<int64_t, int64_t>(static_cast<int64_t>(buffer->getSize()), getCrossThreadData(), argAsPtr.bufferSize);
+
         auto gfxAllocationType = buffer->getGraphicsAllocation(rootDeviceIndex)->getAllocationType();
         if (!isBuiltIn) {
             this->anyKernelArgumentUsingSystemMemory |= Kernel::graphicsAllocationTypeUseSystemMemory(gfxAllocationType);
         }
+
+        this->anyKernelArgumentUsingZeroCopyMemory |= buffer->isMemObjZeroCopy();
 
         if (buffer->peekSharingHandler()) {
             usingSharedObjArgs = true;
@@ -1625,47 +1552,7 @@ cl_int Kernel::setArgPipe(uint32_t argIndex,
         return CL_INVALID_ARG_SIZE;
     }
 
-    auto clMem = reinterpret_cast<const cl_mem *>(argVal);
-
-    if (clMem && *clMem) {
-        auto clMemObj = *clMem;
-        DBG_LOG_INPUTS("setArgPipe cl_mem", clMemObj);
-
-        storeKernelArg(argIndex, PIPE_OBJ, clMemObj, argVal, argSize);
-
-        auto memObj = castToObject<MemObj>(clMemObj);
-        if (!memObj) {
-            return CL_INVALID_MEM_OBJECT;
-        }
-
-        auto pipe = castToObject<Pipe>(clMemObj);
-        if (!pipe) {
-            return CL_INVALID_ARG_VALUE;
-        }
-
-        if (memObj->getContext() != &(this->getContext())) {
-            return CL_INVALID_MEM_OBJECT;
-        }
-
-        auto rootDeviceIndex = getDevice().getRootDeviceIndex();
-        const auto &argAsPtr = kernelInfo.kernelDescriptor.payloadMappings.explicitArgs[argIndex].as<ArgDescPointer>();
-
-        auto patchLocation = ptrOffset(getCrossThreadData(), argAsPtr.stateless);
-        pipe->setPipeArg(patchLocation, argAsPtr.pointerSize, rootDeviceIndex);
-
-        if (isValidOffset(argAsPtr.bindful)) {
-            auto graphicsAllocation = pipe->getGraphicsAllocation(rootDeviceIndex);
-            auto surfaceState = ptrOffset(getSurfaceStateHeap(), argAsPtr.bindful);
-            Buffer::setSurfaceState(&getDevice().getDevice(), surfaceState, false, false,
-                                    pipe->getSize(), pipe->getCpuAddress(), 0,
-                                    graphicsAllocation, 0, 0,
-                                    areMultipleSubDevicesInContext());
-        }
-
-        return CL_SUCCESS;
-    } else {
-        return CL_INVALID_MEM_OBJECT;
-    }
+    return CL_INVALID_MEM_OBJECT;
 }
 
 cl_int Kernel::setArgImage(uint32_t argIndex,
@@ -1912,10 +1799,10 @@ bool Kernel::hasPrintfOutput() const {
 
 void Kernel::resetSharedObjectsPatchAddresses() {
     for (size_t i = 0; i < getKernelArgsNumber(); i++) {
-        auto clMem = (cl_mem)kernelArguments[i].object;
+        auto clMem = kernelArguments[i].object;
         auto memObj = castToObject<MemObj>(clMem);
         if (memObj && memObj->peekSharingHandler()) {
-            setArg((uint32_t)i, sizeof(cl_mem), &clMem);
+            setArg(static_cast<uint32_t>(i), sizeof(cl_mem), &clMem);
         }
     }
 }
@@ -2275,7 +2162,7 @@ const HardwareInfo &Kernel::getHardwareInfo() const {
 void Kernel::setWorkDim(uint32_t workDim) {
     patchNonPointer<uint32_t, uint32_t>(getCrossThreadDataRef(), getDescriptor().payloadMappings.dispatchTraits.workDim, workDim);
     if (pImplicitArgs) {
-        pImplicitArgs->numWorkDim = workDim;
+        pImplicitArgs->setNumWorkDim(workDim);
     }
 }
 
@@ -2284,9 +2171,7 @@ void Kernel::setGlobalWorkOffsetValues(uint32_t globalWorkOffsetX, uint32_t glob
                        getDescriptor().payloadMappings.dispatchTraits.globalWorkOffset,
                        {globalWorkOffsetX, globalWorkOffsetY, globalWorkOffsetZ});
     if (pImplicitArgs) {
-        pImplicitArgs->globalOffsetX = globalWorkOffsetX;
-        pImplicitArgs->globalOffsetY = globalWorkOffsetY;
-        pImplicitArgs->globalOffsetZ = globalWorkOffsetZ;
+        pImplicitArgs->setGlobalOffset(globalWorkOffsetX, globalWorkOffsetY, globalWorkOffsetZ);
     }
 }
 
@@ -2295,9 +2180,7 @@ void Kernel::setGlobalWorkSizeValues(uint32_t globalWorkSizeX, uint32_t globalWo
                        getDescriptor().payloadMappings.dispatchTraits.globalWorkSize,
                        {globalWorkSizeX, globalWorkSizeY, globalWorkSizeZ});
     if (pImplicitArgs) {
-        pImplicitArgs->globalSizeX = globalWorkSizeX;
-        pImplicitArgs->globalSizeY = globalWorkSizeY;
-        pImplicitArgs->globalSizeZ = globalWorkSizeZ;
+        pImplicitArgs->setGlobalSize(globalWorkSizeX, globalWorkSizeY, globalWorkSizeZ);
     }
 }
 
@@ -2306,9 +2189,7 @@ void Kernel::setLocalWorkSizeValues(uint32_t localWorkSizeX, uint32_t localWorkS
                        getDescriptor().payloadMappings.dispatchTraits.localWorkSize,
                        {localWorkSizeX, localWorkSizeY, localWorkSizeZ});
     if (pImplicitArgs) {
-        pImplicitArgs->localSizeX = localWorkSizeX;
-        pImplicitArgs->localSizeY = localWorkSizeY;
-        pImplicitArgs->localSizeZ = localWorkSizeZ;
+        pImplicitArgs->setLocalSize(localWorkSizeX, localWorkSizeY, localWorkSizeZ);
     }
 }
 
@@ -2329,9 +2210,7 @@ void Kernel::setNumWorkGroupsValues(uint32_t numWorkGroupsX, uint32_t numWorkGro
                        getDescriptor().payloadMappings.dispatchTraits.numWorkGroups,
                        {numWorkGroupsX, numWorkGroupsY, numWorkGroupsZ});
     if (pImplicitArgs) {
-        pImplicitArgs->groupCountX = numWorkGroupsX;
-        pImplicitArgs->groupCountY = numWorkGroupsY;
-        pImplicitArgs->groupCountZ = numWorkGroupsZ;
+        pImplicitArgs->setGroupCount(numWorkGroupsX, numWorkGroupsY, numWorkGroupsZ);
     }
 }
 
@@ -2356,11 +2235,9 @@ bool Kernel::areMultipleSubDevicesInContext() const {
 void Kernel::reconfigureKernel() {
     const auto &kernelDescriptor = kernelInfo.kernelDescriptor;
     const auto &gfxCoreHelper = this->getGfxCoreHelper();
-    auto maxWorkGroupSize = gfxCoreHelper.calculateMaxWorkGroupSize(kernelDescriptor, this->maxKernelWorkGroupSize);
-    bool isLocalIdsGeneratedByHw = false; // if local ids generated by runtime then more work groups available
-    maxWorkGroupSize = static_cast<uint32_t>(kernelInfo.getMaxRequiredWorkGroupSize(maxWorkGroupSize));
+    auto &rootDeviceEnvironment = getDevice().getRootDeviceEnvironment();
 
-    this->maxKernelWorkGroupSize = gfxCoreHelper.adjustMaxWorkGroupSize(kernelDescriptor.kernelAttributes.numGrfRequired, kernelDescriptor.kernelAttributes.simdSize, isLocalIdsGeneratedByHw, maxWorkGroupSize, getDevice().getRootDeviceEnvironment());
+    this->maxKernelWorkGroupSize = gfxCoreHelper.calculateMaxWorkGroupSize(kernelDescriptor, this->maxKernelWorkGroupSize, rootDeviceEnvironment);
 
     this->containsStatelessWrites = kernelDescriptor.kernelAttributes.flags.usesStatelessWrites;
     this->systolicPipelineSelectMode = kernelDescriptor.kernelAttributes.flags.usesSystolicPipelineSelectMode;

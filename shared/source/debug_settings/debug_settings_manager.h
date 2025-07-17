@@ -6,16 +6,23 @@
  */
 
 #pragma once
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/helpers/options.h"
 #include "shared/source/helpers/string.h"
+#include "shared/source/helpers/timestamp.h"
 #include "shared/source/utilities/io_functions.h"
 
-#include <chrono>
 #include <cstdint>
-#include <iostream>
 #include <memory>
-#include <sstream>
-#include <string_view>
+#include <string>
+#include <type_traits>
+
+#if defined(_WIN32)
+#include <process.h>
+#pragma warning(disable : 4996)
+#else
+#include <unistd.h>
+#endif
 
 enum class DebugFunctionalityLevel {
     none,   // Debug functionality disabled
@@ -31,9 +38,11 @@ constexpr DebugFunctionalityLevel globalDebugFunctionalityLevel = DebugFunctiona
 constexpr DebugFunctionalityLevel globalDebugFunctionalityLevel = DebugFunctionalityLevel::none;
 #endif
 
-#define PRINT_DEBUG_STRING(flag, ...) \
-    if (flag)                         \
-        NEO::printDebugString(flag, __VA_ARGS__);
+#define PRINT_DEBUG_STRING(flag, stream, ...) \
+    if (flag)                                 \
+        NEO::printDebugString(flag, stream, __VA_ARGS__);
+
+#define EMIT_WARNING(flag, stream, ...) PRINT_DEBUG_STRING(flag, stream, __VA_ARGS__)
 
 namespace NEO {
 template <DebugFunctionalityLevel debugLevel>
@@ -43,14 +52,6 @@ extern FileLogger<globalDebugFunctionalityLevel> &fileLoggerInstance();
 template <typename StreamT, typename... Args>
 void flushDebugStream(StreamT stream, Args &&...args) {
     IoFunctions::fflushPtr(stream);
-}
-
-template <typename... Args>
-void printDebugString(bool showDebugLogs, Args... args) {
-    if (showDebugLogs) {
-        IoFunctions::fprintf(args...);
-        flushDebugStream(args...);
-    }
 }
 
 void logDebugString(std::string_view debugString);
@@ -67,12 +68,27 @@ enum class DebugVarPrefix : uint8_t {
     none = 1,
     neo = 2,
     neoL0 = 3,
-    neoOcl = 4
+    neoOcl = 4,
+    neoOcloc = 5
 };
+
+using DVarsScopeMask = std::underlying_type_t<DebugVarPrefix>;
+constexpr auto getDebugVarScopeMaskFor(DebugVarPrefix v) {
+    return static_cast<DVarsScopeMask>(1U) << static_cast<DVarsScopeMask>(v);
+}
+
+template <DebugVarPrefix... vs>
+constexpr auto getDebugVarScopeMaskFor() {
+    return (0 | ... | getDebugVarScopeMaskFor(vs));
+}
+
+// compatibility with "old" behavior (prior to introducing scope masks)
+constexpr inline DVarsScopeMask compatibilityMask = getDebugVarScopeMaskFor<DebugVarPrefix::neoL0, DebugVarPrefix::neoOcl>();
 
 template <typename T>
 struct DebugVarBase {
     DebugVarBase(const T &defaultValue) : value(defaultValue), defaultValue(defaultValue) {}
+    DebugVarBase(const T &defaultValue, DVarsScopeMask scopeMask) : value(defaultValue), defaultValue(defaultValue), scopeMask(scopeMask) {}
     T get() const {
         return value;
     }
@@ -93,11 +109,15 @@ struct DebugVarBase {
     DebugVarPrefix getPrefixType() const {
         return prefixType;
     }
+    DVarsScopeMask getScopeMask() const {
+        return scopeMask;
+    }
 
   private:
     T value;
     T defaultValue;
     DebugVarPrefix prefixType = DebugVarPrefix::none;
+    DVarsScopeMask scopeMask = compatibilityMask;
 };
 
 struct DebugVariables {                                 // NOLINT(clang-analyzer-optin.performance.Padding)
@@ -113,25 +133,37 @@ struct DebugVariables {                                 // NOLINT(clang-analyzer
 
 #define DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description) \
     DebugVarBase<dataType> variableName{defaultValue};
+#define S_NONE getDebugVarScopeMaskFor(DebugVarPrefix::none)
+#define S_NEO getDebugVarScopeMaskFor(DebugVarPrefix::neo)
+#define S_OCL getDebugVarScopeMaskFor(DebugVarPrefix::neoOcl)
+#define S_L0 getDebugVarScopeMaskFor(DebugVarPrefix::neoL0)
+#define S_RT (S_NEO | S_OCL | S_L0 | S_NONE)
+#define S_OCLOC getDebugVarScopeMaskFor(DebugVarPrefix::neoOcloc)
+#define DECLARE_DEBUG_SCOPED_V(dataType, variableName, defaultValue, scope, description) \
+    DebugVarBase<dataType> variableName{defaultValue, scope};
 #include "debug_variables.inl"
 #include "release_variables.inl"
+#undef S_OCLOC
+#undef S_RT
+#undef S_L0
+#undef S_OCL
+#undef S_NEO
+#undef S_NONE
+#undef DECLARE_DEBUG_SCOPED_V
 #undef DECLARE_DEBUG_VARIABLE
 };
 
 template <DebugFunctionalityLevel debugLevel>
-class DebugSettingsManager {
+class DebugSettingsManager : NEO::NonCopyableAndNonMovableClass {
   public:
     DebugSettingsManager(const char *registryPath);
     ~DebugSettingsManager();
 
-    DebugSettingsManager(const DebugSettingsManager &) = delete;
-    DebugSettingsManager &operator=(const DebugSettingsManager &) = delete;
-
-    static constexpr bool registryReadAvailable() {
+    static consteval bool registryReadAvailable() {
         return (debugLevel == DebugFunctionalityLevel::full) || (debugLevel == DebugFunctionalityLevel::regKeys);
     }
 
-    static constexpr bool disabled() {
+    static consteval bool disabled() {
         return debugLevel == DebugFunctionalityLevel::none;
     }
 
@@ -149,7 +181,7 @@ class DebugSettingsManager {
         return readerImpl.get();
     }
 
-    static constexpr const char *getNonReleaseKeyName(const char *key) {
+    static consteval const char *getNonReleaseKeyName(const char *key) {
         return (disabled() && PURGE_DEBUG_KEY_NAMES) ? "" : key;
     }
 
@@ -164,12 +196,17 @@ class DebugSettingsManager {
 
     inline bool isTbxPageFaultManagerEnabled() {
         auto setCsr = flags.SetCommandStreamReceiver.get();
-        auto tbxMngrFlag = flags.EnableTbxPageFaultManager.get();
-        auto isTbxMode = (setCsr == static_cast<int32_t>(CommandStreamReceiverType::tbx)) || (setCsr == static_cast<int32_t>(CommandStreamReceiverType::tbxWithAub));
-        return tbxMngrFlag && isTbxMode;
+        auto isTbxMode = (setCsr == static_cast<int32_t>(CommandStreamReceiverType::tbx)) ||
+                         (setCsr == static_cast<int32_t>(CommandStreamReceiverType::tbxWithAub));
+        auto isFaultManagerEnabledInEnvVars = true;
+        if (flags.EnableTbxPageFaultManager.get() == 0) {
+            isFaultManagerEnabledInEnvVars = false;
+        }
+        return isFaultManagerEnabledInEnvVars && isTbxMode;
     }
 
   protected:
+    DVarsScopeMask scope = 0;
     std::unique_ptr<SettingsReader> readerImpl;
     bool isLoopAtDriverInitEnabled() const {
         auto loopingEnabled = flags.LoopAtDriverInit.get();
@@ -182,7 +219,30 @@ class DebugSettingsManager {
     static const char *settingsDumpFileName;
 };
 
+static_assert(NEO::NonCopyableAndNonMovable<DebugSettingsManager<DebugFunctionalityLevel::none>>);
+static_assert(NEO::NonCopyableAndNonMovable<DebugSettingsManager<DebugFunctionalityLevel::full>>);
+static_assert(NEO::NonCopyableAndNonMovable<DebugSettingsManager<DebugFunctionalityLevel::regKeys>>);
+
 extern DebugSettingsManager<globalDebugFunctionalityLevel> debugManager;
+
+struct DebugMessagesBitmask {
+    constexpr static int32_t withPid = 1 << 0;
+    constexpr static int32_t withTimestamp = 1 << 1;
+};
+
+template <typename... Args>
+void printDebugString(bool showDebugLogs, FILE *stream, Args... args) {
+    if (showDebugLogs) {
+        if (NEO::debugManager.flags.DebugMessagesBitmask.get() & DebugMessagesBitmask::withPid) {
+            IoFunctions::fprintf(stream, "[PID: %d] ", getpid());
+        }
+        if (NEO::debugManager.flags.DebugMessagesBitmask.get() & DebugMessagesBitmask::withTimestamp) {
+            IoFunctions::fprintf(stream, "%s", TimestampHelper::getTimestamp().c_str());
+        }
+        IoFunctions::fprintf(stream, args...);
+        flushDebugStream(stream, args...);
+    }
+}
 
 class DurationLog {
     DurationLog() = delete;

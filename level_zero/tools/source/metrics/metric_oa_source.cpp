@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,10 +7,12 @@
 
 #include "level_zero/tools/source/metrics/metric_oa_source.h"
 
+#include "shared/source/execution_environment/root_device_environment.h"
 #include "shared/source/os_interface/os_library.h"
 
 #include "level_zero/core/source/cmdlist/cmdlist.h"
 #include "level_zero/core/source/device/device_imp.h"
+#include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
 #include "level_zero/tools/source/metrics/metric.h"
 #include "level_zero/tools/source/metrics/metric_multidevice_programmable.h"
 #include "level_zero/tools/source/metrics/metric_multidevice_programmable.inl"
@@ -28,7 +30,6 @@ std::unique_ptr<OaMetricSourceImp> OaMetricSourceImp::create(const MetricDeviceC
 OaMetricSourceImp::OaMetricSourceImp(const MetricDeviceContext &metricDeviceContext) : metricDeviceContext(metricDeviceContext),
                                                                                        metricEnumeration(std::unique_ptr<MetricEnumeration>(new(std::nothrow) MetricEnumeration(*this))),
                                                                                        metricsLibrary(std::unique_ptr<MetricsLibrary>(new(std::nothrow) MetricsLibrary(*this))) {
-    metricOAOsInterface = MetricOAOsInterface::create(metricDeviceContext.getDevice());
     activationTracker = std::make_unique<MultiDomainDeferredActivationTracker>(metricDeviceContext.getSubDeviceIndex());
     type = MetricSource::metricSourceTypeOa;
 }
@@ -40,36 +41,18 @@ void OaMetricSourceImp::enable() {
 }
 
 ze_result_t OaMetricSourceImp::getTimerResolution(uint64_t &resolution) {
-
-    ze_result_t result = getMetricOsInterface()->getMetricsTimerResolution(resolution);
-    if (result != ZE_RESULT_SUCCESS) {
+    if (!metricEnumeration->readGlobalSymbol(globalSymbolOaGpuTimestampFrequency.data(), resolution)) {
         resolution = 0;
-    }
-
-    return result;
-}
-
-ze_result_t OaMetricSourceImp::getTimestampValidBits(uint64_t &validBits) {
-    ze_result_t retVal = ZE_RESULT_SUCCESS;
-
-    uint64_t maxNanoSeconds = 0;
-    if (!metricEnumeration->readGlobalSymbol(globalSymbolOaMaxTimestamp.data(), maxNanoSeconds)) {
         return ZE_RESULT_ERROR_NOT_AVAILABLE;
     }
 
-    uint64_t timerFreqquency;
-    retVal = getTimerResolution(timerFreqquency);
-    if (retVal != ZE_RESULT_SUCCESS) {
-        validBits = 0;
-        return retVal;
-    }
+    return ZE_RESULT_SUCCESS;
+}
 
-    uint64_t maxTimeStamp = maxNanoSeconds * timerFreqquency / nsecPerSec;
-
-    auto bits = std::bitset<64>(maxTimeStamp);
-    validBits = bits.count();
-
-    return retVal;
+void OaMetricSourceImp::getTimestampValidBits(uint64_t &validBits) {
+    DeviceImp *deviceImp = static_cast<DeviceImp *>(&getDevice());
+    auto &l0GfxCoreHelper = deviceImp->getNEODevice()->getRootDeviceEnvironment().getHelper<L0GfxCoreHelper>();
+    validBits = l0GfxCoreHelper.getOaTimestampValidBits();
 }
 
 bool OaMetricSourceImp::isAvailable() {
@@ -129,6 +112,10 @@ Device &OaMetricSourceImp::getDevice() {
     return metricDeviceContext.getDevice();
 }
 
+bool OaMetricSourceImp::canDisable() {
+    return !activationTracker->isAnyMetricGroupActivated();
+}
+
 MetricsLibrary &OaMetricSourceImp::getMetricsLibrary() {
     return *metricsLibrary;
 }
@@ -171,10 +158,6 @@ bool OaMetricSourceImp::isImplicitScalingCapable() const {
     return metricDeviceContext.isImplicitScalingCapable();
 }
 
-void OaMetricSourceImp::setMetricOsInterface(std::unique_ptr<MetricOAOsInterface> &metricOAOsInterface) {
-    this->metricOAOsInterface = std::move(metricOAOsInterface);
-}
-
 ze_result_t OaMetricSourceImp::activateMetricGroupsPreferDeferred(uint32_t count,
                                                                   zet_metric_group_handle_t *phMetricGroups) {
     activationTracker->activateMetricGroupsDeferred(count, phMetricGroups);
@@ -203,12 +186,18 @@ ze_result_t OaMetricSourceImp::getConcurrentMetricGroups(std::vector<zet_metric_
     return ZE_RESULT_SUCCESS;
 }
 
-ze_result_t OaMetricSourceImp::handleMetricGroupExtendedProperties(zet_metric_group_handle_t hMetricGroup, void *pNext) {
+ze_result_t OaMetricSourceImp::handleMetricGroupExtendedProperties(zet_metric_group_handle_t hMetricGroup,
+                                                                   zet_metric_group_properties_t *pBaseProperties,
+                                                                   void *pNext) {
     ze_result_t retVal = ZE_RESULT_ERROR_INVALID_ARGUMENT;
     while (pNext) {
         auto extendedProperties = reinterpret_cast<zet_base_properties_t *>(pNext);
 
-        if (extendedProperties->stype == ZET_STRUCTURE_TYPE_METRIC_GLOBAL_TIMESTAMPS_RESOLUTION_EXP) {
+        if (static_cast<uint32_t>(extendedProperties->stype) == ZET_INTEL_STRUCTURE_TYPE_METRIC_SOURCE_ID_EXP) {
+
+            getMetricGroupSourceIdProperty(extendedProperties);
+            retVal = ZE_RESULT_SUCCESS;
+        } else if (extendedProperties->stype == ZET_STRUCTURE_TYPE_METRIC_GLOBAL_TIMESTAMPS_RESOLUTION_EXP) {
 
             zet_metric_global_timestamps_resolution_exp_t *metricsTimestampProperties =
                 reinterpret_cast<zet_metric_global_timestamps_resolution_exp_t *>(extendedProperties);
@@ -220,17 +209,19 @@ ze_result_t OaMetricSourceImp::handleMetricGroupExtendedProperties(zet_metric_gr
                 return retVal;
             }
 
-            retVal = getTimestampValidBits(metricsTimestampProperties->timestampValidBits);
-            if (retVal != ZE_RESULT_SUCCESS) {
-                metricsTimestampProperties->timerResolution = 0;
-                metricsTimestampProperties->timestampValidBits = 0;
-                return retVal;
-            }
-        }
+            getTimestampValidBits(metricsTimestampProperties->timestampValidBits);
 
-        if (extendedProperties->stype == ZET_STRUCTURE_TYPE_METRIC_GROUP_TYPE_EXP) {
+        } else if (extendedProperties->stype == ZET_STRUCTURE_TYPE_METRIC_GROUP_TYPE_EXP) {
             zet_metric_group_type_exp_t *groupType = reinterpret_cast<zet_metric_group_type_exp_t *>(extendedProperties);
             groupType->type = ZET_METRIC_GROUP_TYPE_EXP_FLAG_OTHER;
+            retVal = ZE_RESULT_SUCCESS;
+        } else if (static_cast<uint32_t>(extendedProperties->stype) == ZET_INTEL_STRUCTURE_TYPE_METRIC_GROUP_CALCULATE_EXP_PROPERTIES) {
+            auto calcProperties = reinterpret_cast<zet_intel_metric_group_calculate_properties_exp_t *>(extendedProperties);
+            if (pBaseProperties->samplingType == ZET_METRIC_GROUP_SAMPLING_TYPE_FLAG_TIME_BASED) {
+                calcProperties->isTimeFilterSupported = true;
+            } else {
+                calcProperties->isTimeFilterSupported = false;
+            }
             retVal = ZE_RESULT_SUCCESS;
         }
         pNext = extendedProperties->pNext;
@@ -396,6 +387,31 @@ ze_result_t OaMetricSourceImp::createMetricGroupsFromMetrics(std::vector<zet_met
 
 ze_result_t OaMetricSourceImp::metricProgrammableGet(uint32_t *pCount, zet_metric_programmable_exp_handle_t *phMetricProgrammables) {
     return getMetricEnumeration().metricProgrammableGet(pCount, phMetricProgrammables);
+}
+
+ze_result_t OaMetricSourceImp::appendMarker(zet_command_list_handle_t hCommandList, zet_metric_group_handle_t hMetricGroup, uint32_t value) {
+
+    auto commandListImp = static_cast<CommandListImp *>(CommandList::fromHandle(hCommandList));
+    DeviceImp *pDeviceImp = static_cast<DeviceImp *>(commandListImp->getDevice());
+
+    if (pDeviceImp->metricContext->isImplicitScalingCapable()) {
+        // Use one of the sub-device contexts to append to command list.
+        pDeviceImp = static_cast<DeviceImp *>(pDeviceImp->subDevices[0]);
+    }
+
+    OaMetricSourceImp &metricSource = pDeviceImp->metricContext->getMetricSource<OaMetricSourceImp>();
+    auto &metricsLibrary = metricSource.getMetricsLibrary();
+
+    // Obtain gpu commands.
+    CommandBufferData_1_0 commandBuffer = {};
+    commandBuffer.CommandsType = MetricsLibraryApi::ObjectType::MarkerStreamUser;
+    commandBuffer.MarkerStreamUser.Value = value;
+    commandBuffer.Type = metricSource.isComputeUsed()
+                             ? MetricsLibraryApi::GpuCommandBufferType::Compute
+                             : MetricsLibraryApi::GpuCommandBufferType::Render;
+
+    return metricsLibrary.getGpuCommands(*commandListImp, commandBuffer) ? ZE_RESULT_SUCCESS
+                                                                         : ZE_RESULT_ERROR_UNKNOWN;
 }
 
 template <>

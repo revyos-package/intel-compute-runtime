@@ -8,7 +8,6 @@
 #include "opencl/source/mem_obj/image.h"
 
 #include "shared/source/command_stream/command_stream_receiver.h"
-#include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/device/device.h"
 #include "shared/source/device/device_info.h"
 #include "shared/source/execution_environment/execution_environment.h"
@@ -42,9 +41,7 @@
 #include "opencl/source/mem_obj/mem_obj_helper.h"
 #include "opencl/source/sharings/unified/unified_image.h"
 
-#include "igfxfmid.h"
-
-#include <map>
+#include "neo_igfxfmid.h"
 
 namespace NEO {
 
@@ -210,7 +207,10 @@ Image *Image::create(Context *context,
     }
 
     auto &clGfxCoreHelper = defaultDevice->getRootDeviceEnvironment().getHelper<ClGfxCoreHelper>();
-    bool preferCompression = MemObjHelper::isSuitableForCompression(!imgInfo.linearStorage, memoryProperties,
+    auto hwInfo = defaultDevice->getRootDeviceEnvironment().getHardwareInfo();
+    bool compressionSupported = !imgInfo.linearStorage && !defaultProductHelper.isCompressionForbidden(*hwInfo);
+
+    bool preferCompression = MemObjHelper::isSuitableForCompression(compressionSupported, memoryProperties,
                                                                     *context, true);
     preferCompression &= clGfxCoreHelper.allowImageCompression(surfaceFormat->oclImageFormat);
     preferCompression &= !clGfxCoreHelper.isFormatRedescribable(surfaceFormat->oclImageFormat);
@@ -389,7 +389,7 @@ Image *Image::createImageHw(Context *context, const MemoryProperties &memoryProp
 Image *Image::createSharedImage(Context *context, SharingHandler *sharingHandler, const McsSurfaceInfo &mcsSurfaceInfo,
                                 MultiGraphicsAllocation multiGraphicsAllocation, GraphicsAllocation *mcsAllocation,
                                 cl_mem_flags flags, cl_mem_flags_intel flagsIntel, const ClSurfaceFormatInfo *surfaceFormat,
-                                ImageInfo &imgInfo, uint32_t cubeFaceIndex, uint32_t baseMipLevel, uint32_t mipCount) {
+                                ImageInfo &imgInfo, uint32_t cubeFaceIndex, uint32_t baseMipLevel, uint32_t mipCount, bool hasUnifiedMcsSurface) {
     auto rootDeviceIndex = context->getDevice(0)->getRootDeviceIndex();
     auto size = multiGraphicsAllocation.getGraphicsAllocation(rootDeviceIndex)->getUnderlyingBufferSize();
     auto sharedImage = createImageHw(
@@ -407,6 +407,7 @@ Image *Image::createSharedImage(Context *context, SharingHandler *sharingHandler
     sharedImage->setMcsSurfaceInfo(mcsSurfaceInfo);
     sharedImage->setPlane(imgInfo.plane);
     sharedImage->setIsDisplayable(imgInfo.isDisplayable);
+    sharedImage->setIsUnifiedMcsSurface(hasUnifiedMcsSurface);
     return sharedImage;
 }
 
@@ -794,7 +795,7 @@ cl_int Image::getImageInfo(cl_image_info paramName,
         retParam = imageDesc.image_width;
         if (this->baseMipLevel) {
             retParam = imageDesc.image_width >> this->baseMipLevel;
-            retParam = std::max(retParam, (size_t)1);
+            retParam = std::max(retParam, static_cast<size_t>(1));
         }
         srcParam = &retParam;
         break;
@@ -804,7 +805,7 @@ cl_int Image::getImageInfo(cl_image_info paramName,
         retParam = imageDesc.image_height * !((imageDesc.image_type == CL_MEM_OBJECT_IMAGE1D) || (imageDesc.image_type == CL_MEM_OBJECT_IMAGE1D_ARRAY) || (imageDesc.image_type == CL_MEM_OBJECT_IMAGE1D_BUFFER));
         if ((retParam != 0) && (this->baseMipLevel > 0)) {
             retParam = retParam >> this->baseMipLevel;
-            retParam = std::max(retParam, (size_t)1);
+            retParam = std::max(retParam, static_cast<size_t>(1));
         }
         srcParam = &retParam;
         break;
@@ -814,7 +815,7 @@ cl_int Image::getImageInfo(cl_image_info paramName,
         retParam = imageDesc.image_depth * (imageDesc.image_type == CL_MEM_OBJECT_IMAGE3D);
         if ((retParam != 0) && (this->baseMipLevel > 0)) {
             retParam = retParam >> this->baseMipLevel;
-            retParam = std::max(retParam, (size_t)1);
+            retParam = std::max(retParam, static_cast<size_t>(1));
         }
         srcParam = &retParam;
         break;

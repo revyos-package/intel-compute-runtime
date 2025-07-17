@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -37,7 +37,20 @@ struct UnitTestSetter {
 };
 
 template <typename GfxFamily>
-struct UnitTestHelper {
+struct UnitTestHelperWithHeap {
+    static bool getDisableFusionStateFromFrontEndCommand(const typename GfxFamily::FrontEndStateCommand &feCmd);
+    static bool getComputeDispatchAllWalkerFromFrontEndCommand(const typename GfxFamily::FrontEndStateCommand &feCmd);
+};
+
+template <typename GfxFamily>
+struct UnitTestHelperNoHeap {
+};
+
+template <typename GfxFamily>
+using UnitTestHelperBase = std::conditional_t<GfxFamily::isHeaplessRequired(), UnitTestHelperNoHeap<GfxFamily>, UnitTestHelperWithHeap<GfxFamily>>;
+
+template <typename GfxFamily>
+struct UnitTestHelper : public UnitTestHelperBase<GfxFamily> {
     using COHERENCY_TYPE = typename GfxFamily::RENDER_SURFACE_STATE::COHERENCY_TYPE;
 
     static bool isL3ConfigProgrammable();
@@ -93,6 +106,8 @@ struct UnitTestHelper {
 
     static std::vector<bool> getProgrammedLargeGrfValues(CommandStreamReceiver &csr, LinearStream &linearStream);
 
+    static std::vector<bool> getProgrammedLargeGrfValues(LinearStream &linearStream);
+
     static uint32_t getProgrammedGrfValue(CommandStreamReceiver &csr, LinearStream &linearStream);
 
     static bool getWorkloadPartitionForStoreRegisterMemCmd(typename GfxFamily::MI_STORE_REGISTER_MEM &storeRegisterMem);
@@ -105,8 +120,6 @@ struct UnitTestHelper {
 
     static std::vector<GenCmdList::iterator> findAllMidThreadPreemptionAllocationCommand(GenCmdList::iterator begin, GenCmdList::iterator end);
     static uint32_t getInlineDataSize(bool isHeaplessEnabled);
-    static bool getDisableFusionStateFromFrontEndCommand(const typename GfxFamily::FrontEndStateCommand &feCmd);
-    static bool getComputeDispatchAllWalkerFromFrontEndCommand(const typename GfxFamily::FrontEndStateCommand &feCmd);
     static bool getSystolicFlagValueFromPipelineSelectCommand(const typename GfxFamily::PIPELINE_SELECT &pipelineSelectCmd);
     static size_t getAdditionalDshSize(uint32_t iddCount);
     static bool expectNullDsh(const DeviceInfo &deviceInfo);
@@ -116,10 +129,12 @@ struct UnitTestHelper {
     static uint64_t getWalkerPartitionEstimateSpaceRequiredInCommandBuffer(bool isHeaplessEnabled, WalkerPartition::WalkerPartitionArgs &testArgs);
     static GenCmdList::iterator findWalkerTypeCmd(GenCmdList::iterator begin, GenCmdList::iterator end);
     static std::vector<GenCmdList::iterator> findAllWalkerTypeCmds(GenCmdList::iterator begin, GenCmdList::iterator end);
-    static typename GfxFamily::WalkerVariant getWalkerVariant(void *walkerItor);
     static void getSpaceAndInitWalkerCmd(LinearStream &stream, bool heapless);
     static void *getInitWalkerCmd(bool heapless);
     static size_t getWalkerSize(bool isHeaplessEnabled);
+    template <typename WalkerType>
+    static uint64_t getWalkerActivePostSyncAddress(WalkerType *walkerCmd);
+    static void skipStatePrefetch(GenCmdList::iterator &iter);
 
     static bool isHeaplessAllowed();
 };

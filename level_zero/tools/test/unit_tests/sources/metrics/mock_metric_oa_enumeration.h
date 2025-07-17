@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -144,7 +144,11 @@ class Mock<IMetricsDevice_1_13> : public IMetricsDevice_1_13 {
             found = true;
         } else if (std::strcmp(name, "MaxTimestamp") == 0) {
             symbolValue.ValueType = MetricsDiscovery::TValueType::VALUE_TYPE_UINT64;
-            symbolValue.ValueUInt64 = 171798691800UL; // PVC as refference
+            symbolValue.ValueUInt64 = 171798691800UL; // PVC as reference
+            found = true;
+        } else if (std::strcmp(name, "GpuTimestampFrequency") == 0) {
+            symbolValue.ValueType = MetricsDiscovery::TValueType::VALUE_TYPE_UINT64;
+            symbolValue.ValueUInt64 = 25000000UL; // PVC as reference
             found = true;
         }
         if (found) {

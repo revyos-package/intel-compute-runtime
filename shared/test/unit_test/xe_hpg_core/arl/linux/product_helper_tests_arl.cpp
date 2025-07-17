@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -10,9 +10,8 @@
 #include "shared/test/common/helpers/default_hw_info.h"
 #include "shared/test/common/helpers/gtest_helpers.h"
 #include "shared/test/common/os_interface/linux/drm_mock_extended.h"
+#include "shared/test/common/test_macros/header/per_product_test_definitions.h"
 #include "shared/test/unit_test/os_interface/linux/product_helper_linux_tests.h"
-
-#include "per_product_test_definitions.h"
 
 using namespace NEO;
 
@@ -36,7 +35,7 @@ ARLTEST_F(ArlProductHelperLinux, GivenArlWhenConfigureHardwareCustomThenKmdNotif
     EXPECT_TRUE(pInHwInfo.capabilityTable.kmdNotifyProperties.enableKmdNotify);
     EXPECT_EQ(150ll, pInHwInfo.capabilityTable.kmdNotifyProperties.delayKmdNotifyMicroseconds);
     EXPECT_TRUE(pInHwInfo.capabilityTable.kmdNotifyProperties.enableQuickKmdSleepForDirectSubmission);
-    EXPECT_EQ(20ll, pInHwInfo.capabilityTable.kmdNotifyProperties.delayQuickKmdSleepForDirectSubmissionMicroseconds);
+    EXPECT_EQ(28000ll, pInHwInfo.capabilityTable.kmdNotifyProperties.delayQuickKmdSleepForDirectSubmissionMicroseconds);
 }
 
 ARLTEST_F(ArlProductHelperLinux, givenArlWhenIsBlitterForImagesSupportedIsCalledThenTrueIsReturned) {
@@ -98,4 +97,9 @@ ARLTEST_F(ArlProductHelperLinux, givenBooleanUncachedWhenCallOverridePatIndexThe
     isUncached = false;
     EXPECT_EQ(0u, productHelper->overridePatIndex(isUncached, patIndex, AllocationType::buffer));
     EXPECT_EQ(3u, productHelper->overridePatIndex(isUncached, patIndex, AllocationType::commandBuffer));
+}
+
+ARLTEST_F(ArlProductHelperLinux, givenProductHelperThenCompressionIsForbidden) {
+    auto hwInfo = *defaultHwInfo;
+    EXPECT_TRUE(productHelper->isCompressionForbidden(hwInfo));
 }

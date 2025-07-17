@@ -21,6 +21,7 @@ class AubCenter;
 class BindlessHeapsHelper;
 class BuiltIns;
 class CompilerInterface;
+class SipExternalLib;
 class Debugger;
 class Device;
 class ExecutionEnvironment;
@@ -46,6 +47,7 @@ struct AllocationProperties;
 struct HardwareInfo;
 
 struct RootDeviceEnvironment : NonCopyableClass {
+
   protected:
     std::unique_ptr<HardwareInfo> hwInfo;
 
@@ -65,6 +67,7 @@ struct RootDeviceEnvironment : NonCopyableClass {
     void initOsTime();
     void initGmm();
     void initDebuggerL0(Device *neoDevice);
+    void initWaitUtils();
     MOCKABLE_VIRTUAL void initDummyAllocation();
     void setDummyBlitProperties(uint32_t rootDeviceIndex);
 
@@ -73,11 +76,12 @@ struct RootDeviceEnvironment : NonCopyableClass {
     GmmHelper *getGmmHelper() const;
     GmmClientContext *getGmmClientContext() const;
     MOCKABLE_VIRTUAL CompilerInterface *getCompilerInterface();
+    MOCKABLE_VIRTUAL SipExternalLib *getSipExternalLibInterface();
     BuiltIns *getBuiltIns();
     BindlessHeapsHelper *getBindlessHeapsHelper() const;
     AssertHandler *getAssertHandler(Device *neoDevice);
     void createBindlessHeapsHelper(Device *rootDevice, bool availableDevices);
-    void limitNumberOfCcs(uint32_t numberOfCcs);
+    void setNumberOfCcs(uint32_t numberOfCcs);
     bool isNumberOfCcsLimited() const;
     void setRcsExposure();
     void initProductHelper();
@@ -97,6 +101,13 @@ struct RootDeviceEnvironment : NonCopyableClass {
     GraphicsAllocation *getDummyAllocation() const;
     void releaseDummyAllocation();
 
+    void setExposeSingleDeviceMode(bool singleDeviceMode) {
+        exposeSingleDevice = singleDeviceMode;
+    }
+    bool isExposeSingleDeviceMode() const {
+        return exposeSingleDevice;
+    }
+
     std::unique_ptr<SipKernel> sipKernels[static_cast<uint32_t>(SipKernelType::count)];
     std::unique_ptr<GmmHelper> gmmHelper;
     std::unique_ptr<OSInterface> osInterface;
@@ -105,6 +116,7 @@ struct RootDeviceEnvironment : NonCopyableClass {
     std::unique_ptr<OSTime> osTime;
 
     std::unique_ptr<CompilerInterface> compilerInterface;
+    std::unique_ptr<SipExternalLib> sipExternalLib;
     std::unique_ptr<BuiltIns> builtins;
     std::unique_ptr<Debugger> debugger;
     std::unique_ptr<SWTagsManager> tagsManager;
@@ -128,11 +140,14 @@ struct RootDeviceEnvironment : NonCopyableClass {
 
     bool limitedNumberOfCcs = false;
     bool isWddmOnLinuxEnable = false;
+    bool exposeSingleDevice = false;
     std::once_flag isDummyAllocationInitialized;
     std::unique_ptr<AllocationProperties> dummyBlitProperties;
 
   private:
     std::mutex mtx;
 };
+
+static_assert(NEO::NonCopyable<RootDeviceEnvironment>);
 
 } // namespace NEO

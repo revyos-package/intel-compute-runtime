@@ -6,6 +6,7 @@
  */
 
 #include "shared/source/command_stream/command_stream_receiver.h"
+#include "shared/source/memory_manager/allocation_type.h"
 
 #include "aubstream/product_family.h"
 
@@ -18,11 +19,6 @@ bool ProductHelperHw<gfxProduct>::isResolveDependenciesByPipeControlsSupported(c
         return debugManager.flags.ResolveDependenciesViaPipeControls.get() == 1;
     }
     return enabled;
-}
-
-template <>
-bool ProductHelperHw<gfxProduct>::isBufferPoolAllocatorSupported() const {
-    return true;
 }
 
 template <>

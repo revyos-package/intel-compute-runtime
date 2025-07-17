@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -16,7 +16,7 @@
 #include <level_zero/ze_api.h>
 #include <level_zero/zet_api.h>
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <map>
 #include <memory>
@@ -42,15 +42,7 @@ enum class RTASDeviceFormatInternal {
     version2 = 2,
 };
 
-// Offset to read the first Stall Sampling report after IP Address.
-constexpr int ipStallSamplingOffset = 3;
-// Shift in bits required to read the stall sampling report data due to the IP address [0-28] bits to access the next report category data.
-constexpr int ipStallSamplingReportShift = 5;
-// Mask for Stall Sampling Report Category.
-constexpr int stallSamplingReportCategoryMask = 0xff;
-// Offset to access Stall Sampling Report Sub Slice and flags.
-constexpr int stallSamplingReportSubSliceAndFlagsOffset = 48;
-
+struct CopyOffloadMode;
 struct Event;
 struct Device;
 struct EventPool;
@@ -70,7 +62,7 @@ class L0GfxCoreHelper : public NEO::ApiGfxCoreHelper {
     static bool enableStateBaseAddressTracking(const NEO::RootDeviceEnvironment &rootDeviceEnvironment);
     static bool enableImmediateCmdListHeapSharing(const NEO::RootDeviceEnvironment &rootDeviceEnvironment, bool cmdlistSupport);
     static bool usePipeControlMultiKernelEventSync(const NEO::HardwareInfo &hwInfo);
-    static bool useCompactL3FlushEventPacket(const NEO::HardwareInfo &hwInfo);
+    static bool useCompactL3FlushEventPacket(const NEO::HardwareInfo &hwInfo, bool flushL3AfterPostSync);
     static bool useDynamicEventPacketsCount(const NEO::HardwareInfo &hwInfo);
     static bool useSignalAllEventPackets(const NEO::HardwareInfo &hwInfo);
     static NEO::HeapAddressModel getHeapAddressModel(const NEO::RootDeviceEnvironment &rootDeviceEnvironment);
@@ -116,10 +108,14 @@ class L0GfxCoreHelper : public NEO::ApiGfxCoreHelper {
     virtual bool stallIpDataMapUpdate(std::map<uint64_t, void *> &stallSumIpDataMap, const uint8_t *pRawIpData) = 0;
     virtual void stallIpDataMapDelete(std::map<uint64_t, void *> &stallSumIpDataMap) = 0;
     virtual uint32_t getIpSamplingMetricCount() = 0;
+    virtual uint64_t getIpSamplingIpMask() const = 0;
     virtual bool synchronizedDispatchSupported() const = 0;
     virtual bool implicitSynchronizedDispatchForCooperativeKernelsAllowed() const = 0;
     virtual std::unique_ptr<NEO::TagAllocatorBase> getInOrderTimestampAllocator(const RootDeviceIndicesContainer &rootDeviceIndices, NEO::MemoryManager *memoryManager, size_t initialTagCount, size_t packetsCountPerElement, size_t tagAlignment,
                                                                                 NEO::DeviceBitfield deviceBitfield) const = 0;
+    virtual uint64_t getOaTimestampValidBits() const = 0;
+    virtual CopyOffloadMode getDefaultCopyOffloadMode(bool additionalBlitPropertiesSupported) const = 0;
+    virtual bool isDefaultCmdListWithCopyOffloadSupported(bool additionalBlitPropertiesSupported) const = 0;
 
   protected:
     L0GfxCoreHelper() = default;
@@ -170,10 +166,14 @@ class L0GfxCoreHelperHw : public L0GfxCoreHelper {
     bool stallIpDataMapUpdate(std::map<uint64_t, void *> &stallSumIpDataMap, const uint8_t *pRawIpData) override;
     void stallIpDataMapDelete(std::map<uint64_t, void *> &stallSumIpDataMap) override;
     uint32_t getIpSamplingMetricCount() override;
+    uint64_t getIpSamplingIpMask() const override;
     bool synchronizedDispatchSupported() const override;
     bool implicitSynchronizedDispatchForCooperativeKernelsAllowed() const override;
     std::unique_ptr<NEO::TagAllocatorBase> getInOrderTimestampAllocator(const RootDeviceIndicesContainer &rootDeviceIndices, NEO::MemoryManager *memoryManager, size_t initialTagCount, size_t packetsCountPerElement, size_t tagAlignment,
                                                                         NEO::DeviceBitfield deviceBitfield) const override;
+    uint64_t getOaTimestampValidBits() const override;
+    CopyOffloadMode getDefaultCopyOffloadMode(bool additionalBlitPropertiesSupported) const override;
+    bool isDefaultCmdListWithCopyOffloadSupported(bool additionalBlitPropertiesSupported) const override;
 
   protected:
     L0GfxCoreHelperHw() = default;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,6 +9,7 @@
 
 #include "shared/source/built_ins/built_ins.h"
 #include "shared/source/debug_settings/debug_settings_manager.h"
+#include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/os_interface/os_interface.h"
 
 #include "level_zero/core/source/device/device.h"
@@ -285,11 +286,11 @@ void BuiltinFunctionsLibImpl::initBuiltinImageKernel(ImageBuiltin func) {
         builtin = NEO::EBuiltInOps::copyImage3dToBufferHeapless;
         break;
     case ImageBuiltin::copyImageRegion:
-        builtinName = "CopyImageToImage3d";
+        builtinName = "CopyImage3dToImage3d";
         builtin = NEO::EBuiltInOps::copyImageToImage3d;
         break;
     case ImageBuiltin::copyImageRegionHeapless:
-        builtinName = "CopyImageToImage3d";
+        builtinName = "CopyImage3dToImage3d";
         builtin = NEO::EBuiltInOps::copyImageToImage3dHeapless;
         break;
     default:
@@ -304,7 +305,16 @@ BuiltinFunctionsLibImpl::BuiltinFunctionsLibImpl(Device *device, NEO::BuiltIns *
         this->initAsyncComplete = false;
 
         auto initFunc = [this]() {
-            this->initBuiltinKernel(Builtin::fillBufferImmediate);
+            const auto &compilerProductHelper = this->device->getCompilerProductHelper();
+
+            if (compilerProductHelper.isHeaplessModeEnabled(this->device->getHwInfo())) {
+                this->initBuiltinKernel(Builtin::fillBufferImmediateStatelessHeapless);
+            } else if (compilerProductHelper.isForceToStatelessRequired()) {
+                this->initBuiltinKernel(Builtin::fillBufferImmediateStateless);
+            } else {
+                this->initBuiltinKernel(Builtin::fillBufferImmediate);
+            }
+
             this->initAsync.store(true);
         };
 

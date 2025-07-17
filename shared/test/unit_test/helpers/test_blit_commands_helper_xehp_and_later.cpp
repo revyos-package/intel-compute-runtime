@@ -18,6 +18,7 @@
 #include "shared/test/common/cmd_parse/hw_parse.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/raii_product_helper.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
 #include "shared/test/common/mocks/mock_gmm.h"
@@ -121,7 +122,7 @@ HWTEST2_F(BlitTests, givenGmmWithEnabledCompresionAndDebugFlagSetWhenAppendBlitC
 
 HWTEST2_F(BlitTests, givenOverridedMocksValueWhenAppendBlitCommandsForFillBufferThenDebugMocksValueIsSet, BlitPlatforms) {
     DebugManagerStateRestore dbgRestore;
-    uint32_t mockValue = pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER) + 1;
+    uint32_t mockValue = pDevice->getGmmHelper()->getL3EnabledMOCS() + 1;
 
     debugManager.flags.OverrideBlitterMocs.set(mockValue);
 
@@ -455,10 +456,11 @@ HWTEST2_F(BlitTests, givenDebugVariableWhenDispatchBlitCommandsForImageRegionIsC
     blitProperties.srcSize = {1, 1, 1};
     blitProperties.dstSize = {1, 1, 1};
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     BlitCommandsHelper<FamilyType>::dispatchBlitCommandsForImageRegion(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     std::stringstream expectedOutput;
     expectedOutput << "Slice index: 0\n"
                    << "ColorDepth: 0\n"
@@ -668,4 +670,110 @@ HWTEST2_F(BlitTests, givenDispatchDummyBlitWhenForceDummyBlitWaDisabledThenAddit
     BlitCommandsHelper<FamilyType>::dispatchDummyBlit(stream, waArgsWhenBcs);
     EXPECT_EQ(expectedSize, stream.getUsed());
     EXPECT_EQ(nullptr, rootDeviceEnvironment.getDummyAllocation());
+}
+
+struct IsAtLeastXeCoreAndNotXe2HpgCoreWith2DArrayImageSupport {
+    template <PRODUCT_FAMILY productFamily>
+    static constexpr bool isMatched() {
+        return IsAtLeastGfxCore<IGFX_XE_HP_CORE>::isMatched<productFamily>() && !IsXe2HpgCore::isMatched<productFamily>() && NEO::HwMapper<productFamily>::GfxProduct::supportsSampler;
+    }
+};
+
+HWTEST2_F(BlitTests, givenXeHPOrAboveTiledResourcesWhenAppendSliceOffsetsIsCalledThenIndexesAreSet, IsAtLeastXeCoreAndNotXe2HpgCoreWith2DArrayImageSupport) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+
+    auto blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+    blitCmd.setSourceTiling(XY_BLOCK_COPY_BLT::TILING::TILING_TILE64);
+    blitCmd.setDestinationTiling(XY_BLOCK_COPY_BLT::TILING::TILING_TILE64);
+    MockGraphicsAllocation mockAllocationSrc(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockAllocationDst(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    BlitProperties properties{};
+    uint32_t sliceIndex = 1;
+    auto srcSlicePitch = static_cast<uint32_t>(properties.srcSlicePitch);
+    auto dstSlicePitch = static_cast<uint32_t>(properties.dstSlicePitch);
+
+    BlitCommandsHelper<FamilyType>::appendSliceOffsets(properties, blitCmd, sliceIndex, pDevice->getRootDeviceEnvironment(), srcSlicePitch, dstSlicePitch);
+
+    EXPECT_EQ(blitCmd.getDestinationArrayIndex(), sliceIndex + 1);
+    EXPECT_EQ(blitCmd.getSourceArrayIndex(), sliceIndex + 1);
+}
+
+HWTEST2_F(BlitTests, givenBltCmdWhenSrcAndDstImage1DTiled4ThenSrcAndDstTypeIs2D, IsAtLeastXeCoreAndNotXe2HpgCoreWith2DArrayImageSupport) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+
+    auto gmmSrc = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto resourceInfoSrc = static_cast<MockGmmResourceInfo *>(gmmSrc->gmmResourceInfo.get());
+    resourceInfoSrc->getResourceFlags()->Info.Tile4 = 1;
+    resourceInfoSrc->mockResourceCreateParams.Type = GMM_RESOURCE_TYPE::RESOURCE_1D;
+    MockGraphicsAllocation mockAllocationSrc(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockAllocationDst(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    BlitProperties properties{};
+    mockAllocationSrc.setGmm(gmmSrc.get(), 0);
+    mockAllocationDst.setGmm(gmmSrc.get(), 0);
+    properties.srcAllocation = &mockAllocationSrc;
+    properties.dstAllocation = &mockAllocationDst;
+
+    auto bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
+    NEO::BlitCommandsHelper<FamilyType>::appendSurfaceType(properties, bltCmd);
+    EXPECT_EQ(bltCmd.getSourceSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
+    EXPECT_EQ(bltCmd.getDestinationSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
+}
+
+HWTEST2_F(BlitTests, givenBltCmdWhenSrcAndDstImage1DTiled64ThenSrcAndDstTypeIs2D, IsAtLeastXeCoreAndNotXe2HpgCoreWith2DArrayImageSupport) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+
+    auto gmmSrc = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto resourceInfoSrc = static_cast<MockGmmResourceInfo *>(gmmSrc->gmmResourceInfo.get());
+    resourceInfoSrc->getResourceFlags()->Info.Tile64 = 1;
+    resourceInfoSrc->mockResourceCreateParams.Type = GMM_RESOURCE_TYPE::RESOURCE_1D;
+    MockGraphicsAllocation mockAllocationSrc(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockAllocationDst(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    BlitProperties properties{};
+    mockAllocationSrc.setGmm(gmmSrc.get(), 0);
+    mockAllocationDst.setGmm(gmmSrc.get(), 0);
+    properties.srcAllocation = &mockAllocationSrc;
+    properties.dstAllocation = &mockAllocationDst;
+
+    auto bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
+    NEO::BlitCommandsHelper<FamilyType>::appendSurfaceType(properties, bltCmd);
+    EXPECT_EQ(bltCmd.getSourceSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
+    EXPECT_EQ(bltCmd.getDestinationSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_2D);
+}
+
+HWTEST2_F(BlitTests, givenBltCmdWhenSrcAndDstImage1DNotTiledThenSrcAndDstTypeIs1D, IsAtLeastXeCoreAndNotXe2HpgCoreWith2DArrayImageSupport) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+
+    auto gmmSrc = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto resourceInfoSrc = static_cast<MockGmmResourceInfo *>(gmmSrc->gmmResourceInfo.get());
+    resourceInfoSrc->getResourceFlags()->Info.Tile64 = 0;
+    resourceInfoSrc->getResourceFlags()->Info.Tile4 = 0;
+    resourceInfoSrc->mockResourceCreateParams.Type = GMM_RESOURCE_TYPE::RESOURCE_1D;
+    MockGraphicsAllocation mockAllocationSrc(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockAllocationDst(0, 1u /*num gmms*/, AllocationType::internalHostMemory,
+                                             reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
+                                             MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    BlitProperties properties{};
+    mockAllocationSrc.setGmm(gmmSrc.get(), 0);
+    mockAllocationDst.setGmm(gmmSrc.get(), 0);
+    properties.srcAllocation = &mockAllocationSrc;
+    properties.dstAllocation = &mockAllocationDst;
+
+    auto bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
+    NEO::BlitCommandsHelper<FamilyType>::appendSurfaceType(properties, bltCmd);
+    EXPECT_EQ(bltCmd.getSourceSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_1D);
+    EXPECT_EQ(bltCmd.getDestinationSurfaceType(), XY_BLOCK_COPY_BLT::SURFACE_TYPE::SURFACE_TYPE_SURFTYPE_1D);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,6 +9,7 @@
 
 #include "shared/source/device/device.h"
 #include "shared/source/helpers/aligned_memory.h"
+#include "shared/source/helpers/fill_pattern_tag_node.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/in_order_cmd_helpers.h"
 
@@ -71,6 +72,21 @@ NEO::TagAllocatorBase *Device::getInOrderTimestampAllocator() {
     return inOrderTimestampAllocator.get();
 }
 
+NEO::TagAllocatorBase *Device::getFillPatternAllocator() {
+    if (!this->fillPatternAllocator.get()) {
+        static std::mutex mtx;
+        std::unique_lock<std::mutex> lock(mtx);
+
+        if (!this->fillPatternAllocator.get()) {
+            RootDeviceIndicesContainer rootDeviceIndices = {getNEODevice()->getRootDeviceIndex()};
+            fillPatternAllocator = std::make_unique<NEO::TagAllocator<NEO::FillPaternNodeType>>(rootDeviceIndices, getNEODevice()->getMemoryManager(), MemoryConstants::pageSize2M / MemoryConstants::cacheLineSize,
+                                                                                                MemoryConstants::cacheLineSize, MemoryConstants::cacheLineSize, 0, false, false, getNEODevice()->getDeviceBitfield());
+        }
+    }
+
+    return this->fillPatternAllocator.get();
+}
+
 uint32_t Device::getNextSyncDispatchQueueId() {
     auto newValue = syncDispatchQueueIdAllocator.fetch_add(1);
 
@@ -97,6 +113,14 @@ void Device::ensureSyncDispatchTokenAllocation() {
             memset(syncDispatchTokenAllocation->getUnderlyingBuffer(), 0, syncDispatchTokenAllocation->getUnderlyingBufferSize());
         }
     }
+}
+
+ze_result_t Device::getPriorityLevels(int *lowestPriority, int *highestPriority) {
+
+    *highestPriority = queuePriorityHigh;
+    *lowestPriority = queuePriorityLow;
+
+    return ZE_RESULT_SUCCESS;
 }
 
 } // namespace L0

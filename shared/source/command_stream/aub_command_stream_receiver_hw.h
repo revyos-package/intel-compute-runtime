@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,6 +8,8 @@
 #pragma once
 #include "shared/source/command_stream/command_stream_receiver_simulated_hw.h"
 #include "shared/source/memory_manager/residency_container.h"
+
+#include <mutex>
 
 namespace NEO {
 class PDPE;
@@ -27,11 +29,9 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
 
   public:
     using BaseClass::peekExecutionEnvironment;
-    using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::initAdditionalMMIO;
     using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::aubManager;
     using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::hardwareContextController;
     using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::engineInfo;
-    using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::stream;
     using CommandStreamReceiverSimulatedCommonHw<GfxFamily>::writeMemory;
 
     SubmissionStatus flush(BatchBuffer &batchBuffer, ResidencyContainer &allocationsForResidency) override;
@@ -40,10 +40,6 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
 
     void makeResidentExternal(AllocationView &allocationView);
     void makeNonResidentExternal(uint64_t gpuAddress);
-
-    AubMemDump::AubFileStream *getAubStream() const {
-        return static_cast<AubMemDump::AubFileStream *>(this->stream);
-    }
 
     void writeMemory(uint64_t gpuAddress, void *cpuAddress, size_t size, uint32_t memoryBank, uint64_t entryBits) override;
     bool writeMemory(GraphicsAllocation &gfxAllocation, bool isChunkCopy, uint64_t gpuVaChunkOffset, size_t chunkSize) override;
@@ -63,7 +59,6 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
     WaitStatus waitForTaskCountWithKmdNotifyFallback(TaskCountType taskCountToWait, FlushStamp flushStampToWait, bool useQuickKmdSleep, QueueThrottle throttle) override;
 
     uint32_t getDumpHandle();
-    MOCKABLE_VIRTUAL void addContextToken(uint32_t dumpHandle);
     void dumpAllocation(GraphicsAllocation &gfxAllocation) override;
 
     static CommandStreamReceiver *create(const std::string &fileName,
@@ -79,9 +74,6 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
                                const DeviceBitfield deviceBitfield);
     ~AUBCommandStreamReceiverHw() override;
 
-    AUBCommandStreamReceiverHw(const AUBCommandStreamReceiverHw &) = delete;
-    AUBCommandStreamReceiverHw &operator=(const AUBCommandStreamReceiverHw &) = delete;
-
     MOCKABLE_VIRTUAL void openFile(const std::string &fileName);
     MOCKABLE_VIRTUAL bool reopenFile(const std::string &fileName);
     MOCKABLE_VIRTUAL void initFile(const std::string &fileName);
@@ -96,11 +88,6 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
 
     std::unique_ptr<std::conditional<is64bit, PML4, PDPE>::type> ppgtt;
     std::unique_ptr<PDPE> ggtt;
-    // remap CPU VA -> GGTT VA
-    AddressMapper *gttRemap;
-
-    MOCKABLE_VIRTUAL bool addPatchInfoComments();
-    void addGUCStartMessage(uint64_t batchBufferAddress);
     uint32_t getGUCWorkQueueItemHeader();
 
     CommandStreamReceiverType getType() const override {
@@ -108,6 +95,12 @@ class AUBCommandStreamReceiverHw : public CommandStreamReceiverSimulatedHw<GfxFa
     }
 
     int getAddressSpaceFromPTEBits(uint64_t entryBits) const;
+
+    std::mutex mutex;
+
+    [[nodiscard]] MOCKABLE_VIRTUAL std::unique_lock<std::mutex> lockStream() {
+        return std::unique_lock<std::mutex>(mutex);
+    }
 
   protected:
     constexpr static uint32_t getMaskAndValueForPollForCompletion();

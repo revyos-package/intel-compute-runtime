@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -35,10 +35,8 @@ TEST_F(ReleaseHelper1260Tests, whenGettingCapabilitiesThenCorrectPropertiesAreRe
         EXPECT_TRUE(releaseHelper->isRcsExposureDisabled());
         EXPECT_TRUE(releaseHelper->isBindlessAddressingDisabled());
         EXPECT_EQ(8u, releaseHelper->getNumThreadsPerEu());
-        EXPECT_EQ(0u, releaseHelper->getStackSizePerRay());
+        EXPECT_EQ(0u, releaseHelper->getAsyncStackSizePerRay());
         EXPECT_TRUE(releaseHelper->isRayTracingSupported());
-        EXPECT_FALSE(releaseHelper->isDisablingMsaaRequired());
-        EXPECT_TRUE(releaseHelper->isNumRtStacksPerDssFixedValue());
         EXPECT_FALSE(releaseHelper->getFtrXe2Compression());
     }
 }
@@ -61,6 +59,22 @@ TEST_F(ReleaseHelper1260Tests, whenIsLocalOnlyAllowedCalledThenTrueReturned) {
 
 TEST_F(ReleaseHelper1260Tests, whenIsDummyBlitWaRequiredCalledThenTrueReturned) {
     whenIsDummyBlitWaRequiredCalledThenTrueReturned();
+}
+
+TEST_F(ReleaseHelper1260Tests, whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned) {
+    whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned();
+}
+
+TEST_F(ReleaseHelper1260Tests, whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned) {
+    whenProgrammAdditionalStallPriorToBarrierWithTimestampCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper1260Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey) {
+    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey();
+}
+
+TEST_F(ReleaseHelper1260Tests, whenIsPostImageWriteFlushRequiredCalledThenFalseReturned) {
+    whenIsPostImageWriteFlushRequiredCalledThenFalseReturned();
 }
 
 TEST_F(ReleaseHelper1260Tests, whenGettingPreferredSlmSizeThenAllEntriesHaveCorrectValues) {

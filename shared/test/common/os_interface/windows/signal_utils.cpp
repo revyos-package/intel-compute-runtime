@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <io.h>
 #include <signal.h>
@@ -20,6 +21,7 @@ std::string lastTest("");
 static int newStdOut = -1;
 
 namespace NEO {
+extern const char *apiName;
 extern const char *executionName;
 extern unsigned int ultIterationMaxTimeInS;
 } // namespace NEO
@@ -38,7 +40,7 @@ void handleSIGABRT(int sigNo) {
     if (newStdOut != -1) {
         _dup2(newStdOut, 1);
     }
-    std::cout << "SIGABRT on: " << lastTest << std::endl;
+    std::cout << "SIGABRT in " << NEO::apiName << " " << NEO::executionName << ", on: " << lastTest << std::endl;
     signal(SIGABRT, oldSigAbrt);
     raise(sigNo);
 }
@@ -91,20 +93,20 @@ int setAlarm(bool enableAlarm) {
             std::cout << "set timeout to: " << alarmTimeInS << " seconds" << std::endl;
             threadStarted = true;
             std::chrono::high_resolution_clock::time_point startTime, endTime;
-            std::chrono::milliseconds elapsedTime{};
+            std::chrono::milliseconds elapsedTimeInMs{};
             startTime = std::chrono::high_resolution_clock::now();
             do {
                 std::this_thread::yield();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 endTime = std::chrono::high_resolution_clock::now();
-                elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+                elapsedTimeInMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
                 if (!abortOnTimeout) {
                     return;
                 }
-            } while (abortOnTimeout && elapsedTime.count() < alarmTimeInS * 1000);
+            } while (abortOnTimeout && elapsedTimeInMs.count() < alarmTimeInS * 1000);
 
             if (abortOnTimeout) {
-                printf("timeout on: %s\n", lastTest.c_str());
+                printf("Tests timeout in %s %s, after %u seconds on %s\n", NEO::apiName, NEO::executionName, static_cast<uint32_t>(elapsedTimeInMs.count() / 1000), lastTest.c_str());
                 abort();
             }
         });

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,6 +8,7 @@
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/utilities/logger_neo_only.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/libult/linux/drm_mock.h"
 #include "shared/test/common/mocks/linux/mock_drm_allocation.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
@@ -22,9 +23,10 @@ TEST(FileLogger, GivenLogAllocationMemoryPoolFlagThenLogsCorrectInfo) {
     DebugVariables flags;
     flags.LogAllocationMemoryPool.set(true);
     FullyEnabledFileLogger fileLogger(testFile, flags);
+    fileLogger.useRealFiles(false);
 
     // Log file not created
-    bool logFileCreated = fileExists(fileLogger.getLogFileName());
+    bool logFileCreated = virtualFileExists(fileLogger.getLogFileName());
     EXPECT_FALSE(logFileCreated);
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmMock drm(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -89,9 +91,10 @@ TEST(FileLogger, givenLogAllocationStdoutWhenLogAllocationThenLogToStdoutInstead
     flags.LogAllocationMemoryPool.set(true);
     flags.LogAllocationStdout.set(true);
     FullyEnabledFileLogger fileLogger(testFile, flags);
+    fileLogger.useRealFiles(false);
 
     // Log file not created
-    bool logFileCreated = fileExists(fileLogger.getLogFileName());
+    bool logFileCreated = virtualFileExists(fileLogger.getLogFileName());
     EXPECT_FALSE(logFileCreated);
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmMock drm(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -114,9 +117,10 @@ TEST(FileLogger, givenLogAllocationStdoutWhenLogAllocationThenLogToStdoutInstead
 
     allocation.bufferObjects[0] = &bo;
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     logAllocation(fileLogger, &allocation, nullptr);
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
 
     std::thread::id thisThread = std::this_thread::get_id();
 
@@ -140,7 +144,7 @@ TEST(FileLogger, givenLogAllocationStdoutWhenLogAllocationThenLogToStdoutInstead
     EXPECT_TRUE(output.find("Handle: 4") != std::string::npos);
     EXPECT_TRUE(output.find("\n") != std::string::npos);
 
-    logFileCreated = fileExists(fileLogger.getLogFileName());
+    logFileCreated = virtualFileExists(fileLogger.getLogFileName());
     EXPECT_FALSE(logFileCreated);
 }
 
@@ -149,9 +153,10 @@ TEST(FileLogger, GivenDrmAllocationWithoutBOThenNoHandleLogged) {
     DebugVariables flags;
     flags.LogAllocationMemoryPool.set(true);
     FullyEnabledFileLogger fileLogger(testFile, flags);
+    fileLogger.useRealFiles(false);
 
     // Log file not created
-    bool logFileCreated = fileExists(fileLogger.getLogFileName());
+    bool logFileCreated = virtualFileExists(fileLogger.getLogFileName());
     EXPECT_FALSE(logFileCreated);
     MockDrmAllocation allocation(0u, AllocationType::buffer, MemoryPool::system64KBPages);
 
@@ -185,9 +190,10 @@ TEST(FileLogger, GivenLogAllocationMemoryPoolFlagSetFalseThenAllocationIsNotLogg
     DebugVariables flags;
     flags.LogAllocationMemoryPool.set(false);
     FullyEnabledFileLogger fileLogger(testFile, flags);
+    fileLogger.useRealFiles(false);
 
     // Log file not created
-    bool logFileCreated = fileExists(fileLogger.getLogFileName());
+    bool logFileCreated = virtualFileExists(fileLogger.getLogFileName());
     EXPECT_FALSE(logFileCreated);
 
     MockDrmAllocation allocation(0u, AllocationType::buffer, MemoryPool::system64KBPages);

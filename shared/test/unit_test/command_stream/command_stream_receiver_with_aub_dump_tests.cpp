@@ -445,7 +445,7 @@ struct CommandStreamReceiverTagTests : public ::testing::Test {
 
         typename FamilyType::TimestampPacketType zeros[4] = {};
 
-        for (uint32_t i = 0; i < TimestampPacketConstants::preferredPacketCount; i++) {
+        for (uint32_t i = 0; i < FamilyType::timestampPacketCount; i++) {
             tag->assignDataToAllTimestamps(i, zeros);
         }
 
@@ -529,16 +529,6 @@ HWTEST_F(SimulatedCsrTest, givenTbxWithAubDumpCsrTypeWhenCreateCommandStreamRece
     auto csr = std::make_unique<CommandStreamReceiverWithAUBDump<TbxCommandStreamReceiverHw<FamilyType>>>("", executionEnvironment, expectedRootDeviceIndex, deviceBitfield);
     EXPECT_TRUE(rootDeviceEnvironment->initAubCenterCalled);
     EXPECT_NE(nullptr, rootDeviceEnvironment->aubCenter.get());
-}
-
-HWTEST_F(CommandStreamReceiverWithAubDumpSimpleTest, givenNullAubManagerAvailableWhenTbxCsrWithAubDumpIsCreatedThenAubCsrIsCreated) {
-    MockAubCenter *mockAubCenter = new MockAubCenter();
-    ExecutionEnvironment *executionEnvironment = pDevice->getExecutionEnvironment();
-    executionEnvironment->initializeMemoryManager();
-    executionEnvironment->rootDeviceEnvironments[0]->aubCenter = std::unique_ptr<MockAubCenter>(mockAubCenter);
-    DeviceBitfield deviceBitfield(1);
-    CommandStreamReceiverWithAUBDump<TbxCommandStreamReceiverHw<FamilyType>> csrWithAubDump("aubfile", *executionEnvironment, 0, deviceBitfield);
-    EXPECT_NE(nullptr, csrWithAubDump.aubCSR);
 }
 
 HWTEST_F(CommandStreamReceiverWithAubDumpSimpleTest, givenAubManagerNotAvailableWhenHwCsrWithAubDumpIsCreatedThenAubCsrIsCreated) {

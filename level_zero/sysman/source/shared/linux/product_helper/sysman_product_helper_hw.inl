@@ -65,9 +65,12 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryProperties(zes_mem_prope
             case NEO::DeviceBlobConstants::MemoryType::lpddr5:
                 pProperties->type = ZES_MEM_TYPE_LPDDR5;
                 break;
-            default:
-                pProperties->type = ZES_MEM_TYPE_DDR;
+            case NEO::DeviceBlobConstants::MemoryType::gddr6:
+                pProperties->type = ZES_MEM_TYPE_GDDR6;
                 break;
+            default:
+                DEBUG_BREAK_IF(true);
+                return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
             }
 
             if (pProperties->type == ZES_MEM_TYPE_HBM) {
@@ -132,6 +135,48 @@ bool SysmanProductHelperHw<gfxProduct>::isMemoryMaxTemperatureSupported() {
 template <PRODUCT_FAMILY gfxProduct>
 bool SysmanProductHelperHw<gfxProduct>::isFrequencySetRangeSupported() {
     return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+zes_freq_throttle_reason_flags_t SysmanProductHelperHw<gfxProduct>::getThrottleReasons(LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) {
+
+    zes_freq_throttle_reason_flags_t throttleReasons = 0u;
+    auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
+    auto pSysfsAccess = &pLinuxSysmanImp->getSysfsAccess();
+    const std::string baseDir = pSysmanKmdInterface->getBasePath(subdeviceId);
+    bool baseDirectoryExists = false;
+
+    if (pSysfsAccess->directoryExists(baseDir)) {
+        baseDirectoryExists = true;
+    }
+
+    uint32_t val = 0;
+    std::string throttleReasonStatusFile = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonStatus, subdeviceId, baseDirectoryExists);
+    auto result = pSysfsAccess->read(throttleReasonStatusFile, val);
+    if (ZE_RESULT_SUCCESS == result && val) {
+
+        std::string throttleReasonPL1File = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonPL1, subdeviceId, baseDirectoryExists);
+        std::string throttleReasonPL2File = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonPL2, subdeviceId, baseDirectoryExists);
+        std::string throttleReasonPL4File = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonPL4, subdeviceId, baseDirectoryExists);
+        std::string throttleReasonThermalFile = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonThermal, subdeviceId, baseDirectoryExists);
+
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL1File, val)) && val) {
+            throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP;
+        }
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL2File, val)) && val) {
+            throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP;
+        }
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL4File, val)) && val) {
+            throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT;
+        }
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonThermalFile, val)) && val) {
+            throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT;
+        }
+    } else {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to read file %s, returning error 0x%x>\n", __func__, throttleReasonStatusFile.c_str(), result);
+    }
+
+    return throttleReasons;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -267,18 +312,18 @@ bool SysmanProductHelperHw<gfxProduct>::isPowerSetLimitSupported() {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-std::string SysmanProductHelperHw<gfxProduct>::getCardCriticalPowerLimitFile() {
+std::string SysmanProductHelperHw<gfxProduct>::getPackageCriticalPowerLimitFile() {
     return "power1_crit";
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-SysfsValueUnit SysmanProductHelperHw<gfxProduct>::getCardCriticalPowerLimitNativeUnit() {
+SysfsValueUnit SysmanProductHelperHw<gfxProduct>::getPackageCriticalPowerLimitNativeUnit() {
     return SysfsValueUnit::micro;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool SysmanProductHelperHw<gfxProduct>::isDiagnosticsSupported() {
-    return false;
+ze_result_t SysmanProductHelperHw<gfxProduct>::getPowerEnergyCounter(zes_power_energy_counter_t *pEnergy, LinuxSysmanImp *pLinuxSysmanImp, zes_power_domain_t powerDomain, uint32_t subdeviceId) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -290,6 +335,11 @@ template <PRODUCT_FAMILY gfxProduct>
 void SysmanProductHelperHw<gfxProduct>::getDeviceSupportedFwTypes(FirmwareUtil *pFwInterface, std::vector<std::string> &fwTypes) {
     fwTypes.clear();
     pFwInterface->getDeviceSupportedFwTypes(fwTypes);
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool SysmanProductHelperHw<gfxProduct>::isLateBindingSupported() {
+    return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -318,6 +368,26 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getPciStats(zes_pci_stats_t *pSta
 template <PRODUCT_FAMILY gfxProduct>
 bool SysmanProductHelperHw<gfxProduct>::isZesInitSupported() {
     return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool SysmanProductHelperHw<gfxProduct>::isAggregationOfSingleEnginesSupported() {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+ze_result_t SysmanProductHelperHw<gfxProduct>::getGroupEngineBusynessFromSingleEngines(LinuxSysmanImp *pLinuxSysmanImp, zes_engine_stats_t *pStats, zes_engine_group_t &engineGroup) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool SysmanProductHelperHw<gfxProduct>::isVfMemoryUtilizationSupported() {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+ze_result_t SysmanProductHelperHw<gfxProduct>::getVfLocalMemoryQuota(SysFsAccessInterface *pSysfsAccess, uint64_t &lMemQuota, const uint32_t &vfId) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
 }
 
 } // namespace Sysman

@@ -90,6 +90,16 @@ bool DeviceFactory::prepareDeviceEnvironmentsForProductFamilyOverride(ExecutionE
             compilerProductHelper.setProductConfigForHwInfo(*hardwareInfo, aotInfo.aotConfig);
             if (debugManager.flags.ForceDeviceId.get() == "unk") {
                 hardwareInfo->platform.usDeviceID = aotInfo.deviceIds->front();
+            } else if (aotInfo.deviceIds->front() != hardwareInfo->platform.usDeviceID) {
+                std::stringstream devIds{};
+                for (auto id : *aotInfo.deviceIds)
+                    devIds << "0x" << std::hex << id << ", ";
+
+                NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(),
+                                      stdout, "Info@ %s(): Mismatch of device ids. ForceDeviceId %s is used for platform with multiple deviceIds: [%s]. Consider using OverrideHwIpVersion flag.\n",
+                                      __FUNCTION__,
+                                      debugManager.flags.ForceDeviceId.get().c_str(),
+                                      devIds.str().substr(0, devIds.str().size() - 2).c_str());
             }
         }
         hardwareInfo->ipVersion.value = compilerProductHelper.getHwIpVersion(*hardwareInfo);
@@ -116,7 +126,7 @@ bool DeviceFactory::prepareDeviceEnvironmentsForProductFamilyOverride(ExecutionE
             hardwareInfo->capabilityTable.gpuAddressSpace = maxNBitValue(static_cast<uint64_t>(debugManager.flags.OverrideGpuAddressSpace.get()));
         }
         if (debugManager.flags.OverrideSlmSize.get() != -1) {
-            hardwareInfo->capabilityTable.slmSize = debugManager.flags.OverrideSlmSize.get();
+            hardwareInfo->capabilityTable.maxProgrammableSlmSize = debugManager.flags.OverrideSlmSize.get();
             hardwareInfo->gtSystemInfo.SLMSizeInKb = debugManager.flags.OverrideSlmSize.get();
         }
         if (debugManager.flags.OverrideRegionCount.get() != -1) {
@@ -175,7 +185,7 @@ static bool initHwDeviceIdResources(ExecutionEnvironment &executionEnvironment,
     }
     if (debugManager.flags.OverrideSlmSize.get() != -1) {
         auto hardwareInfo = executionEnvironment.rootDeviceEnvironments[rootDeviceIndex]->getMutableHardwareInfo();
-        hardwareInfo->capabilityTable.slmSize = debugManager.flags.OverrideSlmSize.get();
+        hardwareInfo->capabilityTable.maxProgrammableSlmSize = debugManager.flags.OverrideSlmSize.get();
         hardwareInfo->gtSystemInfo.SLMSizeInKb = debugManager.flags.OverrideSlmSize.get();
     }
     if (debugManager.flags.OverrideRegionCount.get() != -1) {

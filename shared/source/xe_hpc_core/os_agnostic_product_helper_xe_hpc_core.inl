@@ -1,10 +1,12 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
+#include "shared/source/os_interface/product_helper_from_xe_hpc_to_xe3.inl"
+#include "shared/source/os_interface/product_helper_from_xe_hpg_to_xe3.inl"
 #include "shared/source/os_interface/product_helper_xe_hpc_and_later.inl"
 
 namespace NEO {
@@ -54,13 +56,18 @@ bool ProductHelperHw<gfxProduct>::isHostUsmAllocationReuseSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
+template <>
 bool ProductHelperHw<gfxProduct>::isBufferPoolAllocatorSupported() const {
     return false;
 }
 
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isUsmPoolAllocatorSupported() const {
+template <>
+bool ProductHelperHw<gfxProduct>::isHostUsmPoolAllocatorSupported() const {
+    return false;
+}
+
+template <>
+bool ProductHelperHw<gfxProduct>::isDeviceUsmPoolAllocatorSupported() const {
     return false;
 }
 

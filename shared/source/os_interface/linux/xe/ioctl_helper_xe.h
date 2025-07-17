@@ -34,6 +34,8 @@ struct BindInfo {
 
 class IoctlHelperXe : public IoctlHelper {
   public:
+    using GtIdContainer = StackVec<int, 4>;
+
     using IoctlHelper::IoctlHelper;
     static std::unique_ptr<IoctlHelperXe> create(Drm &drmArg);
     static bool queryDeviceIdAndRevision(Drm &drm);
@@ -58,6 +60,7 @@ class IoctlHelperXe : public IoctlHelper {
     uint32_t getPreferredLocationAdvise() override;
     std::optional<MemoryClassInstance> getPreferredLocationRegion(PreferredLocation memoryLocation, uint32_t memoryInstance) override;
     bool setVmBoAdvise(int32_t handle, uint32_t attribute, void *region) override;
+    bool setVmSharedSystemMemAdvise(uint64_t handle, const size_t size, const uint32_t attribute, const uint64_t param, const std::vector<uint32_t> &vmIds) override;
     bool setVmBoAdviseForChunking(int32_t handle, uint64_t start, uint64_t length, uint32_t attribute, void *region) override;
     bool setVmPrefetch(uint64_t start, uint64_t length, uint32_t region, uint32_t vmId) override;
     bool setGemTiling(void *setTiling) override;
@@ -82,11 +85,9 @@ class IoctlHelperXe : public IoctlHelper {
     int vmBind(const VmBindParams &vmBindParams) override;
     int vmUnbind(const VmBindParams &vmBindParams) override;
     int getResetStats(ResetStats &resetStats, uint32_t *status, ResetStatsFault *resetStatsFault) override;
-    bool getEuStallProperties(std::array<uint64_t, 12u> &properties, uint64_t dssBufferSize, uint64_t samplingRate, uint64_t pollPeriod,
-                              uint64_t engineInstance, uint64_t notifyNReports) override;
     bool isEuStallSupported() override;
     uint32_t getEuStallFdParameter() override;
-    bool perfOpenEuStallStream(uint32_t euStallFdParameter, std::array<uint64_t, 12u> &properties, int32_t *stream) override;
+    bool perfOpenEuStallStream(uint32_t euStallFdParameter, uint32_t &samplingPeriodNs, uint64_t engineInstance, uint64_t notifyNReports, uint64_t gpuTimeStampfrequency, int32_t *stream) override;
     bool perfDisableEuStallStream(int32_t *stream) override;
     MOCKABLE_VIRTUAL int perfOpenIoctl(DrmIoctl request, void *arg);
     unsigned int getIoctlRequestValuePerf(DrmIoctl ioctlRequest) const;
@@ -108,6 +109,8 @@ class IoctlHelperXe : public IoctlHelper {
     std::string getFileForMaxGpuFrequency() const override;
     std::string getFileForMaxGpuFrequencyOfSubDevice(int subDeviceId) const override;
     std::string getFileForMaxMemoryFrequencyOfSubDevice(int subDeviceId) const override;
+    void configureCcsMode(std::vector<std::string> &files, const std::string expectedPrefix, uint32_t ccsMode,
+                          std::vector<std::tuple<std::string, uint32_t>> &deviceCcsModeVec) override;
     bool getFabricLatency(uint32_t fabricId, uint32_t &latency, uint32_t &bandwidth) override;
     bool isWaitBeforeBindRequired(bool bind) const override;
     std::unique_ptr<EngineInfo> createEngineInfo(bool isSysmanEnabled) override;
@@ -132,16 +135,19 @@ class IoctlHelperXe : public IoctlHelper {
     bool resourceRegistrationEnabled() override { return true; }
     bool isPreemptionSupported() override { return true; }
     bool isTimestampsRefreshEnabled() override { return true; }
-    int getTileIdFromGtId(int gtId) const override {
+    uint32_t getTileIdFromGtId(uint32_t gtId) const override {
         return gtIdToTileId[gtId];
     }
+    uint32_t getGtIdFromTileId(uint32_t tileId, uint16_t engineClass) const override;
     bool makeResidentBeforeLockNeeded() const override;
+    bool isSmallBarConfigAllowed() const override { return false; }
 
   protected:
     static constexpr uint32_t maxContextSetProperties = 4;
 
-    const char *xeGetClassName(int className);
+    virtual const char *xeGetClassName(int className) const;
     const char *xeGetBindOperationName(int bindOperation);
+    const char *xeGetAdviseOperationName(int adviseOperation);
 
     const char *xeGetengineClassName(uint32_t engineClass);
     template <typename DataType>
@@ -155,9 +161,11 @@ class IoctlHelperXe : public IoctlHelper {
     int debuggerMetadataCreateIoctl(DrmIoctl request, void *arg);
     int debuggerMetadataDestroyIoctl(DrmIoctl request, void *arg);
     int getEudebugExtProperty();
-    virtual bool isExtraEngineClassAllowed(uint16_t engineClass) const { return false; }
+    uint64_t getEudebugExtPropertyValue();
+    virtual bool isMediaEngine(uint16_t engineClass) const { return false; }
     virtual std::optional<uint32_t> getCxlType() { return {}; }
     virtual uint32_t getNumEngines(uint64_t *enginesData) const;
+    virtual bool isMediaGt(uint16_t gtType) const;
 
     struct UserFenceExtension {
         static constexpr uint32_t tagValue = 0x123987;
@@ -168,7 +176,7 @@ class IoctlHelperXe : public IoctlHelper {
 
     uint16_t getDefaultEngineClass(const aub_stream::EngineType &defaultEngineType);
     void setOptionalContextProperties(Drm &drm, void *extProperties, uint32_t &extIndexInOut);
-    virtual void setContextProperties(const OsContextLinux &osContext, void *extProperties, uint32_t &extIndexInOut);
+    virtual void setContextProperties(const OsContextLinux &osContext, uint32_t deviceIndex, void *extProperties, uint32_t &extIndexInOut);
     virtual void applyContextFlags(void *execQueueCreate, bool allocateInterrupt){};
 
     struct GtIpVersion {
@@ -187,8 +195,10 @@ class IoctlHelperXe : public IoctlHelper {
 
     std::vector<uint64_t> queryGtListData;
     constexpr static int invalidIndex = -1;
-    StackVec<int, 2> gtIdToTileId;
-    StackVec<int, 2> tileIdToGtId;
+    GtIdContainer gtIdToTileId;
+    GtIdContainer tileIdToGtId;
+    GtIdContainer mediaGtIdToTileId;
+    GtIdContainer tileIdToMediaGtId;
     XeDrm::drm_xe_query_gt_list *xeGtListData = nullptr;
 
     std::unique_ptr<XeDrm::drm_xe_engine_class_instance> defaultEngine;
@@ -213,25 +223,12 @@ class IoctlHelperXe : public IoctlHelper {
         uint32_t drmContextId;
     };
 
-    struct SupportedFeatures {
-        union {
-            struct {
-                uint32_t pageFault : 1;
-                uint32_t reserved : 31;
-            } flags;
-            uint32_t allFlags = 0;
-        };
-    } supportedFeatures{};
-    static_assert(sizeof(SupportedFeatures::flags) == sizeof(SupportedFeatures::allFlags), "");
-
-    void querySupportedFeatures();
     std::unique_ptr<EuDebugInterface> euDebugInterface;
 };
 
 template <typename... XeLogArgs>
 void IoctlHelperXe::xeLog(XeLogArgs &&...args) const {
     if (debugManager.flags.PrintXeLogs.get()) {
-        PRINT_DEBUG_STRING(debugManager.flags.PrintXeLogs.get(), stderr, TimestampHelper::getTimestamp().c_str());
         PRINT_DEBUG_STRING(debugManager.flags.PrintXeLogs.get(), stderr, args...);
     }
 }

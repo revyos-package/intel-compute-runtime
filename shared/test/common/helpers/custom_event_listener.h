@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -18,7 +18,8 @@
 extern std::string lastTest;
 namespace NEO {
 extern const char *executionName;
-}
+extern const char *apiName;
+} // namespace NEO
 
 class CCustomEventListener : public ::testing::TestEventListener {
   public:
@@ -114,43 +115,49 @@ class CCustomEventListener : public ::testing::TestEventListener {
         if (unitTest.Failed()) {
             ultStatus = "FAILED";
         }
-        auto executionNameLen = strlen(NEO::executionName);
+        auto targetNameLen = strlen(NEO::apiName) + 1 + strlen(NEO::executionName);
 
         if (hardwarePrefix != "---") {
-            paddingS = std::string(hardwarePrefix.length() + executionNameLen, ' ');
-            paddingE = std::string(hardwarePrefix.length() + executionNameLen, '=');
+            paddingS = std::string(hardwarePrefix.length() + targetNameLen, ' ');
+            paddingE = std::string(hardwarePrefix.length() + targetNameLen, '=');
 
             fprintf(
                 stdout,
                 "\n"
                 "%s==================\n"
-                "==  %s %ss %s   ==\n"
+                "==  %s %s %ss %s   ==\n"
                 "%s==================\n",
-                paddingE.c_str(), hardwarePrefix.c_str(), NEO::executionName, ultStatus.c_str(), paddingE.c_str());
+                paddingE.c_str(), hardwarePrefix.c_str(), NEO::apiName, NEO::executionName, ultStatus.c_str(), paddingE.c_str());
         } else {
-            paddingE = std::string(executionNameLen, '=');
+            paddingE = std::string(targetNameLen, '=');
             fprintf(
                 stdout,
                 "\n"
                 "%s==================\n"
-                "==   %ss %s   ==\n"
+                "==   %s %ss %s   ==\n"
                 "%s==================\n",
-                paddingE.c_str(), NEO::executionName, ultStatus.c_str(), paddingE.c_str());
+                paddingE.c_str(), NEO::apiName, NEO::executionName, ultStatus.c_str(), paddingE.c_str());
         }
 
         fprintf(
             stdout,
             "Tests run:      %d\n"
             "Tests passed:   %d\n"
-            "Tests skipped:  %d\n"
-            "Tests failed:   %d\n"
+            "Tests skipped:  %d\n",
+            testsRun,
+            testsPassed,
+            testsSkipped);
+        if (testsFailed > 0)
+            fprintf(
+                stdout,
+                "Tests failed:   %d\n",
+                testsFailed);
+
+        fprintf(
+            stdout,
             "Tests disabled: %d\n"
             " Time elapsed:  %d ms\n"
             "%s==================\n",
-            testsRun,
-            testsPassed,
-            testsSkipped,
-            testsFailed,
             testsDisabled,
             timeElapsed,
             paddingE.c_str());

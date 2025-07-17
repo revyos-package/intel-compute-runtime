@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -17,6 +17,7 @@
 namespace NEO {
 
 struct EnqueueWriteImageTest : public CommandEnqueueFixture,
+                               public SurfaceStateAccessor,
                                public ::testing::Test {
 
     void SetUp(void) override {
@@ -24,7 +25,7 @@ struct EnqueueWriteImageTest : public CommandEnqueueFixture,
         CommandEnqueueFixture::setUp();
 
         context = new MockContext(pClDevice);
-        dstImage = Image2dHelper<>::create(context);
+        dstImage = Image2dHelperUlt<>::create(context);
         dstAllocation = dstImage->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
 
         const auto &imageDesc = dstImage->getImageDesc();

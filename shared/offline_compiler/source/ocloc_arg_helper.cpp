@@ -14,7 +14,7 @@
 #include "shared/source/release_helper/release_helper.h"
 
 #include "hw_cmds.h"
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 
 #include <algorithm>
 #include <cstring>
@@ -210,6 +210,6 @@ void OclocArgHelper::saveOutput(const std::string &filename, const void *pData, 
     if (outputEnabled()) {
         addOutput(filename, pData, dataSize);
     } else {
-        writeDataToFile(filename.c_str(), pData, dataSize);
+        writeDataToFile(filename.c_str(), std::string_view(static_cast<const char *>(pData), dataSize));
     }
 }

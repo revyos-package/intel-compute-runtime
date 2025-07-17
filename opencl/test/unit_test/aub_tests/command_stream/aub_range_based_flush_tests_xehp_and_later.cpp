@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -30,6 +30,8 @@ struct RangeBasedFlushTest : public KernelAUBFixture<SimpleKernelFixture>, publi
     void SetUp() override {
         debugManager.flags.PerformImplicitFlushForNewResource.set(0);
         debugManager.flags.PerformImplicitFlushForIdleGpu.set(0);
+        debugManager.flags.CsrDispatchMode.set(static_cast<int32_t>(DispatchMode::batchedDispatch));
+
         KernelAUBFixture<SimpleKernelFixture>::setUp();
     };
 
@@ -122,7 +124,7 @@ HWTEST2_F(RangeBasedFlushTest, givenNoDcFlushInPipeControlWhenL3ControlFlushesCa
     };
     if (MemorySynchronizationCommands<FamilyType>::isBarrierWaRequired(device->getRootDeviceEnvironment())) {
         expectedCommands.push_back(new MatchHwCmd<FamilyType, PIPE_CONTROL>(1, Expects{EXPECT_MEMBER(PIPE_CONTROL, getDcFlushEnable, false)}));
-        if (MemorySynchronizationCommands<FamilyType>::getSizeForAdditonalSynchronization(device->getRootDeviceEnvironment()) > 0) {
+        if (MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, device->getRootDeviceEnvironment()) > 0) {
             expectedCommands.push_back(new MatchHwCmd<FamilyType, MI_SEMAPHORE_WAIT>(1, Expects{EXPECT_MEMBER(MI_SEMAPHORE_WAIT, getSemaphoreDataDword, EncodeSemaphore<FamilyType>::invalidHardwareTag)}));
         }
     }

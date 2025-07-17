@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,10 +14,11 @@ struct TestTraits<IGFX_GEN12LP_CORE> {
     static constexpr bool programOnlyChangedFieldsInComputeStateMode = false;
     static constexpr bool iohInSbaSupported = true;
     static constexpr bool auxTranslationSupported = true;
-    static constexpr bool deviceEnqueueSupport = false;
     static constexpr bool implementsPreambleThreadArbitration = false;
     static constexpr bool forceGpuNonCoherent = true;
     static constexpr bool imagesSupported = true;
     static constexpr bool largeGrfModeInStateComputeModeSupported = true;
     static constexpr bool heaplessAllowed = false;
+    static constexpr bool heaplessRequired = false;
+    static constexpr bool bindingTableStateSupported = true;
 };

@@ -27,7 +27,7 @@ const PLATFORM PTL::platform = {
     IGFX_XE3_CORE,
     PLATFORM_NONE, // default init
     0,             // usDeviceID
-    0,             // usRevId. 0 sets the stepping to A0
+    4,             // usRevId. 0 sets the stepping to A0
     0,             // usDeviceID_PCH
     0,             // usRevId_PCH
     GTTYPE_UNDEFINED};
@@ -45,9 +45,9 @@ const RuntimeCapabilityTable PTL::capabilityTable{
     aub_stream::ENGINE_CCS,                                    // defaultEngineType
     0,                                                         // maxRenderFrequency
     30,                                                        // clVersionSupport
-    CmdServicesMemTraceVersion::DeviceValues::Ptl,             // aubDeviceId
+    AubMemDump::CmdServicesMemTraceVersion::DeviceValues::Ptl, // aubDeviceId
     0,                                                         // extraQuantityThreadsPerEU
-    128,                                                       // slmSize
+    128,                                                       // maxProgrammableSlmSize
     sizeof(PTL::GRF),                                          // grfSize
     64,                                                        // timestampValidBits
     64,                                                        // kernelTimestampValidBits
@@ -56,23 +56,15 @@ const RuntimeCapabilityTable PTL::capabilityTable{
     true,                                                      // ftrSupportsFP64
     false,                                                     // ftrSupportsFP64Emulation
     true,                                                      // ftrSupports64BitMath
-    true,                                                      // ftrSvm
     false,                                                     // ftrSupportsCoherency
-    false,                                                     // ftrSupportsVmeAvcTextureSampler
-    false,                                                     // ftrSupportsVmeAvcPreemption
     false,                                                     // ftrRenderCompressedBuffers
     false,                                                     // ftrRenderCompressedImages
-    true,                                                      // ftr64KBpages
     true,                                                      // instrumentationEnabled
-    false,                                                     // supportsVme
     false,                                                     // supportCacheFlushAfterWalker
     true,                                                      // supportsImages
-    false,                                                     // supportsDeviceEnqueue
-    false,                                                     // supportsPipes
     true,                                                      // supportsOcl21Features
     true,                                                      // supportsOnDemandPageFaults
     true,                                                      // supportsIndependentForwardProgress
-    false,                                                     // hostPtrTrackingEnabled
     true,                                                      // isIntegratedDevice
     false,                                                     // supportsMediaBlock
     false,                                                     // p2pAccessSupported

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,6 +14,7 @@
 #include "shared/source/os_interface/windows/wddm/wddm.h"
 
 #include "level_zero/core/source/device/device_imp.h"
+#include "level_zero/core/source/device/device_imp_drm/device_imp_peer.h"
 
 namespace L0 {
 
@@ -63,10 +64,19 @@ ze_result_t DeviceImp::getExternalMemoryProperties(ze_device_external_memory_pro
             pExternalMemoryProperties->memoryAllocationExportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
             pExternalMemoryProperties->memoryAllocationImportTypes = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
         }
-
-        return ZE_RESULT_SUCCESS;
     }
-    return ZE_RESULT_ERROR_UNINITIALIZED;
+    return ZE_RESULT_SUCCESS;
+}
+
+ze_result_t DeviceImp::queryFabricStats(DeviceImp *pPeerDevice, uint32_t &latency, uint32_t &bandwidth) {
+    NEO::Device *activeDevice = getActiveDevice();
+    if (activeDevice->getRootDeviceEnvironment().osInterface) {
+        NEO::DriverModelType driverType = neoDevice->getRootDeviceEnvironment().osInterface->getDriverModel()->getDriverModelType();
+        if (driverType == NEO::DriverModelType::drm) {
+            return queryFabricStatsDrm(this, pPeerDevice, latency, bandwidth);
+        }
+    }
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
 }
 
 } // namespace L0

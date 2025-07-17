@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,13 +14,13 @@
 #include "shared/test/common/mocks/mock_bindless_heaps_helper.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
-#include "shared/test/common/mocks/mock_l0_debugger.h"
 #include "shared/test/common/mocks/mock_modules_zebin.h"
 #include "shared/test/common/test_macros/hw_test.h"
 #include "shared/test/common/test_macros/test.h"
 
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/fixtures/kernel_max_cooperative_groups_count_fixture.h"
+#include "level_zero/core/test/unit_tests/fixtures/module_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_device.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_kernel.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_module.h"
@@ -29,6 +29,7 @@
 
 namespace L0 {
 #include "level_zero/core/source/kernel/patch_with_implicit_surface.inl"
+
 namespace ult {
 
 using KernelImpTest = Test<DeviceFixture>;
@@ -445,7 +446,7 @@ TEST(zeKernelGetProperties, WhenGettingKernelPropertiesThenSuccessIsReturned) {
 
 using KernelImpSuggestMaxCooperativeGroupCountTests = Test<KernelImpSuggestMaxCooperativeGroupCountFixture>;
 
-HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenNoBarriersOrSlmUsedWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithSimd) {
+HWTEST2_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenNoBarriersOrSlmUsedWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithSimd, IsAtLeastXe2HpgCore) {
     auto workGroupSize = lws[0] * lws[1] * lws[2];
     auto expected = availableThreadCount / Math::divideAndRoundUp(workGroupSize, simd);
     EXPECT_EQ(expected, getMaxWorkGroupCount());
@@ -471,13 +472,13 @@ HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenMultiTileWhenCalcul
     }
 }
 
-HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenBarriersWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToBarriersCount) {
+HWTEST2_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenBarriersWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToBarriersCount, IsAtLeastXe2HpgCore) {
     usesBarriers = 1;
     auto expected = dssCount * (maxBarrierCount / usesBarriers);
     EXPECT_EQ(expected, getMaxWorkGroupCount());
 }
 
-HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenUsedSlmSizeWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToUsedSlmSize) {
+HWTEST2_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenUsedSlmSizeWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToUsedSlmSize, IsAtLeastXe2HpgCore) {
     usedSlm = 64 * MemoryConstants::kiloByte;
     auto expected = availableSlm / usedSlm;
     EXPECT_EQ(expected, getMaxWorkGroupCount());
@@ -485,6 +486,7 @@ HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenUsedSlmSizeWhenCalc
 
 using KernelTest = Test<DeviceFixture>;
 HWTEST2_F(KernelTest, GivenInlineSamplersWhenSettingInlineSamplerThenDshIsPatched, SupportsSampler) {
+    using SamplerState = typename FamilyType::SAMPLER_STATE;
     WhiteBox<::L0::KernelImmutableData> kernelImmData = {};
     NEO::KernelDescriptor descriptor;
     kernelImmData.kernelDescriptor = &descriptor;
@@ -498,12 +500,11 @@ HWTEST2_F(KernelTest, GivenInlineSamplersWhenSettingInlineSamplerThenDshIsPatche
     Mock<KernelImp> kernel;
     kernel.module = &module;
     kernel.kernelImmData = &kernelImmData;
-    kernel.dynamicStateHeapData.reset(new uint8_t[64 + 16]);
-    kernel.dynamicStateHeapDataSize = 64 + 16;
+    kernel.dynamicStateHeapData.reset(new uint8_t[64 + sizeof(SamplerState)]);
+    kernel.dynamicStateHeapDataSize = 64 + sizeof(SamplerState);
 
     kernel.setInlineSamplers();
 
-    using SamplerState = typename FamilyType::SAMPLER_STATE;
     auto samplerState = reinterpret_cast<const SamplerState *>(kernel.dynamicStateHeapData.get() + 64U);
     EXPECT_TRUE(samplerState->getNonNormalizedCoordinateEnable());
     EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_WRAP, samplerState->getTcxAddressControlMode());
@@ -513,9 +514,64 @@ HWTEST2_F(KernelTest, GivenInlineSamplersWhenSettingInlineSamplerThenDshIsPatche
     EXPECT_EQ(SamplerState::MAG_MODE_FILTER_NEAREST, samplerState->getMagModeFilter());
 }
 
+HWTEST2_F(KernelTest, givenTwoInlineSamplersWithBindlessAddressingWhenSettingInlineSamplerThenDshIsPatchedCorrectly, SupportsSampler) {
+    using SamplerState = typename FamilyType::SAMPLER_STATE;
+    constexpr auto borderColorStateSize = 64u;
+
+    WhiteBox<::L0::KernelImmutableData> kernelImmData = {};
+    NEO::KernelDescriptor descriptor;
+    kernelImmData.kernelDescriptor = &descriptor;
+
+    descriptor.inlineSamplers.resize(2);
+
+    auto &inlineSampler = descriptor.inlineSamplers[0];
+    inlineSampler.addrMode = NEO::KernelDescriptor::InlineSampler::AddrMode::clampEdge;
+    inlineSampler.filterMode = NEO::KernelDescriptor::InlineSampler::FilterMode::nearest;
+    inlineSampler.isNormalized = false;
+    inlineSampler.bindless = 0x98u;
+    inlineSampler.samplerIndex = 0u;
+
+    ASSERT_TRUE(NEO::isValidOffset(inlineSampler.bindless));
+
+    auto &inlineSampler2 = descriptor.inlineSamplers[1];
+    inlineSampler2.addrMode = NEO::KernelDescriptor::InlineSampler::AddrMode::clampBorder;
+    inlineSampler2.filterMode = NEO::KernelDescriptor::InlineSampler::FilterMode::linear;
+    inlineSampler2.isNormalized = false;
+    inlineSampler2.bindless = 0x90u;
+    inlineSampler2.samplerIndex = 1u;
+
+    ASSERT_TRUE(NEO::isValidOffset(inlineSampler.bindless));
+
+    Mock<Module> module(device, nullptr);
+    Mock<KernelImp> kernel;
+    kernel.module = &module;
+    kernel.kernelImmData = &kernelImmData;
+    kernel.dynamicStateHeapData.reset(new uint8_t[borderColorStateSize + 2 * sizeof(SamplerState)]);
+    kernel.dynamicStateHeapDataSize = borderColorStateSize + 2 * sizeof(SamplerState);
+
+    kernel.setInlineSamplers();
+
+    const SamplerState *samplerState = reinterpret_cast<const SamplerState *>(kernel.dynamicStateHeapData.get() + borderColorStateSize);
+    const SamplerState *samplerState2 = reinterpret_cast<const SamplerState *>(kernel.dynamicStateHeapData.get() + sizeof(SamplerState) + borderColorStateSize);
+
+    EXPECT_TRUE(samplerState->getNonNormalizedCoordinateEnable());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP, samplerState->getTcxAddressControlMode());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP, samplerState->getTcyAddressControlMode());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP, samplerState->getTczAddressControlMode());
+    EXPECT_EQ(SamplerState::MIN_MODE_FILTER_NEAREST, samplerState->getMinModeFilter());
+    EXPECT_EQ(SamplerState::MAG_MODE_FILTER_NEAREST, samplerState->getMagModeFilter());
+
+    EXPECT_TRUE(samplerState2->getNonNormalizedCoordinateEnable());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP_BORDER, samplerState2->getTcxAddressControlMode());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP_BORDER, samplerState2->getTcyAddressControlMode());
+    EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP_BORDER, samplerState2->getTczAddressControlMode());
+    EXPECT_EQ(SamplerState::MIN_MODE_FILTER_LINEAR, samplerState2->getMinModeFilter());
+    EXPECT_EQ(SamplerState::MAG_MODE_FILTER_LINEAR, samplerState2->getMagModeFilter());
+}
+
 using KernelImmutableDataBindlessTest = Test<DeviceFixture>;
 
-HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExplicitAndImplicitArgsAndNoBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeHpgCore) {
+HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExplicitAndImplicitArgsAndNoBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeCore) {
     HardwareInfo hwInfo = *defaultHwInfo;
 
     auto device = std::unique_ptr<NEO::MockDevice>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
@@ -536,7 +592,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
 
     {
         device->incRefInternal();
-        MockDeviceImp deviceImp(device.get(), device->getExecutionEnvironment());
+        MockDeviceImp deviceImp(device.get());
 
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
@@ -584,7 +640,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
     }
 }
 
-HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplicitAndImplicitArgsAndNoBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeHpgCore) {
+HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplicitAndImplicitArgsAndNoBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeCore) {
     HardwareInfo hwInfo = *defaultHwInfo;
 
     auto device = std::unique_ptr<NEO::MockDevice>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
@@ -606,7 +662,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
 
     {
         device->incRefInternal();
-        MockDeviceImp deviceImp(device.get(), device->getExecutionEnvironment());
+        MockDeviceImp deviceImp(device.get());
 
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
@@ -654,7 +710,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
     }
 }
 
-HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExplicitAndImplicitArgsAndBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeHpgCore) {
+HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExplicitAndImplicitArgsAndBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeCore) {
     using RENDER_SURFACE_STATE = typename FamilyType::RENDER_SURFACE_STATE;
     HardwareInfo hwInfo = *defaultHwInfo;
 
@@ -680,7 +736,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
 
     {
         device->incRefInternal();
-        MockDeviceImp deviceImp(device.get(), device->getExecutionEnvironment());
+        MockDeviceImp deviceImp(device.get());
 
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
@@ -739,7 +795,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
     }
 }
 
-HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplicitAndImplicitArgsAndBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeHpgCore) {
+HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplicitAndImplicitArgsAndBindlessHeapsHelperWhenInitializeKernelImmutableDataThenSurfaceStateIsSetAndImplicitArgBindlessOffsetIsPatched, IsAtLeastXeCore) {
     using RENDER_SURFACE_STATE = typename FamilyType::RENDER_SURFACE_STATE;
     HardwareInfo hwInfo = *defaultHwInfo;
 
@@ -765,7 +821,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
 
     {
         device->incRefInternal();
-        MockDeviceImp deviceImp(device.get(), device->getExecutionEnvironment());
+        MockDeviceImp deviceImp(device.get());
 
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
@@ -948,6 +1004,145 @@ TEST_F(KernelImpTest, givenCorrectEngineTypeWhenGettingMaxWgCountPerTileThenRetu
     EXPECT_EQ(4u, kernel.getMaxWgCountPerTile(NEO::EngineGroupType::compute));
     EXPECT_EQ(2u, kernel.getMaxWgCountPerTile(NEO::EngineGroupType::renderCompute));
     EXPECT_EQ(100u, kernel.getMaxWgCountPerTile(NEO::EngineGroupType::cooperativeCompute));
+}
+
+using KernelArgumentInfoTests = Test<ModuleImmutableDataFixture>;
+
+TEST_F(KernelArgumentInfoTests, givenKernelWhenGetArgumentSizeCalledWithInvalidArgsThenReturnFailure) {
+    uint32_t perHwThreadPrivateMemorySizeRequested = 32u;
+
+    std::unique_ptr<MockImmutableData> mockKernelImmData =
+        std::make_unique<MockImmutableData>(perHwThreadPrivateMemorySizeRequested);
+
+    createModuleFromMockBinary(perHwThreadPrivateMemorySizeRequested, false, mockKernelImmData.get());
+    std::unique_ptr<ModuleImmutableDataFixture::MockKernel> kernel;
+    kernel = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module.get());
+    ze_kernel_desc_t desc = {};
+    desc.pKernelName = kernelName.c_str();
+    mockKernelImmData->resizeExplicitArgs(1);
+    kernel->initialize(&desc);
+
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_NULL_POINTER, kernel->getArgumentSize(0, nullptr));
+    uint32_t argSize = 0;
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_KERNEL_ARGUMENT_INDEX, kernel->getArgumentSize(1, &argSize));
+}
+
+TEST_F(KernelArgumentInfoTests, givenKernelWhenGetArgumentSizeCalledThenReturnCorrectSizeAndStatus) {
+    uint32_t perHwThreadPrivateMemorySizeRequested = 32u;
+
+    std::unique_ptr<MockImmutableData> mockKernelImmData =
+        std::make_unique<MockImmutableData>(perHwThreadPrivateMemorySizeRequested);
+
+    createModuleFromMockBinary(perHwThreadPrivateMemorySizeRequested, false, mockKernelImmData.get());
+    std::unique_ptr<ModuleImmutableDataFixture::MockKernel> kernel;
+    kernel = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module.get());
+    ze_kernel_desc_t desc = {};
+    desc.pKernelName = kernelName.c_str();
+
+    auto ptrByValueArg = ArgDescriptor(ArgDescriptor::argTValue);
+    ptrByValueArg.as<ArgDescValue>().elements.push_back(ArgDescValue::Element{0u, 100u});
+
+    auto ptrArg = ArgDescriptor(ArgDescriptor::argTPointer);
+    ptrArg.as<ArgDescPointer>().pointerSize = 8u;
+
+    auto argDescriptorSampler = NEO::ArgDescriptor(NEO::ArgDescriptor::argTSampler);
+    argDescriptorSampler.as<NEO::ArgDescSampler>().size = 10u;
+
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(ptrByValueArg);
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(ptrArg);
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(ArgDescriptor(ArgDescriptor::argTImage));
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(argDescriptorSampler);
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(ArgDescriptor(ArgDescriptor::argTUnknown));
+    mockKernelImmData->mockKernelDescriptor->payloadMappings.explicitArgs.push_back(ArgDescriptor(ArgDescriptor::argTValue));
+    kernel->initialize(&desc);
+
+    uint32_t argSize = 0;
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(0, &argSize));
+    EXPECT_EQ(100u, argSize);
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(1, &argSize));
+    EXPECT_EQ(8u, argSize);
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(2, &argSize));
+    EXPECT_EQ(sizeof(ze_image_handle_t), argSize);
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(3, &argSize));
+    EXPECT_EQ(10u, argSize);
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(4, &argSize));
+    EXPECT_EQ(0u, argSize);
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentSize(5, &argSize));
+    EXPECT_EQ(0u, argSize);
+}
+
+TEST_F(KernelArgumentInfoTests, givenKernelWhenGetArgumentTypeCalledWithInvalidArgsThenReturnFailure) {
+    uint32_t perHwThreadPrivateMemorySizeRequested = 32u;
+
+    std::unique_ptr<MockImmutableData> mockKernelImmData =
+        std::make_unique<MockImmutableData>(perHwThreadPrivateMemorySizeRequested);
+
+    createModuleFromMockBinary(perHwThreadPrivateMemorySizeRequested, false, mockKernelImmData.get());
+    std::unique_ptr<ModuleImmutableDataFixture::MockKernel> kernel;
+    kernel = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module.get());
+    ze_kernel_desc_t desc = {};
+    desc.pKernelName = kernelName.c_str();
+    mockKernelImmData->resizeExplicitArgs(1);
+    kernel->initialize(&desc);
+
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_NULL_POINTER, kernel->getArgumentType(0, nullptr, nullptr));
+    uint32_t argSize = 0;
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_KERNEL_ARGUMENT_INDEX, kernel->getArgumentType(1, &argSize, nullptr));
+    EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, kernel->getArgumentType(0, &argSize, nullptr));
+}
+
+TEST_F(KernelArgumentInfoTests, givenKernelWhenGetArgumentTypeCalledThenReturnCorrectTypeAndStatus) {
+    constexpr ConstStringRef argType = "uint32_t";
+    uint32_t perHwThreadPrivateMemorySizeRequested = 32u;
+
+    std::unique_ptr<MockImmutableData> mockKernelImmData =
+        std::make_unique<MockImmutableData>(perHwThreadPrivateMemorySizeRequested);
+
+    createModuleFromMockBinary(perHwThreadPrivateMemorySizeRequested, false, mockKernelImmData.get());
+    std::unique_ptr<ModuleImmutableDataFixture::MockKernel> kernel;
+    kernel = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module.get());
+    ze_kernel_desc_t desc = {};
+    desc.pKernelName = kernelName.c_str();
+    mockKernelImmData->resizeExplicitArgs(1);
+
+    ArgTypeMetadataExtended metadata;
+    metadata.type = argType.data();
+    mockKernelImmData->mockKernelDescriptor->explicitArgsExtendedMetadata.push_back(metadata);
+    kernel->initialize(&desc);
+
+    uint32_t argSize = 0;
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentType(0, &argSize, nullptr));
+    EXPECT_EQ(argType.size() + 1, argSize);
+    auto data = new char[argSize];
+    memset(data, 0, argSize);
+
+    // Do not copy if passed size is lower than required
+    argSize = 1;
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentType(0, &argSize, data));
+    EXPECT_NE(0, memcmp(argType.data(), data, 1));
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, kernel->getArgumentType(0, &argSize, data));
+    EXPECT_EQ(0, memcmp(argType.data(), data, argSize));
+    delete[] data;
+}
+
+TEST_F(KernelImpTest, givenDefaultGroupSizeWhenGetGroupSizeCalledThenReturnDefaultValues) {
+    Mock<Module> module(device, nullptr);
+    Mock<::L0::KernelImp> kernel;
+    kernel.module = &module;
+    ze_kernel_desc_t kernelDesc{ZE_STRUCTURE_TYPE_KERNEL_DESC};
+    kernel.initialize(&kernelDesc);
+
+    auto groupSize = kernel.getGroupSize();
+
+    EXPECT_EQ(1u, groupSize[0]);
+    EXPECT_EQ(1u, groupSize[1]);
+    EXPECT_EQ(1u, groupSize[2]);
 }
 
 } // namespace ult

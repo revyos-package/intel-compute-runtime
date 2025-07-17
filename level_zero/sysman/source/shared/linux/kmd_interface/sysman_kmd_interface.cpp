@@ -21,9 +21,6 @@
 namespace L0 {
 namespace Sysman {
 
-const std::string deviceDir("device");
-const std::string sysDevicesDir("/sys/devices/");
-
 const std::map<uint16_t, std::string> SysmanKmdInterfaceI915::i915EngineClassToSysfsEngineMap = {
     {drm_i915_gem_engine_class::I915_ENGINE_CLASS_RENDER, "rcs"},
     {static_cast<uint16_t>(drm_i915_gem_engine_class::I915_ENGINE_CLASS_COMPUTE), "ccs"},
@@ -173,23 +170,10 @@ void SysmanKmdInterface::convertSysfsValueUnit(const SysfsValueUnit dstUnit, con
     }
 }
 
-uint32_t SysmanKmdInterface::getEventTypeImpl(std::string &dirName, const bool isIntegratedDevice) {
-    auto pSysFsAccess = getSysFsAccess();
+uint32_t SysmanKmdInterface::getEventType() {
+
     auto pFsAccess = getFsAccess();
-
-    if (!isIntegratedDevice) {
-        std::string bdfDir;
-        ze_result_t result = pSysFsAccess->readSymLink(deviceDir, bdfDir);
-        if (ZE_RESULT_SUCCESS != result) {
-            return 0;
-        }
-        const auto loc = bdfDir.find_last_of('/');
-        auto bdf = bdfDir.substr(loc + 1);
-        std::replace(bdf.begin(), bdf.end(), ':', '_');
-        dirName = dirName + "_" + bdf;
-    }
-
-    const std::string eventTypeSysfsNode = sysDevicesDir + dirName + "/" + "type";
+    const std::string eventTypeSysfsNode = std::string(sysDevicesDir) + sysmanDeviceDirName + "/" + "type";
     auto eventTypeVal = 0u;
     if (ZE_RESULT_SUCCESS != pFsAccess->read(eventTypeSysfsNode, eventTypeVal)) {
         return 0;
@@ -211,6 +195,33 @@ void SysmanKmdInterface::getWedgedStatusImpl(LinuxSysmanImp *pLinuxSysmanImp, ze
     if (pDrm->getErrno() == EIO) {
         pState->reset |= ZES_RESET_REASON_FLAG_WEDGED;
     }
+}
+
+ze_result_t SysmanKmdInterface::checkErrorNumberAndReturnStatus() {
+    if (errno == EMFILE || errno == ENFILE) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): System has run out of file handles. Suggested action is to increase the file handle limit. \n", __FUNCTION__);
+        return ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE;
+    }
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+}
+
+void SysmanKmdInterface::updateSysmanDeviceDirName(std::string &dirName) {
+
+    std::string bdfDir = "";
+    auto pSysfsAccess = getSysFsAccess();
+    auto result = pSysfsAccess->readSymLink(std::string(deviceDir), bdfDir);
+    if (ZE_RESULT_SUCCESS != result) {
+        dirName = "";
+        return;
+    }
+    const auto loc = bdfDir.find_last_of('/');      // Gives the location of the last occurence of '/' in the bdfDir path. Eg: bdfDir = ../../../0000:03:00.0
+    auto bdf = bdfDir.substr(loc + 1);              // The bdf will start after the last location of '/'. Eg: bdf = 0000:03:00.0
+    std::replace(bdf.begin(), bdf.end(), ':', '_'); // The ':' is replaced by '_'. Eg: bdf = 0000_03_00.0
+    dirName = dirName + "_" + bdf;                  // The final dirName has bdf name appended to the dirName. Eg: i915_0000_03_00.0 or xe_0000_03_00.0
+}
+
+const std::string SysmanKmdInterface::getSysmanDeviceDirName() const {
+    return sysmanDeviceDirName;
 }
 
 std::string SysmanKmdInterfaceI915::getBasePathI915(uint32_t subDeviceId) {

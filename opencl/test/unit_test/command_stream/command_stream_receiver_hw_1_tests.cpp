@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -37,6 +37,7 @@
 #include "opencl/test/unit_test/mocks/mock_kernel.h"
 
 using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, UltCommandStreamReceiverTest, givenPreambleSentAndThreadArbitrationPolicyNotChangedWhenEstimatingPreambleCmdSizeThenReturnItsValue) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
@@ -585,7 +586,7 @@ HWTEST_F(CommandStreamReceiverHwTest, WhenForceEnableGpuIdleImplicitFlushThenExp
     EXPECT_TRUE(commandStreamReceiver->useGpuIdleImplicitFlush);
 }
 
-HWTEST2_F(CommandStreamReceiverHwTest, whenProgramVFEStateIsCalledThenCorrectComputeOverdispatchDisableValueIsProgrammed, IsAtLeastXeHpCore) {
+HWTEST2_F(CommandStreamReceiverHwTest, whenProgramVFEStateIsCalledThenCorrectComputeOverdispatchDisableValueIsProgrammed, IsHeapfulSupportedAndAtLeastXeCore) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
     UltDeviceFactory deviceFactory{1, 0};
@@ -709,7 +710,7 @@ HWTEST_F(BcsTests, givenBlitPropertiesContainerWhenEstimatingCommandsSizeThenCal
 
     waArgs.isWaRequired = true;
     auto baseSize = EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs) + sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
-    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditonalSynchronization(pDevice->getRootDeviceEnvironment()));
+    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()));
 
     BlitPropertiesContainer blitPropertiesContainer;
     for (uint32_t i = 0; i < numberOfBlitOperations; i++) {
@@ -751,7 +752,7 @@ HWTEST_F(BcsTests, givenBlitPropertiesContainerWhenDirectsubmissionEnabledEstima
 
     waArgs.isWaRequired = true;
     auto baseSize = EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs) + sizeof(typename FamilyType::MI_BATCH_BUFFER_START);
-    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditonalSynchronization(pDevice->getRootDeviceEnvironment()));
+    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()));
 
     BlitPropertiesContainer blitPropertiesContainer;
     for (uint32_t i = 0; i < numberOfBlitOperations; i++) {
@@ -792,7 +793,7 @@ HWTEST_F(BcsTests, givenBlitPropertiesContainerWhenEstimatingCommandsSizeForWrit
 
     waArgs.isWaRequired = true;
     auto baseSize = EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs) + sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
-    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditonalSynchronization(pDevice->getRootDeviceEnvironment()));
+    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()));
 
     BlitPropertiesContainer blitPropertiesContainer;
     for (uint32_t i = 0; i < numberOfBlitOperations; i++) {
@@ -833,7 +834,7 @@ HWTEST_F(BcsTests, givenBlitPropertiesContainerWhenDirectSubmissionEnabledEstima
 
     waArgs.isWaRequired = true;
     auto baseSize = EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs) + sizeof(typename FamilyType::MI_BATCH_BUFFER_START);
-    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditonalSynchronization(pDevice->getRootDeviceEnvironment()));
+    auto expectedAlignedSize = baseSize + (2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()));
 
     BlitPropertiesContainer blitPropertiesContainer;
     for (uint32_t i = 0; i < numberOfBlitOperations; i++) {
@@ -1256,7 +1257,7 @@ HWTEST_F(BcsTests, givenBltSizeWithLeftoverWhenDispatchedThenProgramAllRequiredC
             auto miSemaphoreWaitCmd = genCmdCast<MI_SEMAPHORE_WAIT *>(*(cmdIterator++));
             EXPECT_NE(nullptr, miSemaphoreWaitCmd);
             EXPECT_TRUE(UnitTestHelper<FamilyType>::isAdditionalMiSemaphoreWait(*miSemaphoreWaitCmd));
-        } else if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(pDevice->getRootDeviceEnvironment()) > 0) {
+        } else if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()) > 0) {
             cmdIterator++;
         }
     }
@@ -1288,7 +1289,7 @@ HWTEST_F(BcsTests, givenBltSizeWithLeftoverWhenDispatchedThenProgramAllRequiredC
             auto miSemaphoreWaitCmd = genCmdCast<MI_SEMAPHORE_WAIT *>(*(cmdIterator++));
             EXPECT_NE(nullptr, miSemaphoreWaitCmd);
             EXPECT_TRUE(UnitTestHelper<FamilyType>::isAdditionalMiSemaphoreWait(*miSemaphoreWaitCmd));
-        } else if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(pDevice->getRootDeviceEnvironment()) > 0) {
+        } else if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment()) > 0) {
             cmdIterator++;
         }
     }
@@ -1718,7 +1719,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, UltCommandStreamReceiverTest, givenBarrierNodeSet
     DispatchFlags dispatchFlags = DispatchFlagsHelper::createDefaultDispatchFlags();
     dispatchFlags.barrierTimestampPacketNodes = &timestampPacketDependencies.barrierNodes;
 
-    size_t expectedCmdSize = MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(rootDeviceEnvironment, false);
+    size_t expectedCmdSize = MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(rootDeviceEnvironment, NEO::PostSyncMode::immediateData);
     size_t estimatedCmdSize = commandStreamReceiver->getCmdSizeForStallingCommands(dispatchFlags);
     EXPECT_EQ(expectedCmdSize, estimatedCmdSize);
 
@@ -1733,7 +1734,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, UltCommandStreamReceiverTest, givenBarrierNodeSet
         PIPE_CONTROL *pipeControl = genCmdCast<PIPE_CONTROL *>(*cmdItor);
         ASSERT_NE(nullptr, pipeControl);
         cmdItor++;
-        if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(rootDeviceEnvironment) > 0) {
+        if (MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronization(NEO::FenceType::release, rootDeviceEnvironment) > 0) {
             cmdItor++;
         }
     }

@@ -1,20 +1,14 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/compiler_interface/external_functions.h"
-#include "shared/source/device_binary_format/patchtokens_decoder.h"
-#include "shared/source/kernel/kernel_descriptor_from_patchtokens.h"
 #include "shared/source/os_interface/os_interface.h"
 #include "shared/source/program/kernel_info.h"
-#include "shared/source/program/kernel_info_from_patchtokens.h"
 #include "shared/test/common/compiler_interface/linker_mock.h"
 #include "shared/test/common/helpers/mock_file_io.h"
-#include "shared/test/common/helpers/unit_test_helper.h"
-#include "shared/test/common/mocks/mock_compilers.h"
 #include "shared/test/common/mocks/mock_elf.h"
 #include "shared/test/common/mocks/mock_l0_debugger.h"
 #include "shared/test/common/test_macros/hw_test.h"
@@ -26,6 +20,8 @@
 #include "level_zero/core/test/unit_tests/sources/debugger/l0_debugger_fixture.h"
 
 namespace L0 {
+struct ModuleBuildLog;
+
 namespace ult {
 
 using ModuleWithDebuggerL0Test = Test<L0DebuggerHwFixture>;
@@ -354,6 +350,7 @@ HWTEST_F(ModuleWithZebinAndL0DebuggerTest, GivenZebinDebugDataWhenInitializingMo
 }
 
 HWTEST_F(ModuleWithZebinAndL0DebuggerTest, GivenDumpElfFlagAndZebinWhenInitializingModuleThenDebugElfIsDumpedToFile) {
+    USE_REAL_FILE_SYSTEM();
     DebugManagerStateRestore stateRestore;
     debugManager.flags.DebuggerLogBitmask.set(NEO::DebugVariables::DEBUGGER_LOG_BITMASK::DUMP_ELF);
 

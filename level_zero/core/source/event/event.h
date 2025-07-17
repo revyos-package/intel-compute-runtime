@@ -13,9 +13,9 @@
 #include "shared/source/helpers/timestamp_packet_container.h"
 #include "shared/source/memory_manager/multi_graphics_allocation.h"
 #include "shared/source/os_interface/os_time.h"
+#include "shared/source/utilities/timestamp_pool_allocator.h"
 
 #include "level_zero/core/source/helpers/api_handle_helper.h"
-#include <level_zero/ze_api.h>
 
 #include <atomic>
 #include <bitset>
@@ -25,12 +25,11 @@
 #include <mutex>
 #include <vector>
 
-struct _ze_event_handle_t {
-    const uint64_t objMagic = objMagicValue;
-    static const zel_handle_type_t handleType = ZEL_HANDLE_EVENT;
-};
+struct _ze_event_handle_t : BaseHandleWithLoaderTranslation<ZEL_HANDLE_EVENT> {};
+static_assert(IsCompliantWithDdiHandlesExt<_ze_event_handle_t>);
 
-struct _ze_event_pool_handle_t {};
+struct _ze_event_pool_handle_t : BaseHandle {};
+static_assert(IsCompliantWithDdiHandlesExt<_ze_event_pool_handle_t>);
 
 namespace NEO {
 class CommandStreamReceiver;
@@ -63,6 +62,7 @@ struct IpcEventPoolData {
     bool isHostVisibleEventPoolAllocation = false;
     bool isImplicitScalingCapable = false;
     bool isEventPoolKernelMappedTsFlagSet = false;
+    bool isEventPoolTsFlagSet = false;
 };
 
 struct IpcCounterBasedEventData {
@@ -89,6 +89,7 @@ inline constexpr uint32_t eventPackets = maxKernelSplit * NEO ::TimestampPacketC
 struct EventDescriptor {
     NEO::MultiGraphicsAllocation *eventPoolAllocation = nullptr;
     const void *extensions = nullptr;
+    size_t offsetInSharedAlloc = 0;
     uint32_t totalEventSize = 0;
     uint32_t maxKernelCount = 0;
     uint32_t maxPacketsCount = 0;
@@ -132,8 +133,6 @@ struct Event : _ze_event_handle_t {
         implicitlyEnabled,
         implicitlyDisabled
     };
-
-    static bool standaloneInOrderTimestampAllocationEnabled();
 
     template <typename TagSizeT>
     static Event *create(EventPool *eventPool, const ze_event_desc_t *desc, Device *device);
@@ -292,6 +291,9 @@ struct Event : _ze_event_handle_t {
     bool isWaitScope() const {
         return !!waitScope;
     }
+    bool isWaitScope(ze_event_scope_flags_t flag) const {
+        return !!(waitScope & flag);
+    }
     void setMetricNotification(MetricCollectorEventNotify *metricNotification) {
         this->metricNotification = metricNotification;
     }
@@ -303,6 +305,7 @@ struct Event : _ze_event_handle_t {
     uint64_t getInOrderExecSignalValueWithSubmissionCounter() const;
     uint64_t getInOrderExecBaseSignalValue() const { return inOrderExecSignalValue; }
     uint32_t getInOrderAllocationOffset() const { return inOrderAllocationOffset; }
+    uint64_t getInOrderIncrementValue() const { return inOrderIncrementValue; }
     void setLatestUsedCmdQueue(CommandQueue *newCmdQ);
     NEO::TimeStampData *peekReferenceTs() {
         return static_cast<NEO::TimeStampData *>(ptrOffset(getHostAddress(), getMaxPacketsCount() * getSinglePacketSize()));
@@ -324,9 +327,10 @@ struct Event : _ze_event_handle_t {
 
     void setExternalInterruptId(uint32_t interruptId) { externalInterruptId = interruptId; }
 
-    void resetInOrderTimestampNode(NEO::TagNodeBase *newNode);
+    void resetInOrderTimestampNode(NEO::TagNodeBase *newNode, uint32_t partitionCount);
+    void resetAdditionalTimestampNode(NEO::TagNodeBase *newNode, uint32_t partitionCount, bool resetAggregatedEvent);
 
-    bool hasInOrderTimestampNode() const { return inOrderTimestampNode != nullptr; }
+    bool hasInOrderTimestampNode() const { return !inOrderTimestampNode.empty(); }
 
     bool isIpcImported() const { return isFromIpcPool; }
 
@@ -336,15 +340,22 @@ struct Event : _ze_event_handle_t {
 
     virtual ze_result_t hostEventSetValue(State eventState) = 0;
 
+    size_t getOffsetInSharedAlloc() const { return offsetInSharedAlloc; }
+    void setReportEmptyCbEventAsReady(bool reportEmptyCbEventAsReady) { this->reportEmptyCbEventAsReady = reportEmptyCbEventAsReady; }
+
   protected:
     Event(int index, Device *device) : device(device), index(index) {}
 
     ze_result_t enableExtensions(const EventDescriptor &eventDescriptor);
+    NEO::GraphicsAllocation *getExternalCounterAllocationFromAddress(uint64_t *address) const;
 
     void unsetCmdQueue();
     void releaseTempInOrderTimestampNodes();
+    virtual void clearTimestampTagData(uint32_t partitionCount, NEO::TagNodeBase *newNode) = 0;
 
     EventPool *eventPool = nullptr;
+
+    uint64_t timestampRefreshIntervalInNanoSec = 0;
 
     uint64_t globalStartTS = 1;
     uint64_t globalEndTS = 1;
@@ -352,6 +363,7 @@ struct Event : _ze_event_handle_t {
     uint64_t contextEndTS = 1;
 
     uint64_t inOrderExecSignalValue = 0;
+    uint64_t inOrderIncrementValue = 0;
     uint32_t inOrderAllocationOffset = 0;
 
     std::chrono::microseconds gpuHangCheckPeriod{CommonConstants::gpuHangCheckTimeInUS};
@@ -364,6 +376,7 @@ struct Event : _ze_event_handle_t {
     size_t timestampSizeInDw = 0u;
     size_t singlePacketSize = 0u;
     size_t eventPoolOffset = 0u;
+    size_t offsetInSharedAlloc = 0u;
 
     size_t cpuStartTimestamp = 0u;
     size_t gpuStartTimestamp = 0u;
@@ -379,7 +392,8 @@ struct Event : _ze_event_handle_t {
     std::mutex *kernelWithPrintfDeviceMutex = nullptr;
     std::shared_ptr<NEO::InOrderExecInfo> inOrderExecInfo;
     CommandQueue *latestUsedCmdQueue = nullptr;
-    NEO::TagNodeBase *inOrderTimestampNode = nullptr;
+    std::vector<NEO::TagNodeBase *> inOrderTimestampNode;
+    std::vector<NEO::TagNodeBase *> additionalTimestampNode;
 
     uint32_t maxKernelCount = 0;
     uint32_t kernelCount = 1u;
@@ -405,7 +419,9 @@ struct Event : _ze_event_handle_t {
     bool interruptMode = false;
     bool isSharableCounterBased = false;
     bool mitigateHostVisibleSignal = false;
-    uint64_t timestampRefreshIntervalInNanoSec = 0;
+    bool reportEmptyCbEventAsReady = true;
+
+    static const uint64_t completionTimeoutMs;
 };
 
 struct EventPool : _ze_event_pool_handle_t {
@@ -430,6 +446,9 @@ struct EventPool : _ze_event_pool_handle_t {
     inline ze_event_pool_handle_t toHandle() { return this; }
 
     MOCKABLE_VIRTUAL NEO::MultiGraphicsAllocation &getAllocation() { return *eventPoolAllocations; }
+    std::unique_ptr<NEO::SharedTimestampAllocation> &getSharedTimestampAllocation() {
+        return sharedTimestampAllocation;
+    }
 
     uint32_t getEventSize() const { return eventSize; }
     void setEventSize(uint32_t size) { eventSize = size; }
@@ -483,6 +502,8 @@ struct EventPool : _ze_event_pool_handle_t {
     std::vector<Device *> devices;
 
     std::unique_ptr<NEO::MultiGraphicsAllocation> eventPoolAllocations;
+    std::unique_ptr<NEO::SharedTimestampAllocation> sharedTimestampAllocation;
+
     void *eventPoolPtr = nullptr;
     ContextImp *context = nullptr;
 

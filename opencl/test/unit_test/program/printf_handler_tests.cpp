@@ -92,7 +92,7 @@ TEST_F(PrintfHandlerTests, givenKernelWithImplicitArgsWhenPreparingPrintfHandler
 
     auto pKernelInfo = std::make_unique<MockKernelInfo>();
     pKernelInfo->setPrintfSurface(sizeof(uintptr_t), 0);
-    pKernelInfo->kernelDescriptor.kernelAttributes.simdSize = 16;
+    pKernelInfo->kernelDescriptor.kernelAttributes.simdSize = device->getGfxCoreHelper().getMinimalSIMDSize();
     pKernelInfo->kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs = true;
 
     MockProgram program{&context, false, toClDeviceVector(*device)};
@@ -112,7 +112,7 @@ TEST_F(PrintfHandlerTests, givenKernelWithImplicitArgsWhenPreparingPrintfHandler
     auto pImplicitArgs = kernel.getImplicitArgs();
     ASSERT_NE(nullptr, pImplicitArgs);
 
-    EXPECT_EQ(printfSurface->getGpuAddress(), pImplicitArgs->printfBufferPtr);
+    EXPECT_EQ(printfSurface->getGpuAddress(), pImplicitArgs->v0.printfBufferPtr);
 }
 
 HWTEST_F(PrintfHandlerTests, givenEnabledStatelessCompressionWhenPrintEnqueueOutputIsCalledThenBCSEngineIsUsedToDecompressPrintfOutput) {

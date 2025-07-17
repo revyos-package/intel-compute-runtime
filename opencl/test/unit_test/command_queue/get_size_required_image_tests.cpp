@@ -1,30 +1,19 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "shared/source/built_ins/built_ins.h"
-#include "shared/source/utilities/perf_counter.h"
-#include "shared/test/common/test_macros/test.h"
+#include "shared/source/helpers/file_io.h"
 
 #include "opencl/source/built_ins/builtins_dispatch_builder.h"
-#include "opencl/source/command_queue/command_queue_hw.h"
-#include "opencl/source/command_queue/enqueue_copy_image.h"
-#include "opencl/source/command_queue/enqueue_fill_image.h"
-#include "opencl/source/command_queue/enqueue_read_image.h"
-#include "opencl/source/command_queue/enqueue_write_image.h"
 #include "opencl/source/command_queue/gpgpu_walker.h"
-#include "opencl/source/event/event.h"
 #include "opencl/source/helpers/hardware_commands_helper.h"
 #include "opencl/source/kernel/kernel.h"
 #include "opencl/source/program/create.inl"
 #include "opencl/test/unit_test/command_queue/command_enqueue_fixture.h"
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
-#include "opencl/test/unit_test/command_queue/enqueue_write_image_fixture.h"
-#include "opencl/test/unit_test/fixtures/built_in_fixture.h"
-#include "opencl/test/unit_test/fixtures/cl_device_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_kernel.h"
 
 using namespace NEO;
@@ -39,8 +28,8 @@ struct GetSizeRequiredImageTest : public CommandEnqueueFixture,
         REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
         CommandEnqueueFixture::setUp();
 
-        srcImage = Image2dHelper<>::create(context);
-        dstImage = Image2dHelper<>::create(context);
+        srcImage = Image2dHelperUlt<>::create(context);
+        dstImage = Image2dHelperUlt<>::create(context);
 
         pDevice->setPreemptionMode(PreemptionMode::Disabled);
     }
@@ -60,6 +49,7 @@ struct GetSizeRequiredImageTest : public CommandEnqueueFixture,
 };
 
 HWTEST_F(GetSizeRequiredImageTest, WhenCopyingImageThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -112,6 +102,7 @@ HWTEST_F(GetSizeRequiredImageTest, WhenCopyingImageThenHeapsAndCommandBufferCons
 }
 
 HWTEST_F(GetSizeRequiredImageTest, WhenCopyingReadWriteImageThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -121,10 +112,10 @@ HWTEST_F(GetSizeRequiredImageTest, WhenCopyingReadWriteImageThenHeapsAndCommandB
     auto usedBeforeIOH = ioh.getUsed();
     auto usedBeforeSSH = ssh.getUsed();
 
-    std::unique_ptr<MockProgram> program(Program::createBuiltInFromSource<MockProgram>("CopyImageToImage3d", context, context->getDevices(), nullptr));
+    std::unique_ptr<MockProgram> program(Program::createBuiltInFromSource<MockProgram>("CopyImageTo3dImage3d", context, context->getDevices(), nullptr));
     program->build(program->getDevices(), nullptr);
     cl_int retVal{CL_SUCCESS};
-    std::unique_ptr<Kernel> kernel(Kernel::create<MockKernel>(program.get(), program->getKernelInfoForKernel("CopyImageToImage3d"), *context->getDevice(0), retVal));
+    std::unique_ptr<Kernel> kernel(Kernel::create<MockKernel>(program.get(), program->getKernelInfoForKernel("CopyImage3dToImage3d"), *context->getDevice(0), retVal));
 
     EXPECT_EQ(CL_SUCCESS, retVal);
     EXPECT_NE(nullptr, kernel);
@@ -162,6 +153,7 @@ HWTEST_F(GetSizeRequiredImageTest, WhenCopyingReadWriteImageThenHeapsAndCommandB
 }
 
 HWTEST_F(GetSizeRequiredImageTest, WhenReadingImageNonBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -218,6 +210,7 @@ HWTEST_F(GetSizeRequiredImageTest, WhenReadingImageNonBlockingThenHeapsAndComman
 }
 
 HWTEST_F(GetSizeRequiredImageTest, WhenReadingImageBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -274,6 +267,7 @@ HWTEST_F(GetSizeRequiredImageTest, WhenReadingImageBlockingThenHeapsAndCommandBu
 }
 
 HWTEST_F(GetSizeRequiredImageTest, WhenWritingImageNonBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);
@@ -330,6 +324,7 @@ HWTEST_F(GetSizeRequiredImageTest, WhenWritingImageNonBlockingThenHeapsAndComman
 }
 
 HWTEST_F(GetSizeRequiredImageTest, WhenWritingImageBlockingThenHeapsAndCommandBufferConsumedMinimumRequiredSize) {
+    USE_REAL_FILE_SYSTEM();
     auto &commandStream = pCmdQ->getCS(1024);
     auto usedBeforeCS = commandStream.getUsed();
     auto &dsh = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, 0u);

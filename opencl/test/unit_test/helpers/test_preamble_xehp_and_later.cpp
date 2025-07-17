@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -27,16 +27,17 @@
 #include "test_traits_common.h"
 
 using namespace NEO;
+#include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 using ThreadArbitrationXeHPAndLater = PreambleFixture;
-HWTEST2_F(ThreadArbitrationXeHPAndLater, whenGetDefaultThreadArbitrationPolicyIsCalledThenCorrectPolicyIsReturned, IsXeHpOrXeHpgCore) {
+HWTEST2_F(ThreadArbitrationXeHPAndLater, whenGetDefaultThreadArbitrationPolicyIsCalledThenCorrectPolicyIsReturned, IsXeHpgCore) {
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
 
     EXPECT_EQ(ThreadArbitrationPolicy::AgeBased, gfxCoreHelper.getDefaultThreadArbitrationPolicy());
 }
 
 using ProgramPipelineXeHPAndLater = PreambleFixture;
-HWTEST2_F(ProgramPipelineXeHPAndLater, givenDebugVariableWhenProgramPipelineSelectIsCalledThenItHasProperFieldsSet, IsWithinXeGfxFamily) {
+HWTEST2_F(ProgramPipelineXeHPAndLater, givenDebugVariableWhenProgramPipelineSelectIsCalledThenItHasProperFieldsSet, IsXeCore) {
     typedef typename FamilyType::PIPELINE_SELECT PIPELINE_SELECT;
     DebugManagerStateRestore stateRestore;
     debugManager.flags.OverrideSystolicPipelineSelect.set(1);
@@ -55,7 +56,7 @@ HWTEST2_F(ProgramPipelineXeHPAndLater, givenDebugVariableWhenProgramPipelineSele
 }
 
 using PreemptionWatermarkXeHPAndLater = PreambleFixture;
-HWTEST2_F(PreemptionWatermarkXeHPAndLater, givenPreambleThenPreambleWorkAroundsIsNotProgrammed, IsAtLeastXeHpCore) {
+HWTEST2_F(PreemptionWatermarkXeHPAndLater, givenPreambleThenPreambleWorkAroundsIsNotProgrammed, IsAtLeastXeCore) {
     PreambleHelper<FamilyType>::programGenSpecificPreambleWorkArounds(&linearStream, *defaultHwInfo);
 
     parseCommands<FamilyType>(linearStream);
@@ -123,27 +124,31 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, KernelCommandsXeHPAndLater, whenMediaStateFlushIsRe
 using PreambleCfeStateXeHPAndLater = PreambleFixture;
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, PreambleCfeStateXeHPAndLater, givenScratchEnabledWhenPreambleCfeStateIsProgrammedThenCheckMaxThreadsAddressFieldsAreProgrammed) {
-    using CFE_STATE = typename FamilyType::CFE_STATE;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using CFE_STATE = typename FamilyType::CFE_STATE;
 
-    uint64_t expectedAddress = 1 << CFE_STATE::SCRATCHSPACEBUFFER_BIT_SHIFT;
-    uint32_t expectedMaxThreads = GfxCoreHelper::getMaxThreadsForVfe(*defaultHwInfo);
-    auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute);
-    StreamProperties emptyProperties{};
-    PreambleHelper<FamilyType>::programVfeState(pVfeCmd, pDevice->getRootDeviceEnvironment(), 0u, expectedAddress, expectedMaxThreads, emptyProperties);
+        uint64_t expectedAddress = 1 << CFE_STATE::SCRATCHSPACEBUFFER_BIT_SHIFT;
+        uint32_t expectedMaxThreads = GfxCoreHelper::getMaxThreadsForVfe(*defaultHwInfo);
+        auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute);
+        StreamProperties emptyProperties{};
+        PreambleHelper<FamilyType>::programVfeState(pVfeCmd, pDevice->getRootDeviceEnvironment(), 0u, expectedAddress, expectedMaxThreads, emptyProperties);
 
-    parseCommands<FamilyType>(linearStream);
+        parseCommands<FamilyType>(linearStream);
 
-    auto cfeStateIt = find<CFE_STATE *>(cmdList.begin(), cmdList.end());
-    ASSERT_NE(cmdList.end(), cfeStateIt);
+        auto cfeStateIt = find<CFE_STATE *>(cmdList.begin(), cmdList.end());
+        ASSERT_NE(cmdList.end(), cfeStateIt);
 
-    auto cfeState = reinterpret_cast<CFE_STATE *>(*cfeStateIt);
+        auto cfeState = reinterpret_cast<CFE_STATE *>(*cfeStateIt);
 
-    EXPECT_EQ(expectedMaxThreads, cfeState->getMaximumNumberOfThreads());
-    uint64_t address = cfeState->getScratchSpaceBuffer();
-    EXPECT_EQ(expectedAddress, address);
+        EXPECT_EQ(expectedMaxThreads, cfeState->getMaximumNumberOfThreads());
+        uint64_t address = cfeState->getScratchSpaceBuffer();
+        EXPECT_EQ(expectedAddress, address);
+    }
 }
 
-HWTEST2_F(PreambleCfeStateXeHPAndLater, givenNotSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveNotSetValue, IsAtLeastXeHpCore) {
+HWTEST2_F(PreambleCfeStateXeHPAndLater, givenNotSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveNotSetValue, IsHeapfulSupportedAndAtLeastXeCore) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
     auto cfeState = reinterpret_cast<CFE_STATE *>(linearStream.getSpace(sizeof(CFE_STATE)));
@@ -151,10 +156,10 @@ HWTEST2_F(PreambleCfeStateXeHPAndLater, givenNotSetDebugFlagWhenPreambleCfeState
 
     [[maybe_unused]] uint32_t numberOfWalkers = 0u;
     [[maybe_unused]] uint32_t fusedEuDispach = 0u;
-    if constexpr (TestTraits<gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
         numberOfWalkers = cfeState->getNumberOfWalkers();
     }
-    if constexpr (TestTraits<gfxCoreFamily>::fusedEuDispatchSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::fusedEuDispatchSupported) {
         fusedEuDispach = cfeState->getFusedEuDispatch();
     }
     uint32_t overDispatchControl = static_cast<uint32_t>(cfeState->getOverDispatchControl());
@@ -166,17 +171,17 @@ HWTEST2_F(PreambleCfeStateXeHPAndLater, givenNotSetDebugFlagWhenPreambleCfeState
     PreambleHelper<FamilyType>::programVfeState(pVfeCmd, pDevice->getRootDeviceEnvironment(), 0u, expectedAddress, expectedMaxThreads, emptyProperties);
     uint32_t maximumNumberOfThreads = cfeState->getMaximumNumberOfThreads();
 
-    if constexpr (TestTraits<gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
         EXPECT_EQ(numberOfWalkers, cfeState->getNumberOfWalkers());
     }
-    if constexpr (TestTraits<gfxCoreFamily>::fusedEuDispatchSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::fusedEuDispatchSupported) {
         EXPECT_EQ(fusedEuDispach, cfeState->getFusedEuDispatch());
     }
     EXPECT_NE(expectedMaxThreads, maximumNumberOfThreads);
     EXPECT_EQ(overDispatchControl, static_cast<uint32_t>(cfeState->getOverDispatchControl()));
 }
 
-HWTEST2_F(PreambleCfeStateXeHPAndLater, givenSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveSetValue, IsWithinXeHpCoreAndXe2HpgCore) {
+HWTEST2_F(PreambleCfeStateXeHPAndLater, givenSetDebugFlagWhenPreambleCfeStateIsProgrammedThenCFEStateParamsHaveSetValue, IsWithinXeCoreAndXe2HpgCore) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
     uint32_t expectedValue1 = 1u;
@@ -204,7 +209,7 @@ HWTEST2_F(PreambleCfeStateXeHPAndLater, givenSetDebugFlagWhenPreambleCfeStateIsP
 
     EXPECT_EQ(expectedValue1, static_cast<uint32_t>(cfeState->getOverDispatchControl()));
     EXPECT_EQ(expectedValue1, cfeState->getLargeGRFThreadAdjustDisable());
-    if constexpr (TestTraits<gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
+    if constexpr (TestTraits<FamilyType::gfxCoreFamily>::numberOfWalkersInCfeStateSupported) {
         EXPECT_EQ(expectedValue2, cfeState->getNumberOfWalkers());
     }
     EXPECT_EQ(expectedValue2, cfeState->getMaximumNumberOfThreads());
@@ -244,7 +249,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHpCommandStreamReceiverFlushTaskTests, whenFlushC
     hwParserCsr.findHardwareCommands<FamilyType>();
     ASSERT_NE(nullptr, hwParserCsr.cmdStateBaseAddress);
     auto stateBaseAddress = static_cast<STATE_BASE_ADDRESS *>(hwParserCsr.cmdStateBaseAddress);
-    auto expectedMocsForStateless = gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CONST);
+    auto expectedMocsForStateless = gmmHelper->getL1EnabledMOCS();
     auto expectedMocsForHeap = gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER);
 
     EXPECT_EQ(expectedMocsForHeap, stateBaseAddress->getSurfaceStateMemoryObjectControlState());
@@ -293,7 +298,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHpCommandStreamReceiverFlushTaskTests, givenL3ToL
     hwParserCsr.findHardwareCommands<FamilyType>();
     ASSERT_NE(nullptr, hwParserCsr.cmdStateBaseAddress);
     auto stateBaseAddress = static_cast<STATE_BASE_ADDRESS *>(hwParserCsr.cmdStateBaseAddress);
-    auto expectedMocs = pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CONST);
+    auto expectedMocs = pDevice->getGmmHelper()->getL1EnabledMOCS();
 
     EXPECT_EQ(expectedMocs, stateBaseAddress->getStatelessDataPortAccessMemoryObjectControlState());
 }
@@ -312,7 +317,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHpCommandStreamReceiverFlushTaskTests, givenForce
     hwParserCsr.findHardwareCommands<FamilyType>();
     ASSERT_NE(nullptr, hwParserCsr.cmdStateBaseAddress);
     auto stateBaseAddress = static_cast<STATE_BASE_ADDRESS *>(hwParserCsr.cmdStateBaseAddress);
-    auto expectedMocs = pDevice->getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER);
+    auto expectedMocs = pDevice->getGmmHelper()->getL3EnabledMOCS();
 
     EXPECT_EQ(expectedMocs, stateBaseAddress->getStatelessDataPortAccessMemoryObjectControlState());
 }
@@ -391,7 +396,7 @@ void flushTaskAndcheckForSBA(StateBaseAddressXeHPAndLaterTests *sbaTest, Command
 
 using RenderSurfaceStateXeHPAndLaterTests = XeHpCommandStreamReceiverFlushTaskTests;
 
-HWTEST2_F(RenderSurfaceStateXeHPAndLaterTests, givenSpecificProductFamilyWhenAppendingRssThenProgramGpuCoherency, IsWithinXeGfxFamily) {
+HWTEST2_F(RenderSurfaceStateXeHPAndLaterTests, givenSpecificProductFamilyWhenAppendingRssThenProgramGpuCoherency, IsXeCore) {
     auto memoryManager = pDevice->getExecutionEnvironment()->memoryManager.get();
     size_t allocationSize = MemoryConstants::pageSize;
     AllocationProperties properties(pDevice->getRootDeviceIndex(), allocationSize, AllocationType::buffer, pDevice->getDeviceBitfield());
@@ -422,7 +427,7 @@ HWTEST2_F(RenderSurfaceStateXeHPAndLaterTests, givenSpecificProductFamilyWhenApp
 
 using PipelineSelectTest = ::testing::Test;
 
-HWTEST2_F(PipelineSelectTest, WhenProgramPipelineSelectThenProperMaskIsSet, IsWithinXeGfxFamily) {
+HWTEST2_F(PipelineSelectTest, WhenProgramPipelineSelectThenProperMaskIsSet, IsXeCore) {
     using PIPELINE_SELECT = typename FamilyType::PIPELINE_SELECT;
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
 
@@ -432,7 +437,7 @@ HWTEST2_F(PipelineSelectTest, WhenProgramPipelineSelectThenProperMaskIsSet, IsWi
     std::vector<uint8_t> linearStreamBackingMemory;
     size_t sizeNeededForCommandSream = 0;
     if (MemorySynchronizationCommands<FamilyType>::isBarrierPriorToPipelineSelectWaRequired(rootDeviceEnvironment)) {
-        sizeNeededForCommandSream += MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier(false);
+        sizeNeededForCommandSream += MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier();
     }
 
     sizeNeededForCommandSream += sizeof(PIPELINE_SELECT);

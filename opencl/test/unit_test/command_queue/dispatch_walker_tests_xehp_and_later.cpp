@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -40,6 +40,8 @@
 #include "opencl/test/unit_test/mocks/mock_mdi.h"
 #include "opencl/test/unit_test/mocks/mock_platform.h"
 
+#include "test_traits_common.h"
+
 using namespace NEO;
 
 using WalkerDispatchTest = ::testing::Test;
@@ -69,7 +71,7 @@ struct XeHPAndLaterDispatchWalkerBasicFixture : public LinearStreamFixture {
         }
 
         auto &compilerProductHelper = device->getCompilerProductHelper();
-        heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+        heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
     }
 
     DebugManagerStateRestore restore;
@@ -482,7 +484,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenTimestamp
     EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
     auto gmmHelper = device->getGmmHelper();
-    auto expectedMocs = MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, device->getRootDeviceEnvironment()) ? gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED) : gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER);
+    auto expectedMocs = MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, device->getRootDeviceEnvironment()) ? gmmHelper->getUncachedMOCS() : gmmHelper->getL3EnabledMOCS();
 
     auto walker = genCmdCast<DefaultWalkerType *>(*hwParser.itorWalker);
     EXPECT_EQ(PostSyncType::OPERATION::OPERATION_WRITE_TIMESTAMP, walker->getPostSync().getOperation());
@@ -502,7 +504,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenTimestamp
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenEnqueueingThenWriteWalkerStamp) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
+    using PostSyncType = decltype(FamilyType::template getPostSyncType<WalkerType>());
     debugManager.flags.EnableTimestampPacket.set(true);
 
     auto testDevice = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(defaultHwInfo.get()));
@@ -520,23 +523,18 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVari
     EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
     auto gmmHelper = device->getGmmHelper();
-    auto expectedMocs = MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, device->getRootDeviceEnvironment()) ? gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED) : gmmHelper->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER);
+    auto expectedMocs = MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, device->getRootDeviceEnvironment()) ? gmmHelper->getUncachedMOCS() : gmmHelper->getL3EnabledMOCS();
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([expectedMocs](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-        using PostSyncType = decltype(FamilyType::template getPostSyncType<WalkerType>());
+    auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
 
-        auto &postSyncData = walker->getPostSync();
-        EXPECT_EQ(PostSyncType::OPERATION::OPERATION_WRITE_TIMESTAMP, postSyncData.getOperation());
-        EXPECT_TRUE(postSyncData.getDataportPipelineFlush());
-        EXPECT_EQ(expectedMocs, postSyncData.getMocs());
-    },
-               walkerVariant);
+    auto &postSyncData = walker->getPostSync();
+    EXPECT_EQ(PostSyncType::OPERATION::OPERATION_WRITE_TIMESTAMP, postSyncData.getOperation());
+    EXPECT_TRUE(postSyncData.getDataportPipelineFlush());
+    EXPECT_EQ(expectedMocs, postSyncData.getMocs());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenMocsValueIsOverwrittenThenPostSyncContainsProperSetting) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto mocsValue = 8u;
     debugManager.flags.EnableTimestampPacket.set(true);
@@ -556,12 +554,9 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVari
     hwParser.findHardwareCommands<FamilyType>();
     EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([mocsValue](auto &&walker) {
-        auto &postSyncData = walker->getPostSync();
-        EXPECT_EQ(mocsValue, postSyncData.getMocs());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
+    auto &postSyncData = walker->getPostSync();
+    EXPECT_EQ(mocsValue, postSyncData.getMocs());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenTimestampPacketWriteEnabledWhenEstimatingStreamSizeThenAddEnoughSpace) {
@@ -584,14 +579,15 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenTimestamp
     size_t additionalSize = 0u;
 
     if (isResolveDependenciesByPipeControlsEnabled) {
-        additionalSize = MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier(false);
+        additionalSize = MemorySynchronizationCommands<FamilyType>::getSizeForStallingBarrier();
     }
 
     EXPECT_EQ(sizeWithEnabled, sizeWithDisabled + additionalSize);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenEnqueueingThenWritePostsyncOperationInImmWriteMode) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
+    using PostSyncType = decltype(FamilyType::template getPostSyncType<WalkerType>());
 
     debugManager.flags.UseImmDataWriteModeOnPostSyncOperation.set(true);
 
@@ -608,25 +604,20 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenDebugVari
 
     auto contextEndAddress = TimestampPacketHelper::getContextEndGpuAddress(*cmdQ->timestampPacketContainer->peekNodes()[0]);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([contextEndAddress](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-        using PostSyncType = decltype(FamilyType::template getPostSyncType<WalkerType>());
-        ASSERT_NE(nullptr, walker);
+    auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
+    ASSERT_NE(nullptr, walker);
 
-        auto &postSyncData = walker->getPostSync();
-        EXPECT_EQ(PostSyncType::OPERATION::OPERATION_WRITE_IMMEDIATE_DATA, postSyncData.getOperation());
-        EXPECT_EQ(contextEndAddress, postSyncData.getDestinationAddress());
-        EXPECT_EQ(0x2'0000'0002u, postSyncData.getImmediateData());
-    },
-               walkerVariant);
+    auto &postSyncData = walker->getPostSync();
+    EXPECT_EQ(PostSyncType::OPERATION::OPERATION_WRITE_IMMEDIATE_DATA, postSyncData.getOperation());
+    EXPECT_EQ(contextEndAddress, postSyncData.getDestinationAddress());
+    EXPECT_EQ(0x2'0000'0002u, postSyncData.getImmediateData());
 }
 
-HWTEST2_F(XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenEnqueueingThenSystolicIsProgrammed, IsXeHpOrXeHpcOrXeHpgCore) {
+HWTEST2_F(XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenEnqueueingThenSystolicIsProgrammed, IsXeCore) {
     debugManager.flags.OverrideSystolicInComputeWalker.set(true);
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
-    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled();
+    auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
     if (heaplessEnabled) {
         GTEST_SKIP();
     }
@@ -647,46 +638,47 @@ HWTEST2_F(XeHPAndLaterDispatchWalkerBasicTest, givenDebugVariableEnabledWhenEnqu
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenAutoLocalIdsGenerationEnabledWhenDispatchMeetCriteriaThenExpectNoLocalIdsAndProperIsaAddress) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnableHwGenerationLocalIds.set(1);
+        debugManager.flags.EnableHwGenerationLocalIds.set(1);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
-    auto &commandStream = cmdQ->getCS(1024);
-    auto usedBeforeCS = commandStream.getUsed();
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto &commandStream = cmdQ->getCS(1024);
+        auto usedBeforeCS = commandStream.getUsed();
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    kd.entryPoints.skipPerThreadDataLoad = 128;
-    kd.kernelAttributes.localId[0] = 1;
-    kd.kernelAttributes.localId[1] = 0;
-    kd.kernelAttributes.localId[2] = 0;
-    kd.kernelAttributes.numLocalIdChannels = 1;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        kd.entryPoints.skipPerThreadDataLoad = 128;
+        kd.kernelAttributes.localId[0] = 1;
+        kd.kernelAttributes.localId[1] = 0;
+        kd.kernelAttributes.localId[2] = 0;
+        kd.kernelAttributes.numLocalIdChannels = 1;
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    size_t globalOffsets[] = {0, 0, 0};
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        size_t globalOffsets[] = {0, 0, 0};
 
-    MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
-    DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
-    builder.setDispatchGeometry(1, gws, lws, globalOffsets);
-    builder.setKernel(kernel->mockKernel);
-    builder.bake(multiDispatchInfo);
+        MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
+        DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
+        builder.setDispatchGeometry(1, gws, lws, globalOffsets);
+        builder.setKernel(kernel->mockKernel);
+        builder.bake(multiDispatchInfo);
 
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
-    auto usedAfterCS = commandStream.getUsed();
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        auto usedAfterCS = commandStream.getUsed();
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([this](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
 
         EXPECT_EQ(WalkerType::DWORD_LENGTH_FIXED_SIZE, walker->getDwordLength());
         EXPECT_EQ(0u, walker->getEmitInlineParameter());
@@ -710,59 +702,59 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenAutoLocal
             using KernelStartPointerType = decltype(idd.getKernelStartPointer());
             EXPECT_EQ(static_cast<KernelStartPointerType>(expectedKernelStartOffset), idd.getKernelStartPointer());
         }
-    },
-               walkerVariant);
 
-    auto expectedSizeCS = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_NDRANGE_KERNEL, CsrDependencies(), false, false,
-                                                                               false, *cmdQ.get(), multiDispatchInfo, false, false, false, nullptr);
-    expectedSizeCS += sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
-    expectedSizeCS = alignUp(expectedSizeCS, MemoryConstants::cacheLineSize);
-    EXPECT_GE(expectedSizeCS, usedAfterCS - usedBeforeCS);
+        auto expectedSizeCS = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_NDRANGE_KERNEL, CsrDependencies(), false, false,
+                                                                                   false, *cmdQ.get(), multiDispatchInfo, false, false, false, nullptr);
+        expectedSizeCS += sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
+        expectedSizeCS = alignUp(expectedSizeCS, MemoryConstants::cacheLineSize);
+        EXPECT_GE(expectedSizeCS, usedAfterCS - usedBeforeCS);
 
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlineDataEnabledWhenLocalIdsUsedThenDoNotExpectCrossThreadDataInWalkerEmitLocalFieldSet) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(0);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(0);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
-    auto &commandStream = cmdQ->getCS(1024);
-    auto usedBeforeCS = commandStream.getUsed();
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto &commandStream = cmdQ->getCS(1024);
+        auto usedBeforeCS = commandStream.getUsed();
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    kd.kernelAttributes.flags.passInlineData = true;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        kd.kernelAttributes.flags.passInlineData = true;
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    size_t globalOffsets[] = {0, 0, 0};
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        size_t globalOffsets[] = {0, 0, 0};
 
-    MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
-    DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
-    builder.setDispatchGeometry(1, gws, lws, globalOffsets);
-    builder.setKernel(kernel->mockKernel);
-    builder.bake(multiDispatchInfo);
+        MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
+        DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
+        builder.setDispatchGeometry(1, gws, lws, globalOffsets);
+        builder.setKernel(kernel->mockKernel);
+        builder.bake(multiDispatchInfo);
 
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
-    auto usedAfterCS = commandStream.getUsed();
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        auto usedAfterCS = commandStream.getUsed();
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([this, lws = lws, inlineDataSize = inlineDataSize](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
 
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
@@ -793,19 +785,18 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlin
             using KernelStartPointerType = decltype(idd.getKernelStartPointer());
             EXPECT_EQ(static_cast<KernelStartPointerType>(expectedKernelStartOffset), idd.getKernelStartPointer());
         }
-    },
-               walkerVariant);
 
-    auto expectedSizeCS = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_NDRANGE_KERNEL, CsrDependencies(), false, false,
-                                                                               false, *cmdQ.get(), multiDispatchInfo, false, false, false, nullptr);
-    expectedSizeCS += sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
-    expectedSizeCS = alignUp(expectedSizeCS, MemoryConstants::cacheLineSize);
-    EXPECT_GE(expectedSizeCS, usedAfterCS - usedBeforeCS);
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        auto expectedSizeCS = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_NDRANGE_KERNEL, CsrDependencies(), false, false,
+                                                                                   false, *cmdQ.get(), multiDispatchInfo, false, false, false, nullptr);
+        expectedSizeCS += sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
+        expectedSizeCS = alignUp(expectedSizeCS, MemoryConstants::cacheLineSize);
+        EXPECT_GE(expectedSizeCS, usedAfterCS - usedBeforeCS);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenExecutionMaskWithoutReminderWhenProgrammingWalkerThenSetValidNumberOfBitsInMask) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     std::array<uint32_t, 4> testedSimd = {{1, 8, 16, 32}};
@@ -826,66 +817,63 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenExecution
         hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), streamOffset);
         hwParser.findHardwareCommands<FamilyType>();
 
-        WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-        std::visit([simd](auto &&walker) {
-            if (isSimd1(simd)) {
-                EXPECT_EQ(maxNBitValue(32), walker->getExecutionMask());
-            } else {
-                EXPECT_EQ(maxNBitValue(simd), walker->getExecutionMask());
-            }
-        },
-                   walkerVariant);
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
+        if (isSimd1(simd)) {
+            EXPECT_EQ(maxNBitValue(32), walker->getExecutionMask());
+        } else {
+            EXPECT_EQ(maxNBitValue(simd), walker->getExecutionMask());
+        }
     }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlineDataEnabledWhenLocalIdsUsedAndCrossThreadIsTwoGrfsThenExpectFirstCrossThreadDataInWalkerSecondInPayloadWithPerThread) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(false);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(false);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
 
-    IndirectHeap &ih = cmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 2048);
+        IndirectHeap &ih = cmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 2048);
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    kd.kernelAttributes.flags.passInlineData = true;
-    kd.kernelAttributes.localId[0] = 1;
-    kd.kernelAttributes.localId[1] = 0;
-    kd.kernelAttributes.localId[2] = 0;
-    kd.kernelAttributes.numLocalIdChannels = 1;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        kd.kernelAttributes.flags.passInlineData = true;
+        kd.kernelAttributes.localId[0] = 1;
+        kd.kernelAttributes.localId[1] = 0;
+        kd.kernelAttributes.localId[2] = 0;
+        kd.kernelAttributes.numLocalIdChannels = 1;
 
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataTwoGrf, inlineDataSize * 2);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataTwoGrf, inlineDataSize * 2);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    size_t globalOffsets[] = {0, 0, 0};
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        size_t globalOffsets[] = {0, 0, 0};
 
-    MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
-    DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
-    builder.setDispatchGeometry(1, gws, lws, globalOffsets);
-    builder.setKernel(kernel->mockKernel);
-    builder.bake(multiDispatchInfo);
+        MultiDispatchInfo multiDispatchInfo(kernel->mockKernel);
+        DispatchInfoBuilder<SplitDispatch::Dim::d1D, SplitDispatch::SplitMode::noSplit> builder(*device);
+        builder.setDispatchGeometry(1, gws, lws, globalOffsets);
+        builder.setKernel(kernel->mockKernel);
+        builder.bake(multiDispatchInfo);
 
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
-    void *payloadData = ih.getCpuBase();
-    auto lwsX = static_cast<uint32_t>(lws[0]);
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        void *payloadData = ih.getCpuBase();
+        auto lwsX = static_cast<uint32_t>(lws[0]);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([inlineDataSize, payloadData, lwsX, this](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
         EXPECT_EQ(0u, walker->getGenerateLocalId());
@@ -909,44 +897,43 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlin
             expectedIndirectDataLength = alignUp(expectedIndirectDataLength, FamilyType::indirectDataAlignment);
             EXPECT_EQ(expectedIndirectDataLength, walker->getIndirectDataLength());
         }
-    },
-               walkerVariant);
 
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenKernelWithoutLocalIdsAndPassInlineDataEnabledWhenNoHWGenerationOfLocalIdsUsedThenExpectCrossThreadDataInWalkerAndNoEmitLocalFieldSet) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(false);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(false);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
-    kd.kernelAttributes.flags.passInlineData = true;
-    kd.kernelAttributes.numLocalIdChannels = 0;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        kd.kernelAttributes.flags.passInlineData = true;
+        kd.kernelAttributes.numLocalIdChannels = 0;
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([this, inlineDataSize = inlineDataSize](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
         EXPECT_EQ(0u, walker->getGenerateLocalId());
@@ -960,45 +947,45 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenKernelWit
             expectedIndirectDataLength = alignUp(expectedIndirectDataLength, FamilyType::indirectDataAlignment);
             EXPECT_EQ(expectedIndirectDataLength, walker->getIndirectDataLength());
         }
-    },
-               walkerVariant);
 
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlineDataEnabledWhenNoLocalIdsUsedAndCrossThreadIsTwoGrfsThenExpectFirstCrossThreadDataInWalkerSecondInPayload) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(false);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(false);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
-    IndirectHeap &ih = cmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 2048);
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        IndirectHeap &ih = cmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 2048);
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    kd.kernelAttributes.flags.passInlineData = true;
-    kd.kernelAttributes.numLocalIdChannels = 0;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        kd.kernelAttributes.flags.passInlineData = true;
+        kd.kernelAttributes.numLocalIdChannels = 0;
 
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataTwoGrf, inlineDataSize * 2);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataTwoGrf, inlineDataSize * 2);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([crossThreadDataTwoGrf = crossThreadDataTwoGrf, inlineDataSize, &ih](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
         EXPECT_EQ(0u, walker->getGenerateLocalId());
@@ -1015,14 +1002,13 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlin
             expectedIndirectDataLength = alignUp(expectedIndirectDataLength, FamilyType::indirectDataAlignment);
             EXPECT_EQ(expectedIndirectDataLength, walker->getIndirectDataLength());
         }
-    },
-               walkerVariant);
 
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenAllChannelsActiveWithWorkDimOneDimensionThenHwGenerationIsEnabledWithOverwrittenWalkOrder) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     debugManager.flags.EnableHwGenerationLocalIds.set(true);
 
@@ -1049,52 +1035,49 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenAllChanne
     hwParser.findHardwareCommands<FamilyType>();
     EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([](auto &&walker) {
-        EXPECT_EQ(1u, walker->getGenerateLocalId());
-        EXPECT_EQ(7u, walker->getEmitLocalId());
-        EXPECT_EQ(4u, walker->getWalkOrder());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
+    EXPECT_EQ(1u, walker->getGenerateLocalId());
+    EXPECT_EQ(7u, walker->getEmitLocalId());
+    EXPECT_EQ(4u, walker->getWalkOrder());
 
     memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlineDataAndHwLocalIdsGenerationEnabledWhenLocalIdsUsedThenExpectCrossThreadDataInWalkerAndEmitFields) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(1);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(1);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    kd.entryPoints.skipPerThreadDataLoad = 128;
-    kd.kernelAttributes.flags.passInlineData = true;
-    kd.kernelAttributes.localId[0] = 1;
-    kd.kernelAttributes.localId[1] = 0;
-    kd.kernelAttributes.localId[2] = 0;
-    kd.kernelAttributes.numLocalIdChannels = 1;
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        kd.entryPoints.skipPerThreadDataLoad = 128;
+        kd.kernelAttributes.flags.passInlineData = true;
+        kd.kernelAttributes.localId[0] = 1;
+        kd.kernelAttributes.localId[1] = 0;
+        kd.kernelAttributes.localId[2] = 0;
+        kd.kernelAttributes.numLocalIdChannels = 1;
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([this, inlineDataSize = inlineDataSize](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
         EXPECT_EQ(1u, walker->getGenerateLocalId());
@@ -1119,48 +1102,47 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlin
             using KernelStartPointerType = decltype(idd.getKernelStartPointer());
             EXPECT_EQ(static_cast<KernelStartPointerType>(expectedKernelStartOffset), idd.getKernelStartPointer());
         }
-    },
-               walkerVariant);
 
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlineDataAndHwLocalIdsGenerationEnabledWhenLocalIdsNotUsedThenExpectCrossThreadDataInWalkerAndNoHwLocalIdGeneration) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
-    using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
+    if constexpr (FamilyType::isHeaplessRequired()) {
+        GTEST_SKIP();
+    } else {
+        using WalkerType = typename FamilyType::DefaultWalkerType;
+        using COMPUTE_WALKER = typename FamilyType::COMPUTE_WALKER;
 
-    debugManager.flags.EnablePassInlineData.set(true);
-    debugManager.flags.EnableHwGenerationLocalIds.set(1);
+        debugManager.flags.EnablePassInlineData.set(true);
+        debugManager.flags.EnableHwGenerationLocalIds.set(1);
 
-    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
+        auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
 
-    auto &kd = kernel->kernelInfo.kernelDescriptor;
-    auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
-    kd.entryPoints.skipPerThreadDataLoad = 128;
-    kd.kernelAttributes.flags.passInlineData = true;
-    kd.kernelAttributes.localId[0] = 0;
-    kd.kernelAttributes.localId[1] = 0;
-    kd.kernelAttributes.localId[2] = 0;
-    kd.kernelAttributes.numLocalIdChannels = 0;
+        auto &kd = kernel->kernelInfo.kernelDescriptor;
+        auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(cmdQ->heaplessModeEnabled);
+        kd.entryPoints.skipPerThreadDataLoad = 128;
+        kd.kernelAttributes.flags.passInlineData = true;
+        kd.kernelAttributes.localId[0] = 0;
+        kd.kernelAttributes.localId[1] = 0;
+        kd.kernelAttributes.localId[2] = 0;
+        kd.kernelAttributes.numLocalIdChannels = 0;
 
-    kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
+        kernel->mockKernel->setCrossThreadData(crossThreadDataGrf, inlineDataSize);
 
-    auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
-    kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
+        auto memoryManager = device->getUltCommandStreamReceiver<FamilyType>().getMemoryManager();
+        kernel->kernelInfo.kernelAllocation = memoryManager->allocateGraphicsMemoryWithProperties(MockAllocationProperties{device->getRootDeviceIndex(), MemoryConstants::pageSize});
 
-    size_t gws[] = {16, 1, 1};
-    size_t lws[] = {16, 1, 1};
-    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
+        size_t gws[] = {16, 1, 1};
+        size_t lws[] = {16, 1, 1};
+        cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
 
-    HardwareParse hwParser;
-    hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
-    hwParser.findHardwareCommands<FamilyType>();
-    EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
+        HardwareParse hwParser;
+        hwParser.parseCommands<FamilyType>(cmdQ->getCS(0), 0);
+        hwParser.findHardwareCommands<FamilyType>();
+        EXPECT_NE(hwParser.itorWalker, hwParser.cmdList.end());
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*hwParser.itorWalker);
-    std::visit([this, inlineDataSize = inlineDataSize](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
+        auto walker = genCmdCast<WalkerType *>(*hwParser.itorWalker);
         EXPECT_EQ(1u, walker->getEmitInlineParameter());
 
         EXPECT_EQ(0u, walker->getGenerateLocalId());
@@ -1184,9 +1166,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenPassInlin
             using KernelStartPointerType = decltype(idd.getKernelStartPointer());
             EXPECT_EQ(static_cast<KernelStartPointerType>(expectedKernelStartOffset), idd.getKernelStartPointer());
         }
-    },
-               walkerVariant);
-    memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+        memoryManager->freeGraphicsMemory(kernel->kernelInfo.kernelAllocation);
+    }
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, GivenPipeControlIsRequiredWhenWalkerPartitionIsOnThenSizeIsProperlyEstimated) {
@@ -1407,7 +1388,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     debugManager.flags.EnableWalkerPartition.set(1u);
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
@@ -1418,21 +1399,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWalkerIsCalledAndForceSynchronizeWalkerInWpariModeThenWalkerPartitionLogicIsExecuted) {
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     debugManager.flags.EnableWalkerPartition.set(1u);
     debugManager.flags.SynchronizeWalkerInWparidMode.set(1);
@@ -1444,21 +1420,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWalkerIsCalledWithPartitionLogicDisabledThenWalkerPartitionLogicIsNotExecuted) {
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     debugManager.flags.EnableWalkerPartition.set(0u);
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
@@ -1469,21 +1440,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenQueueIsCreatedWithMultiEngineSupportAndEnqueueIsDoneThenWalkerIsPartitioned) {
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     debugManager.flags.EnableWalkerPartition.set(1u);
 
@@ -1495,15 +1461,10 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenQueueIsCre
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(64u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(64u, walker->getPartitionSize());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWalkerIsCalledWithDebugRegistryOverridesThenWalkerContainsProperParameters) {
@@ -1513,7 +1474,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     debugManager.flags.EnableWalkerPartition.set(1u);
     debugManager.flags.ExperimentalSetWalkerPartitionCount.set(2u);
     debugManager.flags.ExperimentalSetWalkerPartitionType.set(2u);
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {1, 1, 1};
@@ -1522,15 +1483,10 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_Y, walker->getPartitionType());
-        EXPECT_EQ(1u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_Y, walker->getPartitionType());
+    EXPECT_EQ(1u, walker->getPartitionSize());
 
     auto timestampPacket = cmdQ->timestampPacketContainer->peekNodes().at(0);
     auto expectedPartitionCount = timestampPacket->getPacketsUsed();
@@ -1542,7 +1498,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     debugManager.flags.EnableWalkerPartition.set(1u);
     debugManager.flags.ExperimentalSetWalkerPartitionCount.set(1u);
     debugManager.flags.ExperimentalSetWalkerPartitionType.set(2u);
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {1, 1, 1};
@@ -1551,16 +1507,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenProgramWal
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
-        EXPECT_EQ(0u, walker->getPartitionSize());
-        EXPECT_FALSE(walker->getWorkloadPartitionEnable());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
+    EXPECT_EQ(0u, walker->getPartitionSize());
+    EXPECT_FALSE(walker->getWorkloadPartitionEnable());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenThereIsNoLocalMemorySupportThenDoNotPartition) {
@@ -1568,7 +1519,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenThereIsNoL
     debugManager.flags.ExperimentalSetWalkerPartitionCount.set(2u);
     debugManager.flags.ExperimentalSetWalkerPartitionType.set(2u);
     VariableBackup<bool> backup(&OSInterface::osEnableLocalMemory, false);
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {1, 1, 1};
@@ -1577,16 +1528,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenThereIsNoL
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
-        EXPECT_EQ(0u, walker->getPartitionSize());
-        EXPECT_FALSE(walker->getWorkloadPartitionEnable());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
+    EXPECT_EQ(0u, walker->getPartitionSize());
+    EXPECT_FALSE(walker->getWorkloadPartitionEnable());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenEnqueueIsBlockedOnUserEventThenDoNotPartition) {
@@ -1596,7 +1542,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenEnqueueIsB
     debugManager.flags.EnableWalkerPartition.set(1u);
     debugManager.flags.ExperimentalSetWalkerPartitionCount.set(2u);
     debugManager.flags.ExperimentalSetWalkerPartitionType.set(2u);
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     cl_event userEvent = clCreateUserEvent(context.get(), nullptr);
 
@@ -1609,16 +1555,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, whenEnqueueIsB
     hwParser.parseCommands<FamilyType>(*cmdQ->getUltCommandStreamReceiver().lastFlushedCommandStream);
     hwParser.findHardwareCommands<FamilyType>(&cmdQ->getGpgpuCommandStreamReceiver().getIndirectHeap(IndirectHeap::Type::dynamicState, 0));
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_Y, walker->getPartitionType());
-        EXPECT_EQ(1u, walker->getPartitionSize());
-        EXPECT_TRUE(walker->getWorkloadPartitionEnable());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_Y, walker->getPartitionType());
+    EXPECT_EQ(1u, walker->getPartitionSize());
+    EXPECT_TRUE(walker->getWorkloadPartitionEnable());
 
     clReleaseEvent(userEvent);
 }
@@ -1646,7 +1587,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenOpenClWhe
         GTEST_SKIP();
     }
     debugManager.flags.EnableWalkerPartition.set(1u);
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {128, 1, 1};
@@ -1656,15 +1597,10 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTest, givenOpenClWhe
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(8u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(8u, walker->getPartitionSize());
 
     GenCmdList storeDataImmList = hwParser.getCommandsList<MI_STORE_DATA_IMM>();
     EXPECT_EQ(0u, storeDataImmList.size());
@@ -1691,7 +1627,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestDynamicPartition
     size_t gws[] = {128, 1, 1};
     size_t lws[] = {8, 1, 1};
     auto &commandStreamReceiver = cmdQ->getUltCommandStreamReceiver();
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     EXPECT_EQ(1u, commandStreamReceiver.activePartitions);
     cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
@@ -1699,15 +1635,10 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestDynamicPartition
 
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(8u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(8u, walker->getPartitionSize());
 }
 
 struct XeHPAndLaterDispatchWalkerBasicTestStaticPartition : public XeHPAndLaterDispatchWalkerBasicTest {
@@ -1731,7 +1662,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestStaticPartition,
     size_t gws[] = {128, 1, 1};
     size_t lws[] = {8, 1, 1};
     auto &commandStreamReceiver = cmdQ->getUltCommandStreamReceiver();
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     EXPECT_EQ(2u, commandStreamReceiver.activePartitions);
     cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, lws, 0, nullptr, nullptr);
@@ -1739,20 +1670,15 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestStaticPartition,
 
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(8u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(8u, walker->getPartitionSize());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestStaticPartition,
             givenStaticPartitioningWhenEnqueueingNonUnifromKernelThenMultipleActivePartitionsAreSetInCsrAndWparidRegisterIsReconfiguredToStatic) {
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     using MI_LOAD_REGISTER_MEM = typename FamilyType::MI_LOAD_REGISTER_MEM;
     if (!OSInterface::osEnableLocalMemory) {
@@ -1776,25 +1702,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestStaticPartition,
     auto nextCmdItor = firstComputeWalkerItor;
     ++nextCmdItor;
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*firstComputeWalkerItor);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(8u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker1 = genCmdCast<WalkerType *>(*firstComputeWalkerItor);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker1->getPartitionType());
+    EXPECT_EQ(8u, walker1->getPartitionSize());
 
     auto secondComputeWalkerItor = NEO::UnitTestHelper<FamilyType>::findWalkerTypeCmd(nextCmdItor, hwParser.cmdList.end());
     ASSERT_NE(hwParser.cmdList.end(), secondComputeWalkerItor);
 
-    WalkerVariant walkerVariant2 = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(*secondComputeWalkerItor);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
+    auto walker2 = genCmdCast<WalkerType *>(*secondComputeWalkerItor);
 
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker->getPartitionType());
-    },
-               walkerVariant2);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_DISABLED, walker2->getPartitionType());
 
     auto workPartitionAllocationGpuVa = commandStreamReceiver.getWorkPartitionAllocationGpuAddress();
     auto expectedRegister = 0x221Cu;
@@ -1806,9 +1723,16 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerBasicTestStaticPartition,
 
 using NonDefaultPlatformGpuWalkerTest = XeHPAndLaterDispatchWalkerBasicTest;
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, NonDefaultPlatformGpuWalkerTest, givenNonDefaultPlatformWhenSetupTimestampPacketThenGmmHelperIsTakenFromNonDefaultPlatform) {
+struct NonDefaultPlatformGpuWalkerTestNonHeaplessMatcher {
+    template <PRODUCT_FAMILY productFamily>
+    static constexpr bool isMatched() {
+        return IsAtLeastXeCore::isMatched<productFamily>() && !(TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::heaplessRequired);
+    }
+};
 
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+HWTEST2_F(NonDefaultPlatformGpuWalkerTest, givenNonDefaultPlatformWhenSetupTimestampPacketThenGmmHelperIsTakenFromNonDefaultPlatform, NonDefaultPlatformGpuWalkerTestNonHeaplessMatcher) {
+
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     auto rootDeviceEnvironment = executionEnvironment->rootDeviceEnvironments[0].get();
@@ -1821,14 +1745,11 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, NonDefaultPlatformGpuWalkerTest, givenNonDefaultPla
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([&](auto &&walker) {
-        ASSERT_NE(nullptr, walker);
-        platformsImpl->clear();
-        EXPECT_EQ(platform(), nullptr);
-        GpgpuWalkerHelper<FamilyType>::setupTimestampPacket(&cmdStream, walker, static_cast<TagNodeBase *>(&timestamp), *rootDeviceEnvironment);
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    platformsImpl->clear();
+    EXPECT_EQ(platform(), nullptr);
+    GpgpuWalkerHelper<FamilyType>::setupTimestampPacket(&cmdStream, walker, static_cast<TagNodeBase *>(&timestamp), *rootDeviceEnvironment);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, WalkerDispatchTest, givenDefaultLocalIdsGenerationWhenPassingFittingParametersThenReturnFalse) {
@@ -2124,7 +2045,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerTestMultiTileDevice, give
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {2, 1, 1};
@@ -2136,22 +2057,17 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerTestMultiTileDevice, give
 
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(2u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(2u, walker->getPartitionSize());
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerTestMultiTileDevice, givenKernelThatDoesntPreferSingleSubdeviceWhenProgramWalkerThenKernelIsExecutedOnAllTiles) {
     if (!OSInterface::osEnableLocalMemory) {
         GTEST_SKIP();
     }
-    using WalkerVariant = typename FamilyType::WalkerVariant;
+    using WalkerType = typename FamilyType::DefaultWalkerType;
 
     auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context.get(), device.get(), nullptr);
     size_t gws[] = {2, 1, 1};
@@ -2164,13 +2080,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, XeHPAndLaterDispatchWalkerTestMultiTileDevice, give
     ClHardwareParse hwParser;
     hwParser.parseCommands<FamilyType>(*cmdQ);
 
-    WalkerVariant walkerVariant = NEO::UnitTestHelper<FamilyType>::getWalkerVariant(hwParser.cmdWalker);
-    std::visit([](auto &&walker) {
-        using WalkerType = std::decay_t<decltype(*walker)>;
-
-        ASSERT_NE(nullptr, walker);
-        EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
-        EXPECT_EQ(1u, walker->getPartitionSize());
-    },
-               walkerVariant);
+    auto walker = genCmdCast<WalkerType *>(hwParser.cmdWalker);
+    ASSERT_NE(nullptr, walker);
+    EXPECT_EQ(WalkerType::PARTITION_TYPE::PARTITION_TYPE_X, walker->getPartitionType());
+    EXPECT_EQ(1u, walker->getPartitionSize());
 }

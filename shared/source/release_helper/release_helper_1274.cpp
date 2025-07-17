@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -30,6 +30,11 @@ bool ReleaseHelperHw<release>::isPipeControlPriorToPipelineSelectWaRequired() co
 }
 
 template <>
+bool ReleaseHelperHw<release>::isDirectSubmissionLightSupported() const {
+    return true;
+}
+
+template <>
 bool ReleaseHelperHw<release>::isDirectSubmissionSupported() const {
     return true;
 }
@@ -37,6 +42,21 @@ bool ReleaseHelperHw<release>::isDirectSubmissionSupported() const {
 template <>
 bool ReleaseHelperHw<release>::getFtrXe2Compression() const {
     return false;
+}
+
+template <>
+bool ReleaseHelperHw<release>::isBlitImageAllowedForDepthFormat() const {
+    return false;
+}
+
+template <>
+inline bool ReleaseHelperHw<release>::isBindlessAddressingDisabled() const {
+    return false;
+}
+
+template <>
+inline bool ReleaseHelperHw<release>::isGlobalBindlessAllocatorEnabled() const {
+    return true;
 }
 
 template <>

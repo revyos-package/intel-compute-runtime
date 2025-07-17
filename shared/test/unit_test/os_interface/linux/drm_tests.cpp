@@ -20,12 +20,15 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/default_hw_info.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
+#include "shared/test/common/helpers/raii_gfx_core_helper.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/variable_backup.h"
 #include "shared/test/common/libult/linux/drm_mock.h"
 #include "shared/test/common/mocks/linux/mock_drm_memory_manager.h"
 #include "shared/test/common/mocks/linux/mock_ioctl_helper.h"
 #include "shared/test/common/mocks/linux/mock_os_context_linux.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
+#include "shared/test/common/os_interface/linux/drm_mock_memory_info.h"
 #include "shared/test/common/os_interface/linux/sys_calls_linux_ult.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
@@ -140,23 +143,98 @@ TEST(DrmTest, GivenValidSysfsNodeWhenGetDeviceMemoryMaxClockRateInMhzIsCalledThe
     EXPECT_EQ(clkRate, 800u);
 }
 
-TEST(DrmTest, GivenValidSysfsNodeWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnSuccess) {
+struct MockIoctlHelperForSmallBar : public IoctlHelperUpstream {
+    using IoctlHelperUpstream::IoctlHelperUpstream;
+
+    std::unique_ptr<MemoryInfo> createMemoryInfo() override {
+        auto memoryInfo{new MockMemoryInfo{drm}};
+        memoryInfo->smallBarDetected = true;
+        return std::unique_ptr<MemoryInfo>{memoryInfo};
+    }
+
+    bool isSmallBarConfigAllowed() const override { return smallBarAllowed; }
+
+    bool smallBarAllowed = true;
+};
+
+TEST(DrmTest, givenSmallBarDetectedInMemoryInfoAndNotSupportedWhenSetupHardwareInfoCalledThenWarningMessagePrintedAndFailureIsReturned) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    drm.setPciPath("0000:ab:cd.e");
+
+    auto setupHardwareInfo = [](HardwareInfo *hwInfo, bool, const ReleaseHelper *) {};
+    DeviceDescriptor device = {0, defaultHwInfo.get(), setupHardwareInfo};
+
+    auto mockIoctlHelper = std::make_unique<MockIoctlHelperForSmallBar>(drm);
+    mockIoctlHelper->smallBarAllowed = false;
+
+    drm.ioctlHelper.reset(mockIoctlHelper.release());
+
+    ::testing::internal::CaptureStderr();
+    EXPECT_EQ(-1, drm.setupHardwareInfo(&device, false));
+    std::string output = testing::internal::GetCapturedStderr();
+    EXPECT_STREQ("WARNING: Small BAR detected for device 0000:ab:cd.e\n", output.c_str());
+}
+
+TEST(DrmTest, givenSmallBarDetectedInMemoryInfoAndSupportedWhenSetupHardwareInfoCalledThenWarningMessagePrintedAndInitializationIsNotBroken) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    drm.setPciPath("0000:ab:cd.e");
+
+    auto setupHardwareInfo = [](HardwareInfo *hwInfo, bool, const ReleaseHelper *) {};
+    DeviceDescriptor device = {0, defaultHwInfo.get(), setupHardwareInfo};
+
+    auto mockIoctlHelper = std::make_unique<MockIoctlHelperForSmallBar>(drm);
+    mockIoctlHelper->smallBarAllowed = true;
+
+    drm.ioctlHelper.reset(mockIoctlHelper.release());
+
+    ::testing::internal::CaptureStderr();
+    EXPECT_EQ(0, drm.setupHardwareInfo(&device, false));
+    std::string output = testing::internal::GetCapturedStderr();
+    EXPECT_STREQ("WARNING: Small BAR detected for device 0000:ab:cd.e\n", output.c_str());
+}
+
+TEST(DrmTest, GivenMemoryInfoWithLocalMemoryRegionsWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenCorrectSizeReturned) {
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
 
-    drm.setPciPath("device");
-    VariableBackup<decltype(SysCalls::sysCallsOpen)> mockOpen(&SysCalls::sysCallsOpen, [](const char *pathname, int flags) -> int {
-        return 1;
-    });
+    auto ioctlHelper{drm.getIoctlHelper()};
+    const auto memoryClassSystem = static_cast<uint16_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassSystem));
+    const auto memoryClassDevice = static_cast<uint16_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassDevice));
+    std::vector<MemoryRegion> memRegions(3);
+    memRegions[0] = {{memoryClassSystem, 0}, 1024};
+    memRegions[1] = {{memoryClassDevice, 0}, 2048};
+    memRegions[2] = {{memoryClassDevice, 1}, 3072};
+    drm.memoryInfo.reset(new MemoryInfo{memRegions, drm});
 
-    VariableBackup<decltype(SysCalls::sysCallsPread)> mockPread(&SysCalls::sysCallsPread, [](int fd, void *buf, size_t count, off_t offset) -> ssize_t {
-        const std::string testData("800");
-        memcpy(buf, testData.data(), testData.length() + 1);
-        return 4;
-    });
-    uint64_t size = 0;
+    uint64_t size{0U};
     EXPECT_TRUE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
     EXPECT_EQ(2048u, size);
+}
+
+TEST(DrmTest, GivenMemoryInfoWithNoLocalMemoryRegionsWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenZeroIsReturned) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+
+    auto ioctlHelper{drm.getIoctlHelper()};
+    const auto memoryClassSystem = static_cast<uint16_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassSystem));
+    std::vector<MemoryRegion> memRegions(1);
+    memRegions[0] = {{memoryClassSystem, 0}, 2048};
+    drm.memoryInfo.reset(new MemoryInfo{memRegions, drm});
+
+    uint64_t size{0U};
+    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
+    EXPECT_EQ(0U, size);
+}
+
+TEST(DrmTest, GivenNoMemoryInfoWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenZeroIsReturned) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+
+    uint64_t size{0U};
+    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
+    EXPECT_EQ(0U, size);
 }
 
 TEST(DrmTest, GivenInValidSysfsNodeWhenGetDeviceMemoryMaxClockRateInMhzIsCalledThenReturnSuccess) {
@@ -170,82 +248,6 @@ TEST(DrmTest, GivenInValidSysfsNodeWhenGetDeviceMemoryMaxClockRateInMhzIsCalledT
 
     uint32_t clkRate = 0;
     EXPECT_FALSE(drm.getDeviceMemoryMaxClockRateInMhz(0, clkRate));
-}
-
-TEST(DrmTest, GivenPciPathCouldNotBeRetrievedWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnZero) {
-    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
-    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
-
-    drm.setPciPath("InvaliDdevice");
-    uint64_t size = 0;
-    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
-}
-
-TEST(DrmTest, GivenInValidSysfsNodeWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnSuccess) {
-    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
-    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
-
-    drm.setPciPath("device");
-    VariableBackup<decltype(SysCalls::sysCallsOpen)> mockOpen(&SysCalls::sysCallsOpen, [](const char *pathname, int flags) -> int {
-        return -1;
-    });
-    uint64_t size = 0;
-    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
-}
-
-TEST(DrmTest, GivenSysfsNodeReadFailsWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnError) {
-    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
-    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
-
-    drm.setPciPath("device");
-    VariableBackup<decltype(SysCalls::sysCallsOpen)> mockOpen(&SysCalls::sysCallsOpen, [](const char *pathname, int flags) -> int {
-        return 1;
-    });
-
-    VariableBackup<decltype(SysCalls::sysCallsPread)> mockPread(&SysCalls::sysCallsPread, [](int fd, void *buf, size_t count, off_t offset) -> ssize_t {
-        const std::string testData("800");
-        memcpy(buf, testData.data(), testData.length() + 1);
-        return 0;
-    });
-    uint64_t size = 0;
-    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
-}
-
-TEST(DrmTest, givenSysfsNodeReadFailsWithErrnoWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnError) {
-    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
-    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
-
-    drm.setPciPath("device");
-    VariableBackup<decltype(SysCalls::sysCallsOpen)> mockOpen(&SysCalls::sysCallsOpen, [](const char *pathname, int flags) -> int {
-        return 1;
-    });
-
-    VariableBackup<decltype(SysCalls::sysCallsPread)> mockPread(&SysCalls::sysCallsPread, [](int fd, void *buf, size_t count, off_t offset) -> ssize_t {
-        const std::string testData("800");
-        memcpy(buf, testData.data(), testData.length() + 1);
-        errno = 1;
-        return 4;
-    });
-    uint64_t size = 0;
-    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
-}
-
-TEST(DrmTest, givenSysfsNodeReadFailsWithImproperDataWhenGetDeviceMemoryPhysicalSizeInBytesIsCalledThenReturnError) {
-    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
-    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
-
-    drm.setPciPath("device");
-    VariableBackup<decltype(SysCalls::sysCallsOpen)> mockOpen(&SysCalls::sysCallsOpen, [](const char *pathname, int flags) -> int {
-        return 1;
-    });
-
-    VariableBackup<decltype(SysCalls::sysCallsPread)> mockPread(&SysCalls::sysCallsPread, [](int fd, void *buf, size_t count, off_t offset) -> ssize_t {
-        const std::string testData("pqr");
-        memcpy(buf, testData.data(), testData.length() + 1);
-        return 4;
-    });
-    uint64_t size = 0;
-    EXPECT_FALSE(drm.getDeviceMemoryPhysicalSizeInBytes(0, size));
 }
 
 TEST(DrmTest, givenSysfsNodeReadFailsWithErrnoWhenGetDeviceMemoryMaxClockRateInMhzIsCalledThenReturnError) {
@@ -384,6 +386,9 @@ TEST(DrmTest, GivenDrmWhenAskedForContextThatIsSuccessThenTrueIsReturned) {
     DrmMock *pDrm = new DrmMock(*executionEnvironment->rootDeviceEnvironments[0]);
     pDrm->storedRetVal = 0;
     EXPECT_EQ(0, pDrm->createDrmContext(1, false, false));
+    if (pDrm->ioctlHelper->hasContextFreqHint()) {
+        EXPECT_EQ(1u, pDrm->lowLatencyHintRequested);
+    }
     delete pDrm;
 }
 
@@ -685,7 +690,7 @@ TEST(DrmTest, givenPerContextVMRequiredWhenCreatingOsContextsThenExplicitVmIsCre
     EXPECT_EQ(drmMock.latestCreatedVmId, drmVmIds[0]);
     EXPECT_EQ(1, drmMock.createDrmVmCalled);
 
-    EXPECT_EQ(0, drmMock.ioctlCount.contextGetParam);
+    EXPECT_EQ(1, drmMock.ioctlCount.contextGetParam);
 }
 
 TEST(DrmTest, givenPerContextVMRequiredWhenVmIdCreationFailsThenQueryVmIsCalled) {
@@ -853,11 +858,12 @@ TEST(DrmTest, givenPrintIoctlDebugFlagSetWhenGettingTimestampFrequencyThenCaptur
 
     int frequency = 0;
 
-    testing::internal::CaptureStdout(); // start capturing
+    StreamCapture capture;
+    capture.captureStdout(); // start capturing
 
     int ret = drm.getTimestampFrequency(frequency);
     debugManager.flags.PrintIoctlEntries.set(false);
-    std::string outputString = testing::internal::GetCapturedStdout(); // stop capturing
+    std::string outputString = capture.getCapturedStdout(); // stop capturing
 
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1000, frequency);
@@ -875,10 +881,11 @@ TEST(DrmTest, givenPrintIoctlDebugFlagNotSetWhenGettingTimestampFrequencyThenCap
 
     int frequency = 0;
 
-    testing::internal::CaptureStdout(); // start capturing
+    StreamCapture capture;
+    capture.captureStdout(); // start capturing
 
     int ret = drm.getTimestampFrequency(frequency);
-    std::string outputString = testing::internal::GetCapturedStdout(); // stop capturing
+    std::string outputString = capture.getCapturedStdout(); // stop capturing
 
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1000, frequency);
@@ -896,11 +903,12 @@ TEST(DrmTest, givenPrintIoctlDebugFlagSetWhenGettingOATimestampFrequencyThenCapt
 
     int frequency = 0;
 
-    testing::internal::CaptureStdout(); // start capturing
+    StreamCapture capture;
+    capture.captureStdout(); // start capturing
 
     int ret = drm.getOaTimestampFrequency(frequency);
     debugManager.flags.PrintIoctlEntries.set(false);
-    std::string outputString = testing::internal::GetCapturedStdout(); // stop capturing
+    std::string outputString = capture.getCapturedStdout(); // stop capturing
 
     EXPECT_EQ(0, ret);
     EXPECT_EQ(123456, frequency);
@@ -1242,6 +1250,7 @@ TEST(DrmQueryTest, GivenRpsMaxFreqFilesExistWhenFrequenciesAreQueriedThenValidVa
 }
 
 TEST(DrmQueryTest, GivenRpsMaxFreqFileDoesntExistWhenFrequencyIsQueriedThenFallbackToLegacyInterface) {
+    USE_REAL_FILE_SYSTEM();
     int expectedMaxFrequency = 2000;
 
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
@@ -1469,6 +1478,39 @@ class MockIoctlHelperResetStats : public MockIoctlHelper {
     ResetStatsFault resetStatsFaultReturnValue{};
 };
 
+TEST(DrmTest, GivenResetStatsWithValidFaultAndContextNotBannedAndDebuggingEnabledWhenIsGpuHangIsCalledThenProcessNotTerminated) {
+    DebugManagerStateRestore restore;
+    debugManager.flags.DisableScratchPages.set(true);
+
+    MockExecutionEnvironment executionEnvironment{};
+    DrmMock drm{*executionEnvironment.rootDeviceEnvironments[0]};
+    executionEnvironment.setDebuggingMode(NEO::DebuggingMode::online);
+    drm.configureScratchPagePolicy();
+    drm.configureGpuFaultCheckThreshold();
+    uint32_t contextId{0};
+    EngineDescriptor engineDescriptor{EngineDescriptorHelper::getDefaultDescriptor({aub_stream::ENGINE_BCS, EngineUsage::regular})};
+    auto ioctlHelper = std::make_unique<MockIoctlHelperResetStats>(drm);
+
+    MockOsContextLinux mockOsContextLinux{drm, 0, contextId, engineDescriptor};
+    mockOsContextLinux.drmContextIds.push_back(0);
+
+    ResetStats resetStatsExpected{};
+    ResetStatsFault resetStatsFaultExpected{};
+    resetStatsExpected.contextId = 0;
+    drm.resetStatsToReturn.push_back(resetStatsExpected);
+
+    resetStatsFaultExpected.flags = 1;
+    resetStatsFaultExpected.addr = 0x1234;
+    resetStatsFaultExpected.type = 2;
+    resetStatsFaultExpected.level = 3;
+
+    ioctlHelper->statusReturnValue = 0u;
+    ioctlHelper->resetStatsFaultReturnValue = resetStatsFaultExpected;
+
+    drm.ioctlHelper = std::move(ioctlHelper);
+    EXPECT_FALSE(drm.isGpuHangDetected(mockOsContextLinux));
+}
+
 TEST(DrmDeathTest, GivenResetStatsWithValidFaultWhenIsGpuHangIsCalledThenProcessTerminated) {
     DebugManagerStateRestore restore;
     debugManager.flags.DisableScratchPages.set(true);
@@ -1522,10 +1564,11 @@ TEST(DrmDeathTest, GivenResetStatsWithValidFaultWhenIsGpuHangIsCalledThenProcess
     std::string expectedString = std::string(buf.get());
 
     ::testing::internal::CaptureStderr();
-    ::testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     EXPECT_THROW(drm.isGpuHangDetected(mockOsContextLinux), std::runtime_error);
     auto stderrString = ::testing::internal::GetCapturedStderr();
-    auto stdoutString = ::testing::internal::GetCapturedStdout();
+    auto stdoutString = capture.getCapturedStdout();
     EXPECT_EQ(expectedString, stderrString);
     EXPECT_EQ(expectedString, stdoutString);
 }
@@ -1549,7 +1592,7 @@ HWTEST2_F(DrmDisableScratchPagesDefaultTest,
 }
 
 HWTEST2_F(DrmDisableScratchPagesDefaultTest,
-          givenDefaultDisableScratchPagesThenCheckingGpuFaultCheckIsSetToDefaultAndScratchPageIsEnabled, IsBeforeXeHpcCore) {
+          givenDefaultDisableScratchPagesThenCheckingGpuFaultCheckIsSetToDefaultAndScratchPageIsEnabled, IsAtMostXeHpgCore) {
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmMockCheckPageFault drm{*executionEnvironment->rootDeviceEnvironments[0]};
     drm.configureScratchPagePolicy();
@@ -2283,4 +2326,45 @@ TEST(DrmTest, GivenProductSpecificIoctlHelperAvailableAndDebugFlagToIgnoreIsSetW
     drm.setupIoctlHelper(productFamily);
 
     EXPECT_EQ(0u, customFuncCalled);
+}
+
+TEST(DrmTest, GivenSysFsPciPathWhenCallinggetSysFsPciPathBaseNameThenResultIsCorrect) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+
+    class DrmMockPciPath : public DrmMock {
+      public:
+        DrmMockPciPath(RootDeviceEnvironment &rootDeviceEnvironment) : DrmMock(rootDeviceEnvironment) {}
+        std::string mockSysFsPciPath = "/sys/devices/pci0000:00/0000:00:02.0/drm/card0";
+        std::string getSysFsPciPath() override { return mockSysFsPciPath; }
+    };
+    DrmMockPciPath drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    EXPECT_STREQ("card0", drm.getSysFsPciPathBaseName().c_str());
+    drm.mockSysFsPciPath = "/sys/devices/pci0000:00/0000:00:02.0/drm/card7";
+    EXPECT_STREQ("card7", drm.getSysFsPciPathBaseName().c_str());
+    drm.mockSysFsPciPath = "card8";
+    EXPECT_STREQ("card8", drm.getSysFsPciPathBaseName().c_str());
+}
+
+using DrmHwTest = ::testing::Test;
+HWTEST_F(DrmHwTest, GivenDrmWhenSetupHardwareInfoCalledThenGfxCoreHelperIsInitializedFromProductHelper) {
+    DebugManagerStateRestore restore;
+    struct MockGfxCoreHelper : NEO::GfxCoreHelperHw<FamilyType> {
+
+        void initializeFromProductHelper(const ProductHelper &productHelper) override {
+            initFromProductHelperCalled = true;
+        }
+        bool initFromProductHelperCalled = false;
+    };
+
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    NEO::RAIIGfxCoreHelperFactory<MockGfxCoreHelper> raii(*executionEnvironment->rootDeviceEnvironments[0]);
+
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    auto setupHardwareInfo = [](HardwareInfo *, bool, const ReleaseHelper *) {};
+    DeviceDescriptor device = {0, executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo(), setupHardwareInfo};
+
+    drm.ioctlHelper = std::make_unique<MockIoctlHelper>(drm);
+    drm.setupHardwareInfo(&device, false);
+
+    EXPECT_TRUE(raii.mockGfxCoreHelper->initFromProductHelperCalled);
 }

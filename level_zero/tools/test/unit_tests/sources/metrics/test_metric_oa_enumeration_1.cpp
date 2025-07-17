@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,8 +7,11 @@
 
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/test_macros/test.h"
+#include "shared/test/common/test_macros/test_base.h"
 
 #include "level_zero/core/source/device/device_imp.h"
+#include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
+#include "level_zero/core/test/unit_tests/mocks/mock_cmdlist.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_driver.h"
 #include "level_zero/tools/source/metrics/metric_oa_source.h"
 #include "level_zero/tools/test/unit_tests/sources/metrics/mock_metric_oa.h"
@@ -270,6 +273,78 @@ TEST_F(MetricEnumerationTest, givenValidArgumentsWhenZetGetMetricGroupProperties
     EXPECT_EQ(strcmp(metricGroupProperties.name, metricsSetParams.SymbolName), 0);
 }
 
+TEST_F(MetricEnumerationTest, givenOaMetricSourceWhenQueryingSourceIdThenCorrectSourceIdIsReturned) {
+
+    // Metrics Discovery device.
+    metricsDeviceParams.ConcurrentGroupsCount = 1;
+
+    // Metrics Discovery concurrent group.
+    Mock<IConcurrentGroup_1_13> metricsConcurrentGroup;
+    TConcurrentGroupParams_1_13 metricsConcurrentGroupParams = {};
+    metricsConcurrentGroupParams.MetricSetsCount = 1;
+    metricsConcurrentGroupParams.SymbolName = "OA";
+    metricsConcurrentGroupParams.Description = "OA description";
+    metricsConcurrentGroupParams.IoMeasurementInformationCount = 1;
+
+    Mock<MetricsDiscovery::IEquation_1_0> ioReadEquation;
+    MetricsDiscovery::TEquationElement_1_0 ioEquationElement = {};
+    ioEquationElement.Type = MetricsDiscovery::EQUATION_ELEM_IMM_UINT64;
+    ioEquationElement.ImmediateUInt64 = 0;
+
+    ioReadEquation.getEquationElement.push_back(&ioEquationElement);
+
+    Mock<MetricsDiscovery::IInformation_1_0> ioMeasurement;
+    MetricsDiscovery::TInformationParams_1_0 oaInformation = {};
+    oaInformation.SymbolName = "BufferOverflow";
+    oaInformation.IoReadEquation = &ioReadEquation;
+    metricsConcurrentGroup.GetIoMeasurementInformationResult = &ioMeasurement;
+    ioMeasurement.GetParamsResult = &oaInformation;
+
+    // Metrics Discovery:: metric set.
+    Mock<MetricsDiscovery::IMetricSet_1_13> metricsSet;
+    MetricsDiscovery::TMetricSetParams_1_11 metricsSetParams = {};
+    metricsSetParams.ApiMask = MetricsDiscovery::API_TYPE_OCL;
+    metricsSetParams.MetricsCount = 0;
+    metricsSetParams.SymbolName = "Metric set name";
+    metricsSetParams.ShortName = "Metric set description";
+
+    // One api: metric group handle.
+    zet_metric_group_handle_t metricGroupHandle = {};
+    zet_metric_group_properties_t metricGroupProperties = {ZET_STRUCTURE_TYPE_METRIC_GROUP_PROPERTIES, nullptr};
+
+    openMetricsAdapter();
+
+    setupDefaultMocksForMetricDevice(metricsDevice);
+
+    metricsDevice.getConcurrentGroupResults.push_back(&metricsConcurrentGroup);
+
+    metricsConcurrentGroup.GetParamsResult = &metricsConcurrentGroupParams;
+    metricsConcurrentGroup.getMetricSetResult = &metricsSet;
+
+    metricsSet.GetParamsResult = &metricsSetParams;
+
+    // Metric group count.
+    uint32_t metricGroupCount = 0;
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, nullptr), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+
+    // Metric group handle.
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, &metricGroupHandle), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+    EXPECT_NE(metricGroupHandle, nullptr);
+
+    zet_intel_metric_source_id_exp_t metricGroupSourceId{};
+    metricGroupSourceId.sourceId = 0xFFFFFFFF;
+    metricGroupSourceId.pNext = nullptr;
+    metricGroupSourceId.stype = ZET_INTEL_STRUCTURE_TYPE_METRIC_SOURCE_ID_EXP;
+
+    metricGroupProperties.pNext = &metricGroupSourceId;
+
+    // Metric group properties.
+    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupHandle, &metricGroupProperties), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupSourceId.sourceId, MetricSource::metricSourceTypeOa);
+}
+
 TEST_F(MetricEnumerationTest, givenInvalidArgumentsWhenZetMetricGetIsCalledThenReturnsFail) {
 
     // Metrics Discovery device.
@@ -474,7 +549,87 @@ TEST_F(MetricEnumerationTest, GivenEnumerationIsSuccessfulWhenReadingMetricsFreq
     EXPECT_EQ(strcmp(metricGroupProperties.name, metricsSetParams.SymbolName), 0);
 
     EXPECT_EQ(metricTimestampProperties.timerResolution, 25000000UL);
-    EXPECT_EQ(metricTimestampProperties.timestampValidBits, 32UL);
+
+    auto &l0GfxCoreHelper = neoDevice->getRootDeviceEnvironment().getHelper<L0GfxCoreHelper>();
+    uint64_t expectedValidBits = l0GfxCoreHelper.getOaTimestampValidBits();
+    EXPECT_EQ(metricTimestampProperties.timestampValidBits, expectedValidBits);
+}
+
+TEST_F(MetricEnumerationTest, whenReadingMetricCroupCalculateParametersThenExpectedValuesAreReturned) {
+    // Metrics Discovery device.
+    metricsDeviceParams.ConcurrentGroupsCount = 1;
+
+    // Metrics Discovery concurrent group.
+    Mock<IConcurrentGroup_1_13> metricsConcurrentGroup;
+    TConcurrentGroupParams_1_13 metricsConcurrentGroupParams = {};
+    metricsConcurrentGroupParams.MetricSetsCount = 1;
+    metricsConcurrentGroupParams.SymbolName = "OA";
+    metricsConcurrentGroupParams.Description = "OA description";
+    metricsConcurrentGroupParams.IoMeasurementInformationCount = 1;
+
+    Mock<MetricsDiscovery::IEquation_1_0> ioReadEquation;
+    MetricsDiscovery::TEquationElement_1_0 ioEquationElement = {};
+    ioEquationElement.Type = MetricsDiscovery::EQUATION_ELEM_IMM_UINT64;
+    ioEquationElement.ImmediateUInt64 = 0;
+
+    ioReadEquation.getEquationElement.push_back(&ioEquationElement);
+
+    Mock<MetricsDiscovery::IInformation_1_0> ioMeasurement;
+    MetricsDiscovery::TInformationParams_1_0 oaInformation = {};
+    oaInformation.SymbolName = "BufferOverflow";
+    oaInformation.IoReadEquation = &ioReadEquation;
+    metricsConcurrentGroup.GetIoMeasurementInformationResult = &ioMeasurement;
+    ioMeasurement.GetParamsResult = &oaInformation;
+
+    // Metrics Discovery:: metric set.
+    Mock<MetricsDiscovery::IMetricSet_1_13> metricsSet;
+    MetricsDiscovery::TMetricSetParams_1_11 metricsSetParams = {};
+
+    // Set flags for Streamer and Query metric sets.
+    metricsSetParams.ApiMask = MetricsDiscovery::API_TYPE_OCL | MetricsDiscovery::API_TYPE_IOSTREAM;
+    ;
+    metricsSetParams.MetricsCount = 0;
+    metricsSetParams.SymbolName = "Metric set name";
+    metricsSetParams.ShortName = "Metric set description";
+
+    openMetricsAdapter();
+
+    setupDefaultMocksForMetricDevice(metricsDevice);
+
+    metricsDevice.getConcurrentGroupResults.push_back(&metricsConcurrentGroup);
+
+    metricsConcurrentGroup.GetParamsResult = &metricsConcurrentGroupParams;
+    metricsConcurrentGroup.getMetricSetResult = &metricsSet;
+
+    metricsSet.GetParamsResult = &metricsSetParams;
+
+    // Metric group count.
+    uint32_t metricGroupCount = 0;
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, nullptr), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 2u);
+
+    std::vector<zet_metric_group_handle_t> metricGroupsHandles(metricGroupCount);
+
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, metricGroupsHandles.data()), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 2u);
+
+    zet_intel_metric_group_calculate_properties_exp_t metricGroupCalcProps{};
+    metricGroupCalcProps.stype = ZET_INTEL_STRUCTURE_TYPE_METRIC_GROUP_CALCULATE_EXP_PROPERTIES;
+    metricGroupCalcProps.pNext = nullptr;
+    metricGroupCalcProps.isTimeFilterSupported = false;
+
+    zet_metric_group_properties_t metricGroupProperties = {ZET_STRUCTURE_TYPE_METRIC_GROUP_PROPERTIES, &metricGroupCalcProps};
+
+    // Metric group properties.
+    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupsHandles[0], &metricGroupProperties), ZE_RESULT_SUCCESS);
+    // Streamer metric groups support time filtering.
+    EXPECT_EQ(metricGroupProperties.samplingType, ZET_METRIC_GROUP_SAMPLING_TYPE_FLAG_TIME_BASED);
+    EXPECT_EQ(metricGroupCalcProps.isTimeFilterSupported, true);
+
+    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupsHandles[1], &metricGroupProperties), ZE_RESULT_SUCCESS);
+    // Query metric groups don't support time filtering.
+    EXPECT_EQ(metricGroupProperties.samplingType, ZET_METRIC_GROUP_SAMPLING_TYPE_FLAG_EVENT_BASED);
+    EXPECT_EQ(metricGroupCalcProps.isTimeFilterSupported, false);
 }
 
 TEST_F(MetricEnumerationTest, GivenValidMetricGroupWhenReadingPropertiesAndIncorrectStructPassedThenFailsWithInvalidArgument) {
@@ -606,21 +761,15 @@ TEST_F(MetricEnumerationTest, GivenValidMetricGroupWhenReadingFrequencyAndIntern
     EXPECT_NE(metricGroupHandle, nullptr);
 
     // Metric group properties.
-    mockOAOsInterface->getMetricsTimerResolutionReturn = ZE_RESULT_ERROR_UNKNOWN;
-    mockOAOsInterface->failGetResolutionOnCall = 1;
-
-    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupHandle, &metricGroupProperties), ZE_RESULT_ERROR_UNKNOWN);
+    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupHandle, &metricGroupProperties), ZE_RESULT_SUCCESS);
     EXPECT_EQ(metricGroupProperties.domain, 0u);
     EXPECT_EQ(metricGroupProperties.samplingType, ZET_METRIC_GROUP_SAMPLING_TYPE_FLAG_EVENT_BASED);
     EXPECT_EQ(metricGroupProperties.metricCount, metricsSetParams.MetricsCount);
     EXPECT_EQ(strcmp(metricGroupProperties.description, metricsSetParams.ShortName), 0);
     EXPECT_EQ(strcmp(metricGroupProperties.name, metricsSetParams.SymbolName), 0);
 
-    EXPECT_EQ(metricTimestampProperties.timerResolution, 0UL);
-    EXPECT_EQ(metricTimestampProperties.timestampValidBits, 0UL);
-
-    mockOAOsInterface->getMetricsTimerResolutionReturn = ZE_RESULT_SUCCESS;
-    mockOAOsInterface->failGetResolutionOnCall = 0;
+    EXPECT_NE(metricTimestampProperties.timerResolution, 0UL);
+    EXPECT_NE(metricTimestampProperties.timestampValidBits, 0UL);
 
     metricsDevice.forceGetSymbolByNameFail = true;
 
@@ -633,25 +782,6 @@ TEST_F(MetricEnumerationTest, GivenValidMetricGroupWhenReadingFrequencyAndIntern
 
     EXPECT_EQ(metricTimestampProperties.timerResolution, 0UL);
     EXPECT_EQ(metricTimestampProperties.timestampValidBits, 0UL);
-
-    metricsDevice.forceGetSymbolByNameFail = false;
-
-    mockOAOsInterface->getMetricsTimerResolutionReturn = ZE_RESULT_ERROR_UNKNOWN;
-    mockOAOsInterface->getResolutionCallCount = 0;
-    mockOAOsInterface->failGetResolutionOnCall = 2; // getTimestampValidBits() also calls getTimerResolution()
-
-    EXPECT_EQ(zetMetricGroupGetProperties(metricGroupHandle, &metricGroupProperties), ZE_RESULT_ERROR_UNKNOWN);
-    EXPECT_EQ(metricGroupProperties.domain, 0u);
-    EXPECT_EQ(metricGroupProperties.samplingType, ZET_METRIC_GROUP_SAMPLING_TYPE_FLAG_EVENT_BASED);
-    EXPECT_EQ(metricGroupProperties.metricCount, metricsSetParams.MetricsCount);
-    EXPECT_EQ(strcmp(metricGroupProperties.description, metricsSetParams.ShortName), 0);
-    EXPECT_EQ(strcmp(metricGroupProperties.name, metricsSetParams.SymbolName), 0);
-
-    EXPECT_EQ(metricTimestampProperties.timerResolution, 0UL);
-    EXPECT_EQ(metricTimestampProperties.timestampValidBits, 0UL);
-
-    mockOAOsInterface->getMetricsTimerResolutionReturn = ZE_RESULT_SUCCESS;
-    mockOAOsInterface->failGetResolutionOnCall = 0;
 }
 
 TEST_F(MetricEnumerationTest, GivenEnumerationIsSuccessfulWhenReadingMetricsFrequencyThenValuesAreUpdated) {
@@ -1466,6 +1596,100 @@ TEST_F(MultiDeviceMetricEnumerationTest, givenMultipleDevicesAndTwoMetricGroupsW
 
     // Activate metric groups.
     EXPECT_EQ(zetContextActivateMetricGroups(context->toHandle(), devices[0]->toHandle(), 2, metricGroupHandles.data()), ZE_RESULT_SUCCESS);
+}
+
+TEST_F(MultiDeviceMetricEnumerationTest, givenMultipleDevicesAndMetricsIsDisabledThenZetContextActivateMetricGroupsReturnsFailure) {
+
+    // Metrics Discovery device.
+    metricsDeviceParams.ConcurrentGroupsCount = 1;
+
+    // Metrics Discovery concurrent group.
+    Mock<IConcurrentGroup_1_13> metricsConcurrentGroup;
+    TConcurrentGroupParams_1_13 metricsConcurrentGroupParams = {};
+    metricsConcurrentGroupParams.MetricSetsCount = 1;
+    metricsConcurrentGroupParams.SymbolName = "OA";
+    metricsConcurrentGroupParams.Description = "OA description";
+    metricsConcurrentGroupParams.IoMeasurementInformationCount = 1;
+
+    Mock<MetricsDiscovery::IEquation_1_0> ioReadEquation;
+    MetricsDiscovery::TEquationElement_1_0 ioEquationElement = {};
+    ioEquationElement.Type = MetricsDiscovery::EQUATION_ELEM_IMM_UINT64;
+    ioEquationElement.ImmediateUInt64 = 0;
+
+    ioReadEquation.getEquationElement.push_back(&ioEquationElement);
+
+    Mock<MetricsDiscovery::IInformation_1_0> ioMeasurement;
+    MetricsDiscovery::TInformationParams_1_0 oaInformation = {};
+    oaInformation.SymbolName = "BufferOverflow";
+    oaInformation.IoReadEquation = &ioReadEquation;
+
+    // Metrics Discovery:: metric set.
+    Mock<MetricsDiscovery::IMetricSet_1_13> metricsSet;
+    MetricsDiscovery::TMetricSetParams_1_11 metricsSetParams = {};
+    metricsSetParams.ApiMask = MetricsDiscovery::API_TYPE_OCL;
+    metricsSetParams.MetricsCount = 0;
+    metricsSetParams.SymbolName = "Metric set name";
+    metricsSetParams.ShortName = "Metric set description";
+    metricsSetParams.MetricsCount = 1;
+
+    // Metrics Discovery:: metric.
+    Mock<IMetric_1_13> metric;
+    TMetricParams_1_13 metricParams = {};
+    metricParams.SymbolName = "Metric symbol name";
+    metricParams.ShortName = "Metric short name";
+    metricParams.LongName = "Metric long name";
+    metricParams.ResultType = MetricsDiscovery::TMetricResultType::RESULT_UINT64;
+    metricParams.MetricType = MetricsDiscovery::TMetricType::METRIC_TYPE_RATIO;
+
+    // One api: metric group handle.
+    zet_metric_group_handle_t metricGroupHandle = {};
+
+    openMetricsAdapter();
+
+    setupDefaultMocksForMetricDevice(metricsDevice);
+
+    metricsDevice.getConcurrentGroupResults.push_back(&metricsConcurrentGroup);
+
+    metricsConcurrentGroup.GetParamsResult = &metricsConcurrentGroupParams;
+    metricsConcurrentGroup.getMetricSetResult = &metricsSet;
+    metricsConcurrentGroup.GetIoMeasurementInformationResult = &ioMeasurement;
+    ioMeasurement.GetParamsResult = &oaInformation;
+
+    metricsSet.GetParamsResult = &metricsSetParams;
+    metricsSet.GetMetricResult = &metric;
+
+    metric.GetParamsResult = &metricParams;
+
+    // Metric group count.
+    uint32_t metricGroupCount = 0;
+    EXPECT_EQ(zetMetricGroupGet(devices[0]->toHandle(), &metricGroupCount, nullptr), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+
+    // Metric group handle.
+    EXPECT_EQ(zetMetricGroupGet(devices[0]->toHandle(), &metricGroupCount, &metricGroupHandle), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+    EXPECT_NE(metricGroupHandle, nullptr);
+
+    // Activate metric group.
+    EXPECT_EQ(zetContextActivateMetricGroups(context->toHandle(), devices[0]->toHandle(), 1, &metricGroupHandle), ZE_RESULT_SUCCESS);
+    // Disable Metrics with an activated metric group returns error
+    EXPECT_EQ(zetIntelDeviceDisableMetricsExp(devices[0]->toHandle()), ZE_RESULT_ERROR_HANDLE_OBJECT_IN_USE);
+    // De-Activate all metric groups.
+    EXPECT_EQ(zetContextActivateMetricGroups(context->toHandle(), devices[0]->toHandle(), 0, nullptr), ZE_RESULT_SUCCESS);
+    // Disable Metrics with all groups deactivated should return success
+    EXPECT_EQ(zetIntelDeviceDisableMetricsExp(devices[0]->toHandle()), ZE_RESULT_SUCCESS);
+    // Multiple Disables continue to return success
+    EXPECT_EQ(zetIntelDeviceDisableMetricsExp(devices[0]->toHandle()), ZE_RESULT_SUCCESS);
+    // Activate metric group on a disabled device should be failure
+    EXPECT_EQ(zetContextActivateMetricGroups(context->toHandle(), devices[0]->toHandle(), 1, &metricGroupHandle), ZE_RESULT_ERROR_UNINITIALIZED);
+
+    // Reset the disabled status
+    devices[0]->getMetricDeviceContext().setMetricsCollectionAllowed(true);
+    auto &deviceImp = *static_cast<DeviceImp *>(devices[0]);
+    const uint32_t subDeviceCount = static_cast<uint32_t>(deviceImp.subDevices.size());
+    for (uint32_t i = 0; i < subDeviceCount; i++) {
+        deviceImp.subDevices[i]->getMetricDeviceContext().setMetricsCollectionAllowed(true);
+    }
 }
 
 TEST_F(MetricEnumerationTest, givenValidTimeBasedMetricGroupWhenzetContextActivateMetricGroupsIsCalledThenReturnsSuccess) {
@@ -3344,6 +3568,152 @@ TEST_F(MetricEnumerationTest, givenValidArgumentsWhenZetGetMetricGroupProperties
     EXPECT_EQ(strcmp(metricGroupProperties.name, metricsSetParams.SymbolName), 0);
 
     EXPECT_EQ(metricGroupType.type, ZET_METRIC_GROUP_TYPE_EXP_FLAG_OTHER);
+}
+
+TEST_F(MetricEnumerationTest, givenValidArgumentsWhenAppendMarkerIsCalledThenReturnSuccess) {
+
+    // Metrics Discovery device.
+    metricsDeviceParams.ConcurrentGroupsCount = 1;
+
+    // Metrics Discovery concurrent group.
+    Mock<IConcurrentGroup_1_13> metricsConcurrentGroup;
+    TConcurrentGroupParams_1_13 metricsConcurrentGroupParams = {};
+    metricsConcurrentGroupParams.MetricSetsCount = 1;
+    metricsConcurrentGroupParams.SymbolName = "OA";
+    metricsConcurrentGroupParams.Description = "OA description";
+    metricsConcurrentGroupParams.IoMeasurementInformationCount = 1;
+
+    Mock<MetricsDiscovery::IEquation_1_0> ioReadEquation;
+    MetricsDiscovery::TEquationElement_1_0 ioEquationElement = {};
+    ioEquationElement.Type = MetricsDiscovery::EQUATION_ELEM_IMM_UINT64;
+    ioEquationElement.ImmediateUInt64 = 0;
+
+    ioReadEquation.getEquationElement.push_back(&ioEquationElement);
+
+    Mock<MetricsDiscovery::IInformation_1_0> ioMeasurement;
+    MetricsDiscovery::TInformationParams_1_0 oaInformation = {};
+    oaInformation.SymbolName = "BufferOverflow";
+    oaInformation.IoReadEquation = &ioReadEquation;
+    metricsConcurrentGroup.GetIoMeasurementInformationResult = &ioMeasurement;
+    ioMeasurement.GetParamsResult = &oaInformation;
+
+    // Metrics Discovery:: metric set.
+    Mock<MetricsDiscovery::IMetricSet_1_13> metricsSet;
+    MetricsDiscovery::TMetricSetParams_1_11 metricsSetParams = {};
+    metricsSetParams.ApiMask = MetricsDiscovery::API_TYPE_OCL;
+    metricsSetParams.MetricsCount = 0;
+    metricsSetParams.SymbolName = "Metric set name";
+    metricsSetParams.ShortName = "Metric set description";
+
+    // One api: metric group handle.
+    zet_metric_group_handle_t metricGroupHandle = {};
+
+    openMetricsAdapter();
+
+    setupDefaultMocksForMetricDevice(metricsDevice);
+
+    metricsDevice.getConcurrentGroupResults.push_back(&metricsConcurrentGroup);
+
+    metricsConcurrentGroup.GetParamsResult = &metricsConcurrentGroupParams;
+    metricsConcurrentGroup.getMetricSetResult = &metricsSet;
+
+    metricsSet.GetParamsResult = &metricsSetParams;
+
+    CommandBufferSize_1_0 commandBufferSize = {};
+    commandBufferSize.GpuMemorySize = 100;
+    mockMetricsLibrary->g_mockApi->commandBufferGetSizeOutSize = commandBufferSize;
+
+    // Metric group count.
+    uint32_t metricGroupCount = 0;
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, nullptr), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+
+    // Metric group handle.
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, &metricGroupHandle), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+    EXPECT_NE(metricGroupHandle, nullptr);
+
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+
+    EXPECT_EQ(zetIntelCommandListAppendMarkerExp(commandList->toHandle(), metricGroupHandle, 0), ZE_RESULT_SUCCESS);
+}
+
+TEST_F(MetricEnumerationTest, givenValidOAMetricGroupThenOASourceCalcOperationIsCalled) {
+
+    // Metrics Discovery device.
+    metricsDeviceParams.ConcurrentGroupsCount = 1;
+
+    // Metrics Discovery concurrent group.
+    Mock<IConcurrentGroup_1_13> metricsConcurrentGroup;
+    TConcurrentGroupParams_1_13 metricsConcurrentGroupParams = {};
+    metricsConcurrentGroupParams.SymbolName = "OA";
+    metricsConcurrentGroupParams.MetricSetsCount = 1;
+    metricsConcurrentGroupParams.IoMeasurementInformationCount = 1;
+
+    Mock<MetricsDiscovery::IEquation_1_0> ioReadEquation;
+    MetricsDiscovery::TEquationElement_1_0 ioEquationElement = {};
+    ioEquationElement.Type = MetricsDiscovery::EQUATION_ELEM_IMM_UINT64;
+    ioEquationElement.ImmediateUInt64 = 0;
+
+    ioReadEquation.getEquationElement.push_back(&ioEquationElement);
+
+    Mock<MetricsDiscovery::IInformation_1_0> ioMeasurement;
+    MetricsDiscovery::TInformationParams_1_0 oaInformation = {};
+    oaInformation.SymbolName = "BufferOverflow";
+    oaInformation.IoReadEquation = &ioReadEquation;
+    metricsConcurrentGroup.GetIoMeasurementInformationResult = &ioMeasurement;
+    ioMeasurement.GetParamsResult = &oaInformation;
+
+    // Metrics Discovery:: metric set.
+    Mock<MetricsDiscovery::IMetricSet_1_13> metricsSet;
+    MetricsDiscovery::TMetricSetParams_1_11 metricsSetParams = {};
+    metricsSetParams.ApiMask = MetricsDiscovery::API_TYPE_OCL;
+
+    openMetricsAdapter();
+
+    setupDefaultMocksForMetricDevice(metricsDevice);
+
+    metricsDevice.getConcurrentGroupResults.push_back(&metricsConcurrentGroup);
+
+    metricsConcurrentGroup.GetParamsResult = &metricsConcurrentGroupParams;
+    metricsConcurrentGroup.getMetricSetResult = &metricsSet;
+
+    metricsSet.GetParamsResult = &metricsSetParams;
+
+    // Metric group handle.
+    uint32_t metricGroupCount = 1;
+    zet_metric_group_handle_t metricGroupHandle = {};
+    EXPECT_EQ(zetMetricGroupGet(device->toHandle(), &metricGroupCount, &metricGroupHandle), ZE_RESULT_SUCCESS);
+    EXPECT_EQ(metricGroupCount, 1u);
+    EXPECT_NE(metricGroupHandle, nullptr);
+
+    // metric groups from different source
+    zet_intel_metric_calculate_exp_desc_t calculateDesc{
+        ZET_INTEL_STRUCTURE_TYPE_METRIC_CALCULATE_DESC_EXP,
+        nullptr,            // pNext
+        1,                  // metricGroupCount
+        &metricGroupHandle, // phMetricGroups
+        0,                  // metricCount
+        nullptr,            // phMetrics
+        0,                  // timeWindowsCount
+        nullptr,            // pCalculateTimeWindows
+        1000,               // timeAggregationWindow
+    };
+
+    zet_intel_metric_calculate_operation_exp_handle_t hCalculateOperation;
+    uint32_t excludedMetricsCount = 0;
+    zet_metric_handle_t *phExcludedMetrics = nullptr;
+    EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, zetIntelMetricCalculateOperationCreateExp(context->toHandle(),
+                                                                                             device->toHandle(), &calculateDesc,
+                                                                                             &excludedMetricsCount, phExcludedMetrics,
+                                                                                             &hCalculateOperation));
+}
+
+using AppendMarkerDriverVersionTest = Test<ExtensionFixture>;
+
+TEST_F(AppendMarkerDriverVersionTest, givenDriverHandleWhenAskingForExtensionsThenReturnCorrectVersions) {
+    verifyExtensionDefinition(ZET_INTEL_METRIC_APPEND_MARKER_EXP_NAME, ZET_INTEL_METRIC_APPEND_MARKER_EXP_VERSION_CURRENT);
 }
 
 } // namespace ult

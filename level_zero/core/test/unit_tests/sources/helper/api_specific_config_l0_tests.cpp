@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #include "shared/source/command_container/implicit_scaling.h"
 #include "shared/source/helpers/api_specific_config.h"
+#include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/mocks/mock_ail_configuration.h"
 #include "shared/test/common/mocks/mock_device.h"
@@ -43,12 +44,12 @@ TEST(ApiSpecificConfigL0Tests, WhenGettingRegistryPathThenL0RegistryPathIsReturn
 }
 
 TEST(ApiSpecificConfigL0Tests, WhenCheckingIfHostDeviceAllocationCacheIsEnabledThenReturnFalse) {
-    EXPECT_FALSE(ApiSpecificConfig::isHostAllocationCacheEnabled());
-    EXPECT_FALSE(ApiSpecificConfig::isDeviceAllocationCacheEnabled());
+    EXPECT_TRUE(ApiSpecificConfig::isHostAllocationCacheEnabled());
+    EXPECT_TRUE(ApiSpecificConfig::isDeviceAllocationCacheEnabled());
 }
 
-TEST(ApiSpecificConfigL0Tests, WhenCheckingIfUsmAllocPoolingIsEnabledThenReturnFalse) {
-    EXPECT_FALSE(ApiSpecificConfig::isHostUsmPoolingEnabled());
+TEST(ApiSpecificConfigL0Tests, WhenCheckingIfUsmAllocPoolingIsEnabledThenReturnCorrectValue) {
+    EXPECT_TRUE(ApiSpecificConfig::isHostUsmPoolingEnabled());
     EXPECT_TRUE(ApiSpecificConfig::isDeviceUsmPoolingEnabled());
 }
 
@@ -88,6 +89,10 @@ TEST(ImplicitScalingApiTests, givenLevelZeroApiUsedThenSupportEnabled) {
     EXPECT_TRUE(ImplicitScaling::apiSupport);
 }
 
+TEST(ApiSpecificConfigL0Tests, WhenCheckingIsUpdateTagFromWaitEnabledForHeaplessThenFalseIsReturned) {
+    EXPECT_FALSE(ApiSpecificConfig::isUpdateTagFromWaitEnabledForHeapless());
+}
+
 TEST(ApiSpecificConfigL0Tests, WhenGettingCompilerCacheFileExtensionThenReturnProperFileExtensionString) {
     EXPECT_EQ(0, strcmp(".l0_cache", ApiSpecificConfig::compilerCacheFileExtension().c_str()));
 }
@@ -109,7 +114,7 @@ TEST(ApiSpecificConfigL0Tests, WhenCheckingIfBindlessAddressingIsEnabledThenRetu
     EXPECT_TRUE(ApiSpecificConfig::getBindlessMode(mockDevice));
 
     mockAilConfigurationHelper.setDisableBindlessAddressing(true);
-    EXPECT_FALSE(ApiSpecificConfig::getBindlessMode(mockDevice));
+    EXPECT_EQ(mockDevice.getCompilerProductHelper().isHeaplessModeEnabled(*defaultHwInfo), ApiSpecificConfig::getBindlessMode(mockDevice));
 }
 
 } // namespace NEO

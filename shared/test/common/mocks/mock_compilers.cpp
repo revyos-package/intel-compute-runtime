@@ -1,25 +1,26 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
-#include "mock_compilers.h"
+#include "shared/test/common/mocks/mock_compilers.h"
 
 #include "shared/source/compiler_interface/compiler_options.h"
-#include "shared/source/helpers/file_io.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/os_interface/os_inc_base.h"
+#include "shared/test/common/helpers/mock_file_io.h"
 #include "shared/test/common/helpers/test_files.h"
 #include "shared/test/common/mocks/mock_compiler_interface.h"
-#include "shared/test/common/mocks/mock_compilers.h"
 #include "shared/test/common/mocks/mock_sip.h"
 
 #include "cif/macros/enable.h"
+#include "common/StateSaveAreaHeader.h"
 #include "ocl_igc_interface/fcl_ocl_device_ctx.h"
 #include "ocl_igc_interface/igc_ocl_device_ctx.h"
 
+#include <filesystem>
 #include <fstream>
 #include <map>
 namespace NEO {
@@ -385,19 +386,25 @@ namespace NEO {
 
 template <typename StrT>
 std::unique_ptr<unsigned char[]> loadBinaryFile(StrT &&fileName, size_t &fileSize) {
-    std::ifstream f{fileName, std::ios::binary | std::ios::in | std::ios::ate};
-    auto end = f.tellg();
-    f.seekg(0, std::ios::beg);
-    auto beg = f.tellg();
-    auto s = static_cast<size_t>(end - beg);
-    if (s == 0) {
-        fileSize = 0;
-        return nullptr;
+
+    std::unique_ptr<char[]> data = loadDataFromFile(fileName.c_str(), fileSize);
+    return std::unique_ptr<unsigned char[]>(reinterpret_cast<unsigned char *>(data.release()));
+};
+
+template <typename StrT>
+std::unique_ptr<unsigned char[]> loadVirtualBinaryFile(StrT &&fileName, size_t &fileSize) {
+    std::filesystem::path filePath = std::forward<StrT>(fileName);
+    std::string fileNameWithExtension = filePath.filename().string();
+    if (!virtualFileExists(fileNameWithExtension)) {
+        return loadBinaryFile(fileName, fileSize);
     }
-    std::unique_ptr<unsigned char[]> data{new unsigned char[s]};
-    f.read(reinterpret_cast<char *>(data.get()), s);
-    fileSize = s;
-    return data;
+
+    std::unique_ptr<char[]> charData = loadDataFromVirtualFile(fileNameWithExtension.c_str(), fileSize);
+
+    std::unique_ptr<unsigned char[]> ucharData(new unsigned char[fileSize]);
+    std::memcpy(ucharData.get(), charData.get(), fileSize);
+
+    return ucharData;
 };
 
 void translate(bool usingIgc, CIF::Builtins::BufferSimple *src, CIF::Builtins::BufferSimple *options,
@@ -474,7 +481,7 @@ void translate(bool usingIgc, CIF::Builtins::BufferSimple *src, CIF::Builtins::B
             out->setOutput(debugVars.binaryToReturn, debugVars.binaryToReturnSize);
         } else {
             size_t fileSize = 0;
-            auto fileData = loadBinaryFile(inputFile, fileSize);
+            auto fileData = loadVirtualBinaryFile(inputFile, fileSize);
 
             out->setOutput(fileData.get(), fileSize);
             if (fileSize == 0) {
@@ -486,7 +493,7 @@ void translate(bool usingIgc, CIF::Builtins::BufferSimple *src, CIF::Builtins::B
             out->setDebugData(debugVars.debugDataToReturn, debugVars.debugDataToReturnSize);
         } else {
             size_t fileSize = 0;
-            auto fileData = loadBinaryFile(debugFile, fileSize);
+            auto fileData = loadVirtualBinaryFile(debugFile, fileSize);
             out->setDebugData(fileData.get(), fileSize);
         }
     } else {
@@ -536,7 +543,14 @@ bool MockIgcOclDeviceCtx::GetSystemRoutine(IGC::SystemRoutineType::SystemRoutine
     debugVars.receivedSipAddressingType = bindless ? MockCompilerDebugVars::SipAddressingType::bindless : MockCompilerDebugVars::SipAddressingType::bindful;
 
     const char mockData1[64] = {'C', 'T', 'N', 'I'};
-    const char mockData2[64] = {'S', 'S', 'A', 'H'};
+    const SIP::StateSaveAreaHeaderV3 mockSipStateSaveAreaHeaderV3 = {
+        .versionHeader{
+            .magic = "tssarea",
+            .reserved1 = 0,
+            .version = {3, 0, 0},
+            .size = static_cast<uint8_t>(sizeof(SIP::StateSaveArea)),
+            .reserved2 = {0, 0, 0}},
+        .regHeader{}};
 
     if (debugVars.forceBuildFailure || typeOfSystemRoutine == IGC::SystemRoutineType::undefined) {
         return false;
@@ -551,7 +565,7 @@ bool MockIgcOclDeviceCtx::GetSystemRoutine(IGC::SystemRoutineType::SystemRoutine
     if (debugVars.stateSaveAreaHeaderToReturnSize > 0 && debugVars.stateSaveAreaHeaderToReturn != nullptr) {
         stateSaveAreaHeaderInit->PushBackRawBytes(debugVars.stateSaveAreaHeaderToReturn, debugVars.stateSaveAreaHeaderToReturnSize);
     } else {
-        stateSaveAreaHeaderInit->PushBackRawBytes(mockData2, 64);
+        stateSaveAreaHeaderInit->PushBackRawBytes(&mockSipStateSaveAreaHeaderV3, sizeof(mockSipStateSaveAreaHeaderV3));
     }
     return true;
 }

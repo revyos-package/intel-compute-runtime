@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -32,6 +32,8 @@ namespace NEO {
 namespace SysCalls {
 uint32_t closeFuncCalled = 0u;
 uint32_t openFuncCalled = 0u;
+uint32_t accessFuncCalled = 0u;
+uint32_t pollFuncCalled = 0u;
 int openFuncRetVal = 0;
 int closeFuncArgPassed = 0;
 int closeFuncRetVal = 0;
@@ -48,6 +50,7 @@ int fstatFuncRetVal = 0;
 int flockRetVal = 0;
 uint32_t preadFuncCalled = 0u;
 uint32_t pwriteFuncCalled = 0u;
+uint32_t readFuncCalled = 0u;
 uint32_t writeFuncCalled = 0u;
 bool isInvalidAILTest = false;
 const char *drmVersion = "i915";
@@ -63,9 +66,16 @@ int flockCalled = 0;
 int opendirCalled = 0;
 int readdirCalled = 0;
 int closedirCalled = 0;
+int pidfdopenCalled = 0;
+int pidfdgetfdCalled = 0;
 int fsyncCalled = 0;
 int fsyncArgPassed = 0;
 int fsyncRetVal = 0;
+uint32_t mkfifoFuncCalled = 0;
+bool failMkfifo = 0;
+bool failFcntl = false;
+bool failFcntl1 = false;
+bool failAccess = false;
 
 std::vector<void *> mmapVector(64);
 std::vector<void *> mmapCapturedExtendedPointers(64);
@@ -104,11 +114,14 @@ DIR *(*sysCallsOpendir)(const char *name) = nullptr;
 struct dirent *(*sysCallsReaddir)(DIR *dir) = nullptr;
 int (*sysCallsClosedir)(DIR *dir) = nullptr;
 int (*sysCallsGetDevicePath)(int deviceFd, char *buf, size_t &bufSize) = nullptr;
+int (*sysCallsPidfdOpen)(pid_t pid, unsigned int flags) = nullptr;
+int (*sysCallsPidfdGetfd)(int pidfd, int fd, unsigned int flags) = nullptr;
 off_t lseekReturn = 4096u;
 std::atomic<int> lseekCalledCount(0);
 long sysconfReturn = 1ull << 30;
 std::string dlOpenFilePathPassed;
 bool captureDlOpenFilePath = false;
+std::string mkfifoPathNamePassed;
 
 int mkdir(const std::string &path) {
     if (sysCallsMkdir != nullptr) {
@@ -228,6 +241,15 @@ unsigned long getNumThreads() {
 }
 
 int access(const char *pathName, int mode) {
+    accessFuncCalled++;
+    if (failAccess) {
+        return -1;
+    }
+    if (F_OK == mode) {
+        if (mkfifoPathNamePassed == pathName) {
+            return 0;
+        }
+    }
     if (allowFakeDevicePath || strcmp(pathName, "/sys/dev/char/226:128") == 0) {
         return 0;
     }
@@ -276,6 +298,7 @@ int getDevicePath(int deviceFd, char *buf, size_t &bufSize) {
 }
 
 int poll(struct pollfd *pollFd, unsigned long int numberOfFds, int timeout) {
+    pollFuncCalled++;
     if (sysCallsPoll != nullptr) {
         return sysCallsPoll(pollFd, numberOfFds, timeout);
     }
@@ -350,6 +373,7 @@ ssize_t read(int fd, void *buf, size_t count) {
     if (sysCallsRead != nullptr) {
         return sysCallsRead(fd, buf, count);
     }
+    readFuncCalled++;
     return 0;
 }
 
@@ -369,13 +393,22 @@ int pipe(int pipeFd[2]) {
 }
 
 int fcntl(int fd, int cmd) {
+    if (failFcntl) {
+        return -1;
+    }
+
     if (cmd == F_GETFL) {
         getFileDescriptorFlagsCalled++;
         return O_RDWR;
     }
     return 0;
 }
+
 int fcntl(int fd, int cmd, int arg) {
+    if (failFcntl1) {
+        return -1;
+    }
+
     if (cmd == F_SETFL) {
         setFileDescriptorFlagsCalled++;
         passedFileDescriptorFlagsToSet = arg;
@@ -404,7 +437,7 @@ int mkstemp(char *fileName) {
 int flock(int fd, int flag) {
     flockCalled++;
 
-    if (fd > 0 && flockRetVal == 0) {
+    if (fd >= 0 && flockRetVal == 0) {
         return 0;
     }
 
@@ -439,6 +472,10 @@ int unlink(const std::string &pathname) {
 
     if (sysCallsUnlink != nullptr) {
         return sysCallsUnlink(pathname);
+    }
+    if (mkfifoPathNamePassed == pathname) {
+        mkfifoPathNamePassed.clear();
+        mkfifoPathNamePassed.shrink_to_fit();
     }
 
     return 0;
@@ -485,6 +522,38 @@ off_t lseek(int fd, off_t offset, int whence) noexcept {
 }
 long sysconf(int name) {
     return sysconfReturn;
+}
+int mkfifo(const char *pathname, mode_t mode) {
+    mkfifoFuncCalled++;
+    if (failMkfifo) {
+        errno = 0;
+        if (setErrno != 0) {
+            errno = setErrno;
+            setErrno = 0;
+        }
+        return -1;
+    }
+    if (nullptr == pathname) {
+        return -1;
+    }
+    mkfifoPathNamePassed = pathname;
+    return 0;
+}
+
+int pidfdopen(pid_t pid, unsigned int flags) {
+    pidfdopenCalled++;
+    if (sysCallsPidfdOpen != nullptr) {
+        return sysCallsPidfdOpen(pid, flags);
+    }
+    return 0;
+}
+
+int pidfdgetfd(int pid, int targetfd, unsigned int flags) {
+    pidfdgetfdCalled++;
+    if (sysCallsPidfdGetfd != nullptr) {
+        return sysCallsPidfdGetfd(pid, targetfd, flags);
+    }
+    return 0;
 }
 
 } // namespace SysCalls

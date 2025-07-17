@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -76,7 +76,7 @@ bool WddmEngineImp::isEngineModuleSupported() {
     return true;
 }
 
-WddmEngineImp::WddmEngineImp(OsSysman *pOsSysman, zes_engine_group_t engineType, uint32_t engineInstance, uint32_t subDeviceId) : engineGroup(engineType), engineInstance(engineInstance) {
+WddmEngineImp::WddmEngineImp(OsSysman *pOsSysman, zes_engine_group_t engineType, uint32_t engineInstance, uint32_t tileId) : engineGroup(engineType), engineInstance(engineInstance) {
     WddmSysmanImp *pWddmSysmanImp = static_cast<WddmSysmanImp *>(pOsSysman);
 
     const std::vector singleEngineGroups = {
@@ -94,8 +94,8 @@ WddmEngineImp::WddmEngineImp(OsSysman *pOsSysman, zes_engine_group_t engineType,
     pKmdSysManager = &pWddmSysmanImp->getKmdSysManager();
 }
 
-std::unique_ptr<OsEngine> OsEngine::create(OsSysman *pOsSysman, zes_engine_group_t engineType, uint32_t engineInstance, uint32_t subDeviceId, ze_bool_t onSubDevice) {
-    std::unique_ptr<WddmEngineImp> pWddmEngineImp = std::make_unique<WddmEngineImp>(pOsSysman, engineType, engineInstance, subDeviceId);
+std::unique_ptr<OsEngine> OsEngine::create(OsSysman *pOsSysman, zes_engine_group_t engineType, uint32_t engineInstance, uint32_t tileId, ze_bool_t onSubDevice) {
+    std::unique_ptr<WddmEngineImp> pWddmEngineImp = std::make_unique<WddmEngineImp>(pOsSysman, engineType, engineInstance, tileId);
     return pWddmEngineImp;
 }
 
@@ -142,6 +142,14 @@ ze_result_t OsEngine::getNumEngineTypeAndInstances(std::set<std::pair<zes_engine
     }
 
     return status;
+}
+
+void OsEngine::initGroupEngineHandleGroupFd(OsSysman *pOsSysman) {
+    return;
+}
+
+void OsEngine::closeFdsForGroupEngineHandles(OsSysman *pOsSysman) {
+    return;
 }
 
 } // namespace Sysman

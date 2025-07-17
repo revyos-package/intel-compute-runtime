@@ -22,6 +22,7 @@
 namespace NEO {
 class MockCommandQueue : public CommandQueue {
   public:
+    using CommandQueue::bcsAllowed;
     using CommandQueue::bcsEngineCount;
     using CommandQueue::bcsEngines;
     using CommandQueue::bcsInitialized;
@@ -189,6 +190,13 @@ class MockCommandQueue : public CommandQueue {
                              GraphicsAllocation *mapAllocation, cl_uint numEventsInWaitList,
                              const cl_event *eventWaitList, cl_event *event) override { return CL_SUCCESS; }
 
+    cl_int enqueueReadBufferImpl(Buffer *buffer, cl_bool blockingRead, size_t offset, size_t cb,
+                                 void *ptr, GraphicsAllocation *mapAllocation, cl_uint numEventsInWaitList,
+                                 const cl_event *eventWaitList, cl_event *event, CommandStreamReceiver &csr) override {
+        enqueueReadBufferImplCalledCount++;
+        return CL_SUCCESS;
+    }
+
     cl_int enqueueReadImage(Image *srcImage, cl_bool blockingRead, const size_t *origin, const size_t *region,
                             size_t rowPitch, size_t slicePitch, void *ptr,
                             GraphicsAllocation *mapAllocation, cl_uint numEventsInWaitList,
@@ -275,6 +283,7 @@ class MockCommandQueue : public CommandQueue {
     std::atomic<TaskCountType> latestTaskCountWaited{std::numeric_limits<TaskCountType>::max()};
     std::optional<WaitStatus> waitUntilCompleteReturnValue{};
     int waitUntilCompleteCalledCount{0};
+    size_t enqueueReadBufferImplCalledCount = 0;
 };
 
 template <typename GfxFamily>
@@ -297,8 +306,11 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     using BaseClass::heaplessModeEnabled;
     using BaseClass::heaplessStateInitEnabled;
     using BaseClass::isBlitAuxTranslationRequired;
+    using BaseClass::isCacheFlushOnNextBcsWriteRequired;
     using BaseClass::isCompleted;
     using BaseClass::isGpgpuSubmissionForBcsRequired;
+    using BaseClass::l3FlushAfterPostSyncEnabled;
+    using BaseClass::l3FlushedAfterCpuRead;
     using BaseClass::latestSentEnqueueType;
     using BaseClass::minimalSizeForBcsSplit;
     using BaseClass::obtainCommandStream;
@@ -432,6 +444,16 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
         return CL_INVALID_OPERATION;
     }
 
+    cl_int enqueueReadBufferImpl(Buffer *buffer, cl_bool blockingRead, size_t offset, size_t size, void *ptr, GraphicsAllocation *mapAllocation,
+                                 cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *event, CommandStreamReceiver &csr) override {
+        enqueueReadBufferCounter++;
+        blockingReadBuffer = blockingRead == CL_TRUE;
+        if (enqueueReadBufferCallBase) {
+            return BaseClass::enqueueReadBufferImpl(buffer, blockingRead, offset, size, ptr, mapAllocation, numEventsInWaitList, eventWaitList, event, csr);
+        }
+        return CL_INVALID_OPERATION;
+    }
+
     void enqueueHandlerHook(const unsigned int commandType, const MultiDispatchInfo &dispatchInfo) override {
         kernelParams = dispatchInfo.peekBuiltinOpParams();
         lastCommandType = commandType;
@@ -493,11 +515,11 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
         }
         return BaseClass::isQueueBlocked();
     }
-    bool isGpgpuSubmissionForBcsRequired(bool queueBlocked, TimestampPacketDependencies &timestampPacketDependencies, bool containsCrossEngineDependency) const override {
+    bool isGpgpuSubmissionForBcsRequired(bool queueBlocked, TimestampPacketDependencies &timestampPacketDependencies, bool containsCrossEngineDependency, bool textureCacheFlushRequired) const override {
         if (forceGpgpuSubmissionForBcsRequired != -1) {
             return forceGpgpuSubmissionForBcsRequired;
         }
-        return BaseClass::isGpgpuSubmissionForBcsRequired(queueBlocked, timestampPacketDependencies, containsCrossEngineDependency);
+        return BaseClass::isGpgpuSubmissionForBcsRequired(queueBlocked, timestampPacketDependencies, containsCrossEngineDependency, textureCacheFlushRequired);
     }
 
     bool waitForTimestamps(Range<CopyEngineState> copyEnginesToWait, WaitStatus &status, TimestampPacketContainer *mainContainer, TimestampPacketContainer *deferredContainer) override {
@@ -539,8 +561,11 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     bool enqueueReadImageCallBase = true;
     size_t enqueueWriteBufferCounter = 0;
     bool enqueueWriteBufferCallBase = true;
+    size_t enqueueReadBufferCounter = 0;
+    bool enqueueReadBufferCallBase = true;
     size_t requestedCmdStreamSize = 0;
     bool blockingWriteBuffer = false;
+    bool blockingReadBuffer = false;
     bool storeMultiDispatchInfo = false;
     bool notifyEnqueueReadBufferCalled = false;
     bool notifyEnqueueReadImageCalled = false;

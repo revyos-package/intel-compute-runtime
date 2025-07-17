@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -13,6 +13,7 @@
 #include <iostream>
 #include <poll.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace NEO {
@@ -49,11 +50,15 @@ extern struct dirent *(*sysCallsReaddir)(DIR *dir);
 extern int (*sysCallsClosedir)(DIR *dir);
 extern int (*sysCallsGetDevicePath)(int deviceFd, char *buf, size_t &bufSize);
 extern int (*sysCallsClose)(int fileDescriptor);
+extern int (*sysCallsPidfdOpen)(pid_t pid, unsigned int flags);
+extern int (*sysCallsPidfdGetfd)(int pidfd, int fd, unsigned int flags);
 
 extern bool allowFakeDevicePath;
 extern int flockRetVal;
 extern int openFuncRetVal;
 extern uint32_t openFuncCalled;
+extern uint32_t accessFuncCalled;
+extern uint32_t pollFuncCalled;
 extern int closeFuncRetVal;
 extern int closeFuncArgPassed;
 extern const char *drmVersion;
@@ -73,7 +78,16 @@ extern int flockCalled;
 extern int fsyncCalled;
 extern int fsyncArgPassed;
 extern int fsyncRetVal;
+extern uint32_t readFuncCalled;
 extern uint32_t writeFuncCalled;
+extern uint32_t mkfifoFuncCalled;
+extern bool failMkfifo;
+extern bool failFcntl;
+extern bool failFcntl1;
+extern bool failAccess;
+extern int setErrno;
+extern int pidfdopenCalled;
+extern int pidfdgetfdCalled;
 
 extern std::vector<void *> mmapVector;
 extern std::vector<void *> mmapCapturedExtendedPointers;
@@ -86,6 +100,7 @@ extern off_t lseekReturn;
 extern std::atomic<int> lseekCalledCount;
 extern bool captureDlOpenFilePath;
 extern std::string dlOpenFilePathPassed;
+extern std::string mkfifoPathNamePassed;
 
 extern long sysconfReturn;
 } // namespace SysCalls

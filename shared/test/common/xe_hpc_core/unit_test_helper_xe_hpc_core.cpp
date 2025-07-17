@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -30,7 +30,7 @@ template <>
 bool UnitTestHelper<Family>::isAdditionalMiSemaphoreWaitRequired(const RootDeviceEnvironment &rootDeviceEnvironment) {
     const auto &productHelper = rootDeviceEnvironment.getHelper<ProductHelper>();
     auto &hwInfo = *rootDeviceEnvironment.getHardwareInfo();
-    auto programGlobalFenceAsMiMemFenceCommandInCommandStream = productHelper.isGlobalFenceInCommandStreamRequired(hwInfo);
+    auto programGlobalFenceAsMiMemFenceCommandInCommandStream = productHelper.isReleaseGlobalFenceInCommandStreamRequired(hwInfo);
     if (debugManager.flags.ProgramGlobalFenceAsMiMemFenceCommandInCommandStream.get() != -1) {
         programGlobalFenceAsMiMemFenceCommandInCommandStream = !!debugManager.flags.ProgramGlobalFenceAsMiMemFenceCommandInCommandStream.get();
     }
@@ -38,7 +38,7 @@ bool UnitTestHelper<Family>::isAdditionalMiSemaphoreWaitRequired(const RootDevic
 }
 
 template <>
-bool UnitTestHelper<Family>::getComputeDispatchAllWalkerFromFrontEndCommand(const typename Family::FrontEndStateCommand &feCmd) {
+bool UnitTestHelperWithHeap<Family>::getComputeDispatchAllWalkerFromFrontEndCommand(const typename Family::FrontEndStateCommand &feCmd) {
     return feCmd.getComputeDispatchAllWalkerEnable();
 }
 
@@ -58,5 +58,7 @@ void UnitTestHelper<Family>::verifyDummyBlitWa(const RootDeviceEnvironment *root
     }
 }
 template struct UnitTestHelper<Family>;
+template struct UnitTestHelperWithHeap<Family>;
 
+template uint64_t UnitTestHelper<Family>::getWalkerActivePostSyncAddress<Family::COMPUTE_WALKER>(Family::COMPUTE_WALKER *walkerCmd);
 } // namespace NEO

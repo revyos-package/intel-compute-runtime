@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -12,11 +12,10 @@
 #include "shared/source/helpers/debug_helpers.h"
 #include "shared/source/xe_hpc_core/hw_info.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <cstring>
 #include <type_traits>
-#include <variant>
 
 template <class T>
 struct CmdParse;
@@ -84,12 +83,14 @@ struct XeHpcCoreFamily : public XeHpcCore {
     using Parse = CmdParse<XeHpcCoreFamily>;
     using GfxFamily = XeHpcCoreFamily;
     using DefaultWalkerType = COMPUTE_WALKER;
+    using PorWalkerType = COMPUTE_WALKER;
     using FrontEndStateCommand = CFE_STATE;
     using XY_BLOCK_COPY_BLT = typename GfxFamily::XY_BLOCK_COPY_BLT;
     using XY_COPY_BLT = typename GfxFamily::MEM_COPY;
     using XY_COLOR_BLT = typename GfxFamily::XY_FAST_COLOR_BLT;
     using MI_STORE_REGISTER_MEM_CMD = typename GfxFamily::MI_STORE_REGISTER_MEM;
     using TimestampPacketType = uint32_t;
+    using StallingBarrierType = PIPE_CONTROL;
     static const COMPUTE_WALKER cmdInitGpgpuWalker;
     static const CFE_STATE cmdInitCfeState;
     static const INTERFACE_DESCRIPTOR_DATA cmdInitInterfaceDescriptorData;
@@ -131,6 +132,7 @@ struct XeHpcCoreFamily : public XeHpcCore {
     static constexpr bool isQwordInOrderCounter = false;
     static constexpr bool walkerPostSyncSupport = true;
     static constexpr size_t indirectDataAlignment = COMPUTE_WALKER::INDIRECTDATASTARTADDRESS_ALIGN_SIZE;
+    static constexpr GFXCORE_FAMILY gfxCoreFamily = IGFX_XE_HPC_CORE;
 
     static constexpr bool supportsCmdSet(GFXCORE_FAMILY cmdSetBaseFamily) {
         return cmdSetBaseFamily == IGFX_XE_HP_CORE;
@@ -156,6 +158,10 @@ struct XeHpcCoreFamily : public XeHpcCore {
         return false;
     }
 
+    static constexpr bool isHeaplessRequired() {
+        return false;
+    }
+
     template <typename InterfaceDescriptorType>
     static constexpr bool isInterfaceDescriptorHeaplessMode() {
         return false;
@@ -165,8 +171,6 @@ struct XeHpcCoreFamily : public XeHpcCore {
     static constexpr auto getPostSyncType() {
         return std::decay_t<POSTSYNC_DATA>{};
     }
-
-    using WalkerVariant = std::variant<COMPUTE_WALKER *>;
 };
 
 } // namespace NEO

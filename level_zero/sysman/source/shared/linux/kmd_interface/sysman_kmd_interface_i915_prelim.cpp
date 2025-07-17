@@ -48,11 +48,11 @@ void SysmanKmdInterfaceI915Prelim::initSysfsNameToFileMap(SysmanProductHelper *p
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonPL2] = std::make_pair("throttle_reason_pl2", "gt_throttle_reason_status_pl2");
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonPL4] = std::make_pair("throttle_reason_pl4", "gt_throttle_reason_status_pl4");
     sysfsNameToFileMap[SysfsName::sysfsNameThrottleReasonThermal] = std::make_pair("throttle_reason_thermal", "gt_throttle_reason_status_thermal");
-    sysfsNameToFileMap[SysfsName::sysfsNameSustainedPowerLimit] = std::make_pair("", "power1_max");
-    sysfsNameToFileMap[SysfsName::sysfsNameSustainedPowerLimitInterval] = std::make_pair("", "power1_max_interval");
-    sysfsNameToFileMap[SysfsName::sysfsNameEnergyCounterNode] = std::make_pair("", "energy1_input");
-    sysfsNameToFileMap[SysfsName::sysfsNameDefaultPowerLimit] = std::make_pair("", "power1_rated_max");
-    sysfsNameToFileMap[SysfsName::sysfsNameCriticalPowerLimit] = std::make_pair("", pSysmanProductHelper->getCardCriticalPowerLimitFile());
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageSustainedPowerLimit] = std::make_pair("", "power1_max");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageSustainedPowerLimitInterval] = std::make_pair("", "power1_max_interval");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageEnergyCounterNode] = std::make_pair("", "energy1_input");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageDefaultPowerLimit] = std::make_pair("", "power1_rated_max");
+    sysfsNameToFileMap[SysfsName::sysfsNamePackageCriticalPowerLimit] = std::make_pair("", pSysmanProductHelper->getPackageCriticalPowerLimitFile());
     sysfsNameToFileMap[SysfsName::sysfsNameStandbyModeControl] = std::make_pair("rc6_enable", "power/rc6_enable");
     sysfsNameToFileMap[SysfsName::sysfsNameMemoryAddressRange] = std::make_pair("addr_range", "");
     sysfsNameToFileMap[SysfsName::sysfsNameMaxMemoryFrequency] = std::make_pair("mem_RP0_freq_mhz", "");
@@ -71,9 +71,9 @@ void SysmanKmdInterfaceI915Prelim::initSysfsNameToNativeUnitMap(SysmanProductHel
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerTimeout] = SysfsValueUnit::milli;
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerTimeslice] = SysfsValueUnit::milli;
     sysfsNameToNativeUnitMap[SysfsName::sysfsNameSchedulerWatchDogTimeout] = SysfsValueUnit::milli;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameSustainedPowerLimit] = SysfsValueUnit::micro;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameDefaultPowerLimit] = SysfsValueUnit::micro;
-    sysfsNameToNativeUnitMap[SysfsName::sysfsNameCriticalPowerLimit] = pSysmanProductHelper->getCardCriticalPowerLimitNativeUnit();
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageSustainedPowerLimit] = SysfsValueUnit::micro;
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageDefaultPowerLimit] = SysfsValueUnit::micro;
+    sysfsNameToNativeUnitMap[SysfsName::sysfsNamePackageCriticalPowerLimit] = pSysmanProductHelper->getPackageCriticalPowerLimitNativeUnit();
 }
 
 std::string SysmanKmdInterfaceI915Prelim::getBasePath(uint32_t subDeviceId) const {
@@ -96,28 +96,79 @@ std::string SysmanKmdInterfaceI915Prelim::getSysfsFilePathForPhysicalMemorySize(
     return filePathPhysicalMemorySize;
 }
 
-int64_t SysmanKmdInterfaceI915Prelim::getEngineActivityFd(zes_engine_group_t engineGroup, uint32_t engineInstance, uint32_t subDeviceId, PmuInterface *const &pPmuInterface) {
+std::string SysmanKmdInterfaceI915Prelim::getEnergyCounterNodeFile(zes_power_domain_t powerDomain) {
+    std::string filePath = {};
+    if (powerDomain == ZES_POWER_DOMAIN_PACKAGE) {
+        filePath = sysfsNameToFileMap[SysfsName::sysfsNamePackageEnergyCounterNode].second;
+    }
+    return filePath;
+}
+
+ze_result_t SysmanKmdInterfaceI915Prelim::getEngineActivityFdListAndConfigPair(zes_engine_group_t engineGroup,
+                                                                               uint32_t engineInstance,
+                                                                               uint32_t gtId,
+                                                                               PmuInterface *const &pPmuInterface,
+                                                                               std::vector<std::pair<int64_t, int64_t>> &fdList,
+                                                                               std::pair<uint64_t, uint64_t> &configPair) {
     uint64_t config = UINT64_MAX;
     switch (engineGroup) {
     case ZES_ENGINE_GROUP_ALL:
-        config = __PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY(subDeviceId);
+        config = __PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS(gtId);
         break;
     case ZES_ENGINE_GROUP_COMPUTE_ALL:
     case ZES_ENGINE_GROUP_RENDER_ALL:
-        config = __PRELIM_I915_PMU_RENDER_GROUP_BUSY(subDeviceId);
+        config = __PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS(gtId);
         break;
     case ZES_ENGINE_GROUP_COPY_ALL:
-        config = __PRELIM_I915_PMU_COPY_GROUP_BUSY(subDeviceId);
+        config = __PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS(gtId);
         break;
     case ZES_ENGINE_GROUP_MEDIA_ALL:
-        config = __PRELIM_I915_PMU_MEDIA_GROUP_BUSY(subDeviceId);
+        config = __PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS(gtId);
         break;
     default:
-        auto engineClass = engineGroupToEngineClass.find(engineGroup);
-        config = I915_PMU_ENGINE_BUSY(engineClass->second, engineInstance);
+        auto i915EngineClass = engineGroupToEngineClass.find(engineGroup);
+        config = PRELIM_I915_PMU_ENGINE_BUSY_TICKS(i915EngineClass->second, engineInstance);
         break;
     }
-    return pPmuInterface->pmuInterfaceOpen(config, -1, PERF_FORMAT_TOTAL_TIME_ENABLED);
+
+    int64_t fd[2];
+
+    if (isGroupEngineHandle(engineGroup)) {
+        configPair = std::make_pair(config, __PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS(gtId));
+    } else {
+        auto i915EngineClass = engineGroupToEngineClass.find(engineGroup);
+        configPair = std::make_pair(config, PRELIM_I915_PMU_ENGINE_TOTAL_TICKS(i915EngineClass->second, engineInstance));
+    }
+
+    fd[0] = pPmuInterface->pmuInterfaceOpen(configPair.first, -1, PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_GROUP);
+    if (fd[0] < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Could not open Busy Ticks Handle \n", __FUNCTION__);
+        return checkErrorNumberAndReturnStatus();
+    }
+
+    fd[1] = pPmuInterface->pmuInterfaceOpen(configPair.second, static_cast<int>(fd[0]), PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_GROUP);
+    if (fd[1] < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Could not open Total Active Ticks Handle \n", __FUNCTION__);
+        close(static_cast<int>(fd[0]));
+        return checkErrorNumberAndReturnStatus();
+    }
+
+    fdList.push_back(std::make_pair(fd[0], fd[1]));
+    return ZE_RESULT_SUCCESS;
+}
+
+ze_result_t SysmanKmdInterfaceI915Prelim::readBusynessFromGroupFd(PmuInterface *const &pPmuInterface, std::pair<int64_t, int64_t> &fdPair, zes_engine_stats_t *pStats) {
+    uint64_t data[4] = {};
+
+    auto ret = pPmuInterface->pmuRead(static_cast<int>(fdPair.first), data, sizeof(data));
+    if (ret < 0) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s():pmuRead is returning value:%d and error:0x%x \n", __FUNCTION__, ret, ZE_RESULT_ERROR_UNKNOWN);
+        return ZE_RESULT_ERROR_UNKNOWN;
+    }
+
+    pStats->activeTime = data[2];
+    pStats->timestamp = data[3] ? data[3] : SysmanDevice::getSysmanTimestamp();
+    return ZE_RESULT_SUCCESS;
 }
 
 std::string SysmanKmdInterfaceI915Prelim::getHwmonName(uint32_t subDeviceId, bool isSubdevice) const {
@@ -149,11 +200,6 @@ std::optional<std::string> SysmanKmdInterfaceI915Prelim::getEngineClassString(ui
     return sysfEngineString->second;
 }
 
-uint32_t SysmanKmdInterfaceI915Prelim::getEventType(const bool isIntegratedDevice) {
-    std::string i915DirName = "i915";
-    return getEventTypeImpl(i915DirName, isIntegratedDevice);
-}
-
 void SysmanKmdInterfaceI915Prelim::getWedgedStatus(LinuxSysmanImp *pLinuxSysmanImp, zes_device_state_t *pState) {
     getWedgedStatusImpl(pLinuxSysmanImp, pState);
 }
@@ -173,7 +219,12 @@ void SysmanKmdInterfaceI915Prelim::getDriverVersion(char (&driverVersion)[ZES_ST
     return;
 }
 
-ze_result_t SysmanKmdInterfaceI915Prelim::getBusyAndTotalTicksConfigs(uint64_t fnNumber, uint64_t engineInstance, uint64_t engineClass, std::pair<uint64_t, uint64_t> &configPair) {
+ze_result_t SysmanKmdInterfaceI915Prelim::getBusyAndTotalTicksConfigsForVf(PmuInterface *const &pPmuInterface,
+                                                                           uint64_t fnNumber,
+                                                                           uint64_t engineInstance,
+                                                                           uint64_t engineClass,
+                                                                           uint64_t gtId,
+                                                                           std::pair<uint64_t, uint64_t> &configPair) {
 
     configPair.first = ___PRELIM_I915_PMU_FN_EVENT(PRELIM_I915_PMU_ENGINE_BUSY_TICKS(engineClass, engineInstance), fnNumber);
     configPair.second = ___PRELIM_I915_PMU_FN_EVENT(PRELIM_I915_PMU_ENGINE_TOTAL_TICKS(engineClass, engineInstance), fnNumber);
@@ -186,6 +237,13 @@ std::string SysmanKmdInterfaceI915Prelim::getGpuBindEntry() const {
 
 std::string SysmanKmdInterfaceI915Prelim::getGpuUnBindEntry() const {
     return getGpuUnBindEntryI915();
+}
+
+void SysmanKmdInterfaceI915Prelim::setSysmanDeviceDirName(const bool isIntegratedDevice) {
+    sysmanDeviceDirName = "i915";
+    if (!isIntegratedDevice) {
+        updateSysmanDeviceDirName(sysmanDeviceDirName);
+    }
 }
 
 } // namespace Sysman

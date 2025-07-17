@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,7 +9,7 @@
 #include "shared/source/release_helper/release_helper_base.inl"
 #include "shared/source/xe_hpg_core/hw_cmds_xe_hpg_core_base.h"
 
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 #include "release_definitions.h"
 
 #include <algorithm>
@@ -29,6 +29,11 @@ bool ReleaseHelperHw<release>::isProgramAllStateComputeCommandFieldsWARequired()
 
 template <>
 inline bool ReleaseHelperHw<release>::isAuxSurfaceModeOverrideRequired() const {
+    return true;
+}
+
+template <>
+bool ReleaseHelperHw<release>::isDirectSubmissionLightSupported() const {
     return true;
 }
 

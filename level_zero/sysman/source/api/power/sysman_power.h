@@ -18,6 +18,7 @@ namespace Sysman {
 struct OsSysman;
 class Power : _zes_pwr_handle_t {
   public:
+    virtual ~Power() = default;
     virtual ze_result_t powerGetProperties(zes_power_properties_t *pProperties) = 0;
     virtual ze_result_t powerGetEnergyCounter(zes_power_energy_counter_t *pEnergy) = 0;
     virtual ze_result_t powerGetLimits(zes_power_sustained_limit_t *pSustained, zes_power_burst_limit_t *pBurst, zes_power_peak_limit_t *pPeak) = 0;
@@ -38,7 +39,7 @@ struct PowerHandleContext {
     PowerHandleContext(OsSysman *pOsSysman) : pOsSysman(pOsSysman){};
     ~PowerHandleContext();
 
-    ze_result_t init(uint32_t subDeviceCount);
+    void init(uint32_t subDeviceCount);
     ze_result_t powerGet(uint32_t *pCount, zes_pwr_handle_t *phPower);
     ze_result_t powerGetCardDomain(zes_pwr_handle_t *phPower);
 

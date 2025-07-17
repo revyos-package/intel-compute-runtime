@@ -16,6 +16,7 @@ using Family = NEO::XeHpcCoreFamily;
 #include "shared/source/command_stream/command_stream_receiver_hw_heap_addressing.inl"
 #include "shared/source/command_stream/command_stream_receiver_hw_xehp_and_later.inl"
 #include "shared/source/gmm_helper/gmm.h"
+#include "shared/source/helpers/blit_commands_helper_from_gen12lp_to_xe3.inl"
 #include "shared/source/helpers/blit_commands_helper_pvc_and_later.inl"
 #include "shared/source/helpers/blit_commands_helper_xehp_and_later.inl"
 #include "shared/source/helpers/blit_properties.h"
@@ -101,27 +102,35 @@ void BlitCommandsHelper<Family>::appendBlitCommandsMemCopy(const BlitProperties 
     blitCmd.setDestinationMOCS(mocs);
     blitCmd.setSourceMOCS(mocs);
 
-    if (dstAllocation->isCompressionEnabled()) {
-        auto resourceFormat = dstAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
-        auto compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
-        blitCmd.setDestinationCompressible(MEM_COPY::DESTINATION_COMPRESSIBLE::DESTINATION_COMPRESSIBLE_COMPRESSIBLE);
-        blitCmd.setCompressionFormat(compressionFormat);
+    if (dstAllocation) {
+        if (dstAllocation->isCompressionEnabled()) {
+            auto resourceFormat = dstAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
+            auto compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
+            blitCmd.setDestinationCompressible(MEM_COPY::DESTINATION_COMPRESSIBLE::DESTINATION_COMPRESSIBLE_COMPRESSIBLE);
+            blitCmd.setCompressionFormat(compressionFormat);
+        }
     }
-    if (srcAllocation->isCompressionEnabled()) {
-        auto resourceFormat = srcAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
-        auto compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
-        blitCmd.setSourceCompressible(MEM_COPY::SOURCE_COMPRESSIBLE::SOURCE_COMPRESSIBLE_COMPRESSIBLE);
-        blitCmd.setCompressionFormat(compressionFormat);
+    if (srcAllocation) {
+        if (srcAllocation->isCompressionEnabled()) {
+            auto resourceFormat = srcAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
+            auto compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
+            blitCmd.setSourceCompressible(MEM_COPY::SOURCE_COMPRESSIBLE::SOURCE_COMPRESSIBLE_COMPRESSIBLE);
+            blitCmd.setCompressionFormat(compressionFormat);
+        }
     }
 
     if (debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.get()) {
-        if (!MemoryPoolHelper::isSystemMemoryPool(srcAllocation->getMemoryPool())) {
-            blitCmd.setSourceCompressible(MEM_COPY::SOURCE_COMPRESSIBLE::SOURCE_COMPRESSIBLE_COMPRESSIBLE);
-            blitCmd.setCompressionFormat(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get());
+        if (srcAllocation) {
+            if (!MemoryPoolHelper::isSystemMemoryPool(srcAllocation->getMemoryPool())) {
+                blitCmd.setSourceCompressible(MEM_COPY::SOURCE_COMPRESSIBLE::SOURCE_COMPRESSIBLE_COMPRESSIBLE);
+                blitCmd.setCompressionFormat(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get());
+            }
         }
-        if (!MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool())) {
-            blitCmd.setDestinationCompressible(MEM_COPY::DESTINATION_COMPRESSIBLE::DESTINATION_COMPRESSIBLE_COMPRESSIBLE);
-            blitCmd.setCompressionFormat(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get());
+        if (dstAllocation) {
+            if (!MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool())) {
+                blitCmd.setDestinationCompressible(MEM_COPY::DESTINATION_COMPRESSIBLE::DESTINATION_COMPRESSIBLE_COMPRESSIBLE);
+                blitCmd.setCompressionFormat(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get());
+            }
         }
     }
 
@@ -272,6 +281,8 @@ size_t BlitCommandsHelper<Family>::getDummyBlitSize(const EncodeDummyBlitWaArgs 
 template class CommandStreamReceiverHw<Family>;
 template struct BlitCommandsHelper<Family>;
 template void BlitCommandsHelper<Family>::appendBlitCommandsForBuffer<typename Family::XY_COPY_BLT>(const BlitProperties &blitProperties, typename Family::XY_COPY_BLT &blitCmd, const RootDeviceEnvironment &rootDeviceEnvironment);
+
+template void BlitCommandsHelper<Family>::applyAdditionalBlitProperties<typename Family::XY_COPY_BLT>(const BlitProperties &blitProperties, typename Family::XY_COPY_BLT &blitCmd, const RootDeviceEnvironment &rootDeviceEnvironment, bool last);
 
 const Family::COMPUTE_WALKER Family::cmdInitGpgpuWalker = Family::COMPUTE_WALKER::sInit();
 const Family::CFE_STATE Family::cmdInitCfeState = Family::CFE_STATE::sInit();

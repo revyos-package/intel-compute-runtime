@@ -613,7 +613,7 @@ void MetricEnumeration::updateMetricProgrammablesFromPrototypes(
         properties.tierNumber = getMetricTierNumber(metricPrototypeParams->UsageFlagsMask);
         properties.samplingType = getSamplingTypeFromApiMask(metricPrototypeParams->ApiMask);
         properties.parameterCount = metricPrototypeParams->OptionDescriptorCount;
-        properties.sourceId = oaSourceId;
+        properties.sourceId = MetricSource::metricSourceTypeOa;
         auto pMetricProgrammable = OaMetricProgrammableImp::create(properties, concurrentGroup, *metricPrototype, metricSource);
         metricProgrammables.push_back(pMetricProgrammable);
     }
@@ -656,7 +656,7 @@ ze_result_t MetricEnumeration::metricProgrammableGet(uint32_t *pCount, zet_metri
     return ZE_RESULT_SUCCESS;
 }
 
-zet_metric_group_sampling_type_flag_t MetricEnumeration::getSamplingTypeFromApiMask(const uint32_t apiMask) {
+zet_metric_group_sampling_type_flags_t MetricEnumeration::getSamplingTypeFromApiMask(const uint32_t apiMask) {
     const uint32_t checkMask = MetricsDiscovery::API_TYPE_IOSTREAM | MetricsDiscovery::API_TYPE_OCL | MetricsDiscovery::API_TYPE_OGL4_X;
     if ((apiMask & checkMask) == checkMask) {
         return METRICS_SAMPLING_TYPE_TIME_EVENT_BASED;
@@ -701,7 +701,7 @@ ze_result_t OaMetricGroupImp::getProperties(zet_metric_group_properties_t *pProp
         copyProperties(properties, *pProperties);
         pProperties->pNext = pNext;
         if (pNext) {
-            status = metricSource.handleMetricGroupExtendedProperties(toHandle(), pNext);
+            status = metricSource.handleMetricGroupExtendedProperties(toHandle(), pProperties, pNext);
         }
     }
 
@@ -855,8 +855,8 @@ ze_result_t OaMetricGroupImp::calculateMetricValues(const zet_metric_group_calcu
 
     const MetricGroupCalculateHeader *pRawHeader = reinterpret_cast<const MetricGroupCalculateHeader *>(pRawData);
     if (pRawHeader->magic == MetricGroupCalculateHeader::magicValue) {
-        METRICS_LOG_INFO("%s", "The call is not supported for multiple devices");
-        METRICS_LOG_INFO("%s", "Please use zetMetricGroupCalculateMultipleMetricValuesExp instead");
+        METRICS_LOG_ERR("%s", "The call is not supported for multiple devices");
+        METRICS_LOG_ERR("%s", "Please use zetMetricGroupCalculateMultipleMetricValuesExp instead");
         return ZE_RESULT_ERROR_INVALID_ARGUMENT;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -85,6 +85,10 @@ struct WhiteBox<::L0::KernelImp> : public ::L0::KernelImp {
 
     void evaluateIfRequiresGenerationOfLocalIdsByRuntime(const NEO::KernelDescriptor &kernelDescriptor) override {}
 
+    uint32_t getIndirectSize() const override {
+        return getCrossThreadDataSize() + getPerThreadDataSizeForWholeThreadGroup();
+    }
+
     WhiteBox() : ::L0::KernelImp(nullptr) {}
 };
 
@@ -94,8 +98,8 @@ struct Mock<::L0::KernelImp> : public WhiteBox<::L0::KernelImp> {
     ADDMETHOD_NOBASE(getProperties, ze_result_t, ZE_RESULT_SUCCESS, (ze_kernel_properties_t * pKernelProperties))
 
     ADDMETHOD(setArgRedescribedImage, ze_result_t, true, ZE_RESULT_SUCCESS,
-              (uint32_t argIndex, ze_image_handle_t argVal),
-              (argIndex, argVal));
+              (uint32_t argIndex, ze_image_handle_t argVal, bool isPacked),
+              (argIndex, argVal, isPacked));
 
     Mock();
     ~Mock() override;
@@ -119,14 +123,33 @@ struct Mock<::L0::KernelImp> : public WhiteBox<::L0::KernelImp> {
 
         if (checkPassedArgumentValues) {
             UNRECOVERABLE_IF(argIndex >= passedArgumentValues.size());
+            if (useExplicitArgs) {
+                auto &explicitArgs = getImmutableData()->getDescriptor().payloadMappings.explicitArgs;
+                UNRECOVERABLE_IF(argIndex >= explicitArgs.size());
+                if (explicitArgs[argIndex].type == NEO::ArgDescriptor::argTValue) {
+
+                    size_t maxArgSize = 0u;
+
+                    for (const auto &element : explicitArgs[argIndex].as<NEO::ArgDescValue>().elements) {
+                        maxArgSize += element.size;
+                    }
+                    argSize = std::min(maxArgSize, argSize);
+                }
+            }
 
             passedArgumentValues[argIndex].resize(argSize);
-            memcpy(passedArgumentValues[argIndex].data(), pArgValue, argSize);
+            if (pArgValue) {
+                memcpy(passedArgumentValues[argIndex].data(), pArgValue, argSize);
+            }
 
             return ZE_RESULT_SUCCESS;
         } else {
             return BaseClass::setArgumentValue(argIndex, argSize, pArgValue);
         }
+    }
+
+    uint32_t getIndirectSize() const override {
+        return getCrossThreadDataSize() + getPerThreadDataSizeForWholeThreadGroup();
     }
 
     WhiteBox<::L0::KernelImmutableData> immutableData;
@@ -138,6 +161,7 @@ struct Mock<::L0::KernelImp> : public WhiteBox<::L0::KernelImp> {
     bool enableForcingOfGenerateLocalIdByHw = false;
     bool forceGenerateLocalIdByHw = false;
     bool checkPassedArgumentValues = false;
+    bool useExplicitArgs = false;
 };
 
 } // namespace ult

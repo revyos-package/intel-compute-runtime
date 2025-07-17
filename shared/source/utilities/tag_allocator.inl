@@ -1,11 +1,12 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #include "shared/source/debug_settings/debug_settings_manager.h"
+#include "shared/source/helpers/timestamp_packet_constants.h"
 #include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/os_interface/sys_calls_common.h"
@@ -118,7 +119,7 @@ void TagAllocator<TagType>::populateFreeTags() {
 
     gfxAllocations.emplace_back(multiGraphicsAllocation);
 
-    auto nodesMemory = std::make_unique<NodeType[]>(tagCount);
+    auto nodesMemory = std::make_unique_for_overwrite<NodeType[]>(tagCount);
 
     for (size_t i = 0; i < tagCount; ++i) {
         auto tagOffset = i * tagSize;
@@ -255,8 +256,9 @@ size_t TagNode<TagType>::getSinglePacketSize() const {
 }
 
 template <typename TagType>
-void TagNode<TagType>::assignDataToAllTimestamps([[maybe_unused]] uint32_t packetIndex, [[maybe_unused]] void *source) {
+void TagNode<TagType>::assignDataToAllTimestamps([[maybe_unused]] uint32_t packetIndex, [[maybe_unused]] const void *source) {
     if constexpr (TagType::getTagNodeType() == TagNodeType::timestampPacket) {
+        UNRECOVERABLE_IF(packetIndex >= tagForCpuAccess->getPacketCount());
         return tagForCpuAccess->assignDataToAllTimestamps(packetIndex, source);
     } else {
         UNRECOVERABLE_IF(true);

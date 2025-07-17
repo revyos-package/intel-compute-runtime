@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -69,7 +69,6 @@ Gmm::Gmm(GmmHelper *gmmHelper, const void *alignedPtr, size_t alignedSize, size_
     applyAuxFlagsForBuffer(gmmRequirements.preferCompressed && !storageInfo.isLockable);
     applyMemoryFlags(storageInfo);
     applyAppResource(storageInfo);
-    applyExtraInitFlag();
     applyDebugOverrides();
 
     gmmResourceInfo.reset(GmmResourceInfo::create(gmmHelper->getClientContext(), &resourceParams));
@@ -161,7 +160,7 @@ void Gmm::setupImageResourceParams(ImageInfo &imgInfo, bool preferCompressed) {
     auto &productHelper = gmmHelper->getRootDeviceEnvironment().getHelper<ProductHelper>();
     resourceParams.NoGfxMemory = 1; // dont allocate, only query for params
 
-    resourceParams.Usage = CacheSettingsHelper::getGmmUsageType(AllocationType::image, false, productHelper);
+    resourceParams.Usage = CacheSettingsHelper::getGmmUsageType(AllocationType::image, false, productHelper, gmmHelper->getHardwareInfo());
 
     resourceParams.Format = imgInfo.surfaceFormat->gmmSurfaceFormat;
     resourceParams.Flags.Gpu.Texture = 1;
@@ -399,11 +398,16 @@ void Gmm::applyMemoryFlags(const StorageInfo &storageInfo) {
         if (storageInfo.systemMemoryPlacement) {
             resourceParams.Flags.Info.NonLocalOnly = 1;
         } else {
-            if (extraMemoryFlagsRequired()) {
+            // `extraMemoryFlagsRequired()` is only virtual in tests where it is overriden by a mock for no better alternative
+            const bool extraFlagsRequired{extraMemoryFlagsRequired()}; // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
+            if (extraFlagsRequired) {
                 applyExtraMemoryFlags(storageInfo);
-            } else if (!storageInfo.isLockable) {
-                if (storageInfo.localOnlyRequired) {
-                    resourceParams.Flags.Info.LocalOnly = 1;
+            }
+            if (!extraFlagsRequired || gmmHelper->isLocalOnlyAllocationMode()) {
+                if (!storageInfo.isLockable) {
+                    if (storageInfo.localOnlyRequired) {
+                        resourceParams.Flags.Info.LocalOnly = 1;
+                    }
                 }
             }
         }
@@ -445,7 +449,7 @@ void Gmm::applyDebugOverrides() {
     }
 }
 
-const char *Gmm::getUsageTypeString() {
+std::string Gmm::getUsageTypeString() {
     switch (resourceParams.Usage) {
     case GMM_RESOURCE_USAGE_TYPE_ENUM::GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED:
         return "GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED";
@@ -464,7 +468,7 @@ const char *Gmm::getUsageTypeString() {
     case GMM_RESOURCE_USAGE_TYPE_ENUM::GMM_RESOURCE_USAGE_OCL_IMAGE:
         return "GMM_RESOURCE_USAGE_OCL_IMAGE";
     default:
-        return "UNKNOWN GMM USAGE TYPE";
+        return "UNKNOWN GMM USAGE TYPE " + std::to_string(gmmResourceInfo->getCachePolicyUsage());
     }
 }
 } // namespace NEO

@@ -31,7 +31,7 @@
 #include "level_zero/core/source/helpers/properties_parser.h"
 #include "level_zero/core/source/kernel/kernel.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 namespace L0 {
 
@@ -98,9 +98,9 @@ ze_result_t CommandQueueImp::initialize(bool copyOnly, bool isInternal, bool imm
         auto &productHelper = rootDeviceEnvironment.getHelper<NEO::ProductHelper>();
         this->doubleSbaWa = productHelper.isAdditionalStateBaseAddressWARequired(hwInfo);
         this->cmdListHeapAddressModel = L0GfxCoreHelper::getHeapAddressModel(rootDeviceEnvironment);
-        this->dispatchCmdListBatchBufferAsPrimary = L0GfxCoreHelper::dispatchCmdListBatchBufferAsPrimary(rootDeviceEnvironment, !immediateCmdListQueue);
+        this->dispatchCmdListBatchBufferAsPrimary = L0GfxCoreHelper::dispatchCmdListBatchBufferAsPrimary(rootDeviceEnvironment, !(internalUsage && immediateCmdListQueue));
         auto &compilerProductHelper = rootDeviceEnvironment.getHelper<NEO::CompilerProductHelper>();
-        this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled();
+        this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled(hwInfo);
         this->heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(this->heaplessModeEnabled);
     }
     return returnValue;
@@ -369,20 +369,29 @@ QueueProperties CommandQueue::extractQueueProperties(const ze_command_queue_desc
     auto baseProperties = static_cast<const ze_base_desc_t *>(desc.pNext);
 
     while (baseProperties) {
-        if (baseProperties->stype == ZEX_INTEL_STRUCTURE_TYPE_QUEUE_ALLOCATE_MSIX_HINT_EXP_PROPERTIES) { // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange), NEO-12901
+        if (static_cast<uint32_t>(baseProperties->stype) == ZEX_INTEL_STRUCTURE_TYPE_QUEUE_ALLOCATE_MSIX_HINT_EXP_PROPERTIES) {
             queueProperties.interruptHint = static_cast<const zex_intel_queue_allocate_msix_hint_exp_desc_t *>(desc.pNext)->uniqueMsix;
         } else if (auto syncDispatchMode = getSyncDispatchMode(baseProperties)) {
             if (syncDispatchMode.has_value()) {
                 queueProperties.synchronizedDispatchMode = syncDispatchMode.value();
             }
-        } else if (baseProperties->stype == ZEX_INTEL_STRUCTURE_TYPE_QUEUE_COPY_OPERATIONS_OFFLOAD_HINT_EXP_PROPERTIES) { // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange), NEO-12901
+        } else if (static_cast<uint32_t>(baseProperties->stype) == ZEX_INTEL_STRUCTURE_TYPE_QUEUE_COPY_OPERATIONS_OFFLOAD_HINT_EXP_PROPERTIES) {
             queueProperties.copyOffloadHint = static_cast<const zex_intel_queue_copy_operations_offload_hint_exp_desc_t *>(desc.pNext)->copyOffloadEnabled;
+        } else if (static_cast<uint32_t>(baseProperties->stype) == ZE_STRUCTURE_TYPE_QUEUE_PRIORITY_DESC) {
+            queueProperties.priorityLevel = static_cast<const ze_queue_priority_desc_t *>(desc.pNext)->priority;
         }
 
         baseProperties = static_cast<const ze_base_desc_t *>(baseProperties->pNext);
     }
 
     return queueProperties;
+}
+
+void CommandQueueImp::makeResidentForResidencyContainer(const NEO::ResidencyContainer &residencyContainer) {
+    for (auto alloc : residencyContainer) {
+        alloc->prepareHostPtrForResidency(csr);
+        csr->makeResident(*alloc);
+    }
 }
 
 } // namespace L0

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,6 +9,7 @@
 
 #include "shared/source/command_stream/task_count_helper.h"
 #include "shared/source/helpers/debug_helpers.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/helpers/ptr_math.h"
 #include "shared/source/memory_manager/allocation_type.h"
 #include "shared/source/memory_manager/definitions/engine_limits.h"
@@ -38,6 +39,7 @@ class CommandStreamReceiver;
 class GraphicsAllocation;
 class ProductHelper;
 
+struct AllocationData;
 struct AllocationProperties;
 
 struct AubInfo {
@@ -56,7 +58,7 @@ struct SurfaceStateInHeapInfo {
     size_t ssSize;
 };
 
-class GraphicsAllocation : public IDNode<GraphicsAllocation> {
+class GraphicsAllocation : public IDNode<GraphicsAllocation>, NEO::NonCopyableAndNonMovableClass {
   public:
     enum UsmInitialPlacement {
         DEFAULT,
@@ -65,8 +67,6 @@ class GraphicsAllocation : public IDNode<GraphicsAllocation> {
     };
 
     ~GraphicsAllocation() override;
-    GraphicsAllocation &operator=(const GraphicsAllocation &) = delete;
-    GraphicsAllocation(const GraphicsAllocation &) = delete;
 
     GraphicsAllocation(uint32_t rootDeviceIndex, size_t numGmms, AllocationType allocationType, void *cpuPtrIn,
                        uint64_t canonizedGpuAddress, uint64_t baseAddress, size_t sizeIn, MemoryPool pool, size_t maxOsContextCount);
@@ -160,6 +160,7 @@ class GraphicsAllocation : public IDNode<GraphicsAllocation> {
     bool isUsed() const { return registeredContextsNum > 0; }
     bool isUsedByManyOsContexts() const { return registeredContextsNum > 1u; }
     bool isUsedByOsContext(uint32_t contextId) const { return objectNotUsed != getTaskCount(contextId); }
+    uint32_t getNumRegisteredContexts() const { return registeredContextsNum.load(); }
     MOCKABLE_VIRTUAL void updateTaskCount(TaskCountType newTaskCount, uint32_t contextId);
     MOCKABLE_VIRTUAL TaskCountType getTaskCount(uint32_t contextId) const {
         if (contextId >= usageInfos.size()) {
@@ -254,6 +255,18 @@ class GraphicsAllocation : public IDNode<GraphicsAllocation> {
                type == AllocationType::globalSurface;
     }
 
+    static bool is2MBPageAllocationType(AllocationType type) {
+        return type == AllocationType::timestampPacketTagBuffer ||
+               type == AllocationType::gpuTimestampDeviceBuffer ||
+               type == AllocationType::profilingTagBuffer;
+    }
+
+    static bool isAccessedFromCommandStreamer(AllocationType allocationType) {
+        return allocationType == AllocationType::commandBuffer ||
+               allocationType == AllocationType::ringBuffer ||
+               allocationType == AllocationType::semaphoreBuffer;
+    }
+
     static uint32_t getNumHandlesForKmdSharedAllocation(uint32_t numBanks);
 
     void *getReservedAddressPtr() const {
@@ -326,7 +339,7 @@ class GraphicsAllocation : public IDNode<GraphicsAllocation> {
     void setShareableHostMemory(bool shareableHostMemory) { this->shareableHostMemory = shareableHostMemory; }
     bool isShareableHostMemory() const { return shareableHostMemory; }
     MOCKABLE_VIRTUAL bool hasAllocationReadOnlyType();
-    MOCKABLE_VIRTUAL void checkAllocationTypeReadOnlyRestrictions(const AllocationProperties &properties);
+    MOCKABLE_VIRTUAL void checkAllocationTypeReadOnlyRestrictions(const AllocationData &allocData);
 
     OsHandleStorage fragmentsStorage;
     StorageInfo storageInfo = {};
@@ -413,4 +426,7 @@ class GraphicsAllocation : public IDNode<GraphicsAllocation> {
     bool cantBeReadOnly = false;
     bool explicitlyMadeResident = false;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<GraphicsAllocation>);
+
 } // namespace NEO

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2023 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -14,11 +14,11 @@
 #include <level_zero/zet_api.h>
 
 namespace L0 {
-extern _ze_driver_handle_t *globalDriverHandle;
+extern std::vector<_ze_driver_handle_t *> *globalDriverHandles;
 
 namespace ult {
 
-void MetricIpSamplingFixture::SetUp() {
+void MetricIpSamplingMultiDevFixture::SetUp() {
 
     debugManager.flags.EnableImplicitScaling.set(1);
 
@@ -48,14 +48,15 @@ void MetricIpSamplingFixture::SetUp() {
         auto &metricOaSource = device->getMetricDeviceContext().getMetricSource<OaMetricSourceImp>();
         metricOaSource.setInitializationState(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE);
     }
-    globalDriverHandle = static_cast<_ze_driver_handle_t *>(driverHandle.get());
+    globalDriverHandles->push_back(driverHandle.get());
 }
 
-void MetricIpSamplingFixture::TearDown() {
+void MetricIpSamplingMultiDevFixture::TearDown() {
     MultiDeviceFixture::tearDown();
+    globalDriverHandles->clear();
 }
 
-void MetricIpSamplingTimestampFixture::SetUp() {
+void MetricIpSamplingFixture::SetUp() {
     DeviceFixture::setUp();
     auto mockMetricIpSamplingOsInterface = new MockMetricIpSamplingOsInterface();
     osInterfaceVector.push_back(mockMetricIpSamplingOsInterface);
@@ -67,11 +68,12 @@ void MetricIpSamplingTimestampFixture::SetUp() {
     auto &metricOaSource = device->getMetricDeviceContext().getMetricSource<OaMetricSourceImp>();
     metricOaSource.setInitializationState(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE);
 
-    globalDriverHandle = static_cast<_ze_driver_handle_t *>(driverHandle.get());
+    globalDriverHandles->push_back(driverHandle.get());
 }
 
-void MetricIpSamplingTimestampFixture::TearDown() {
+void MetricIpSamplingFixture::TearDown() {
     DeviceFixture::tearDown();
+    globalDriverHandles->clear();
 }
 
 } // namespace ult

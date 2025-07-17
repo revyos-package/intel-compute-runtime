@@ -1,11 +1,13 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
+#include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/helpers/constants.h"
+#include "shared/source/helpers/ray_tracing_helper.h"
 #include "shared/source/helpers/string.h"
 #include "shared/source/release_helper/release_helper.h"
 
@@ -65,6 +67,11 @@ bool ReleaseHelperHw<releaseType>::isDirectSubmissionSupported() const {
 }
 
 template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::isDirectSubmissionLightSupported() const {
+    return false;
+}
+
+template <ReleaseType releaseType>
 bool ReleaseHelperHw<releaseType>::isRcsExposureDisabled() const {
     return false;
 }
@@ -86,6 +93,9 @@ bool ReleaseHelperHw<releaseType>::isGlobalBindlessAllocatorEnabled() const {
 
 template <ReleaseType releaseType>
 uint32_t ReleaseHelperHw<releaseType>::getNumThreadsPerEu() const {
+    if (debugManager.flags.OverrideNumThreadsPerEu.get() != -1) {
+        return debugManager.flags.OverrideNumThreadsPerEu.get();
+    }
     return 8u;
 }
 
@@ -128,18 +138,13 @@ uint32_t ReleaseHelperHw<releaseType>::getAdditionalExtraCaps() const {
 }
 
 template <ReleaseType releaseType>
-uint32_t ReleaseHelperHw<releaseType>::getStackSizePerRay() const {
+uint32_t ReleaseHelperHw<releaseType>::getAsyncStackSizePerRay() const {
     return 0u;
 }
 
 template <ReleaseType releaseType>
 bool ReleaseHelperHw<releaseType>::isLocalOnlyAllowed() const {
     return true;
-}
-
-template <ReleaseType releaseType>
-bool ReleaseHelperHw<releaseType>::isDisablingMsaaRequired() const {
-    return false;
 }
 
 template <ReleaseType releaseType>
@@ -154,12 +159,25 @@ const SizeToPreferredSlmValueArray &ReleaseHelperHw<releaseType>::getSizeToPrefe
 }
 
 template <ReleaseType releaseType>
-bool ReleaseHelperHw<releaseType>::isNumRtStacksPerDssFixedValue() const {
+bool ReleaseHelperHw<releaseType>::getFtrXe2Compression() const {
     return true;
 }
 
 template <ReleaseType releaseType>
-bool ReleaseHelperHw<releaseType>::getFtrXe2Compression() const {
+bool ReleaseHelperHw<releaseType>::programmAdditionalStallPriorToBarrierWithTimestamp() const {
+    return false;
+}
+
+template <ReleaseType releaseType>
+uint32_t ReleaseHelperHw<releaseType>::computeSlmValues(uint32_t slmSize, bool isHeapless) const {
+    return 0u;
+}
+template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::isBlitImageAllowedForDepthFormat() const {
     return true;
+}
+template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::isPostImageWriteFlushRequired() const {
+    return false;
 }
 } // namespace NEO

@@ -11,6 +11,7 @@
 #include "shared/source/memory_manager/graphics_allocation.h"
 #include "shared/source/memory_manager/unified_memory_pooling.h"
 #include "shared/source/os_interface/os_library.h"
+#include "shared/source/os_interface/sys_calls_common.h"
 
 #include "level_zero/api/extensions/public/ze_exp_ext.h"
 #include "level_zero/core/source/driver/driver_handle.h"
@@ -35,6 +36,24 @@ struct IpcMemoryData {
 };
 #pragma pack()
 static_assert(sizeof(IpcMemoryData) <= ZE_MAX_IPC_HANDLE_SIZE, "IpcMemoryData is bigger than ZE_MAX_IPC_HANDLE_SIZE");
+
+enum class IpcHandleType : uint8_t {
+    fdHandle = 0,
+    maxHandle
+};
+
+struct IpcOpaqueMemoryData {
+    union IpcHandle {
+        int fd;
+        uint64_t reserved;
+    };
+    IpcHandle handle = {};
+    uint64_t poolOffset = 0;
+    unsigned int processId = 0;
+    IpcHandleType type = IpcHandleType::maxHandle;
+    uint8_t memoryType = 0;
+};
+static_assert(sizeof(IpcOpaqueMemoryData) <= ZE_MAX_IPC_HANDLE_SIZE, "IpcOpaqueMemoryData is bigger than ZE_MAX_IPC_HANDLE_SIZE");
 
 struct IpcHandleTracking {
     uint64_t refcnt = 0;
@@ -104,7 +123,6 @@ struct DriverHandleImp : public DriverHandle {
     void initializeVertexes();
     ze_result_t fabricVertexGetExp(uint32_t *pCount, ze_fabric_vertex_handle_t *phDevices) override;
     void createHostPointerManager();
-    void sortNeoDevices(std::vector<std::unique_ptr<NEO::Device>> &neoDevices);
 
     bool isRemoteImageNeeded(Image *image, Device *device);
     bool isRemoteResourceNeeded(void *ptr,
@@ -124,6 +142,11 @@ struct DriverHandleImp : public DriverHandle {
     std::map<uint64_t, IpcHandleTracking *> &getIPCHandleMap() { return this->ipcHandles; };
     [[nodiscard]] std::unique_lock<std::mutex> lockIPCHandleMap() { return std::unique_lock<std::mutex>(this->ipcHandleMapMutex); };
     void initHostUsmAllocPool();
+    void initDeviceUsmAllocPool(NEO::Device &device);
+
+    std::unique_lock<std::mutex> obtainPeerAccessQueryLock() {
+        return std::unique_lock<std::mutex>(peerAccessQueryMutex);
+    }
 
     std::unique_ptr<HostPointerManager> hostPointerManager;
 
@@ -131,6 +154,7 @@ struct DriverHandleImp : public DriverHandle {
     std::map<void *, NEO::GraphicsAllocation *> sharedMakeResidentAllocations;
 
     std::vector<Device *> devices;
+    std::vector<ze_device_handle_t> devicesToExpose;
     std::vector<FabricVertex *> fabricVertices;
     std::vector<FabricEdge *> fabricEdges;
     std::vector<FabricEdge *> fabricIndirectEdges;
@@ -146,6 +170,7 @@ struct DriverHandleImp : public DriverHandle {
     NEO::MemoryManager *memoryManager = nullptr;
     NEO::SVMAllocsManager *svmAllocsManager = nullptr;
     NEO::UsmMemAllocPool usmHostMemAllocPool;
+    ze_context_handle_t defaultContext = nullptr;
 
     std::unique_ptr<NEO::OsLibrary> rtasLibraryHandle;
     bool rtasLibraryUnavailable = false;
@@ -172,9 +197,15 @@ struct DriverHandleImp : public DriverHandle {
     // not based on the lifetime of the object of a class.
     std::unordered_map<std::thread::id, std::string> errorDescs;
     std::mutex errorDescsMutex;
+    std::mutex peerAccessQueryMutex;
     int setErrorDescription(const std::string &str) override;
     ze_result_t getErrorDescription(const char **ppString) override;
     ze_result_t clearErrorDescription() override;
+
+    ze_context_handle_t getDefaultContext() const override {
+        return defaultContext;
+    }
+    void setupDevicesToExpose();
 
   protected:
     NEO::GraphicsAllocation *getPeerAllocation(Device *device,
@@ -184,7 +215,5 @@ struct DriverHandleImp : public DriverHandle {
                                                uintptr_t *peerGpuAddress,
                                                NEO::SvmAllocationData **peerAllocData);
 };
-
-extern struct DriverHandleImp *globalDriver;
 
 } // namespace L0

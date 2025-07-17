@@ -9,10 +9,12 @@
 #include "shared/source/os_interface/os_interface.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/gtest_helpers.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/libult/linux/drm_mock.h"
 #include "shared/test/common/mocks/linux/mock_drm_allocation.h"
 #include "shared/test/common/mocks/linux/mock_drm_wrappers.h"
 #include "shared/test/common/mocks/linux/mock_ioctl_helper.h"
+#include "shared/test/common/mocks/mock_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
 #include "shared/test/common/mocks/mock_gmm_helper.h"
@@ -124,6 +126,31 @@ TEST_F(DrmBufferObjectTest, whenExecFailsThenPinFails) {
     EXPECT_EQ(EINVAL, ret);
 }
 
+TEST_F(DrmBufferObjectTest, givenDirectSubmissionLightWhenValidateHostptrThenStopDirectSubmission) {
+    mock->ioctlExpected.total = -1;
+    executionEnvironment.initializeMemoryManager();
+    MockCommandStreamReceiver csr(executionEnvironment, 0, 0b1);
+    OsContextLinux osContextLinux(*mock, 0, 0u, EngineDescriptorHelper::getDefaultDescriptor());
+    executionEnvironment.memoryManager->createAndRegisterOsContext(&csr, EngineDescriptorHelper::getDefaultDescriptor());
+    auto &engine = executionEnvironment.memoryManager->getRegisteredEngines(0)[0];
+    auto backupContext = engine.osContext;
+    auto &mutableEngine = const_cast<EngineControl &>(engine);
+    mutableEngine.osContext = &osContextLinux;
+    executionEnvironment.memoryManager->getRegisteredEngines(0)[0].osContext->setDirectSubmissionActive();
+    std::unique_ptr<uint32_t[]> buff(new uint32_t[1024]);
+
+    std::unique_ptr<BufferObject> boToPin(new TestedBufferObject(rootDeviceIndex, this->mock.get()));
+    ASSERT_NE(nullptr, boToPin.get());
+    bo->setAddress(reinterpret_cast<uint64_t>(buff.get()));
+    BufferObject *boArray[1] = {boToPin.get()};
+    EXPECT_EQ(csr.stopDirectSubmissionCalledTimes, 0u);
+
+    bo->validateHostPtr(boArray, 1, osContext.get(), 0, 1);
+
+    EXPECT_EQ(csr.stopDirectSubmissionCalledTimes, 1u);
+    mutableEngine.osContext = backupContext;
+}
+
 TEST_F(DrmBufferObjectTest, whenExecFailsThenValidateHostPtrFails) {
     std::unique_ptr<uint32_t[]> buff(new uint32_t[1024]);
 
@@ -151,11 +178,12 @@ TEST_F(DrmBufferObjectTest, givenResidentBOWhenPrintExecutionBufferIsSetToTrueTh
     bo->setAddress(reinterpret_cast<uint64_t>(buff.get()));
     BufferObject *boArray[1] = {bo.get()};
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     auto ret = bo->pin(boArray, 1, osContext.get(), 0, 1);
     EXPECT_EQ(0, ret);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     auto idx = output.find("drm_i915_gem_execbuffer2 {");
     size_t expectedValue = 29;
     EXPECT_EQ(expectedValue, idx);
@@ -172,11 +200,12 @@ TEST_F(DrmBufferObjectTest, whenPrintBOCreateDestroyResultFlagIsSetAndCloseIsCal
     DebugManagerStateRestore stateRestore;
     debugManager.flags.PrintBOCreateDestroyResult.set(true);
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     bool result = bo->close();
     EXPECT_EQ(true, result);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     size_t idx = output.find("Calling gem close on handle: BO-");
     size_t expectedValue = 0;
     EXPECT_EQ(expectedValue, idx);
@@ -191,21 +220,23 @@ TEST_F(DrmBufferObjectTest, whenPrintBOCreateDestroyResultFlagIsSetAndCloseIsCal
         MockBufferObjectHandleWrapper sharedBoHandleWrapper = bo->acquireSharedOwnershipOfBoHandle();
         EXPECT_TRUE(bo->isBoHandleShared());
 
-        testing::internal::CaptureStdout();
+        StreamCapture capture;
+        capture.captureStdout();
         bool result = bo->close();
         EXPECT_EQ(true, result);
 
-        std::string output = testing::internal::GetCapturedStdout();
+        std::string output = capture.getCapturedStdout();
         size_t idx = output.find("Skipped closing BO-");
         size_t expectedValue = 0u;
         EXPECT_EQ(expectedValue, idx);
     }
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     bool result = bo->close();
     EXPECT_EQ(true, result);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     size_t idx = output.find("Calling gem close on handle: BO-");
     size_t expectedValue = 0;
     EXPECT_EQ(expectedValue, idx);
@@ -217,13 +248,19 @@ TEST_F(DrmBufferObjectTest, whenPrintExecutionBufferIsSetToTrueThenMessageFoundI
     debugManager.flags.PrintExecutionBuffer.set(true);
     ExecObject execObjectsStorage = {};
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     auto ret = bo->exec(0, 0, 0, false, osContext.get(), 0, 1, nullptr, 0u, &execObjectsStorage, 0, 0);
     EXPECT_EQ(0, ret);
 
-    std::string output = testing::internal::GetCapturedStdout();
-    auto idx = output.find("drm_i915_gem_execbuffer2 {");
-    size_t expectedValue = 29;
+    std::string output = capture.getCapturedStdout();
+
+    auto idx = output.find("Exec called with drmVmId = " + std::to_string(mock->getVmIdForContext(*osContext.get(), 0)));
+    uint32_t expectedValue = 0;
+    EXPECT_EQ(expectedValue, idx);
+
+    idx = output.find("drm_i915_gem_execbuffer2 {");
+    expectedValue = 29;
     EXPECT_EQ(expectedValue, idx);
 }
 
@@ -494,23 +531,27 @@ TEST(DrmBufferObject, givenPrintBOBindingResultWhenBOBindAndUnbindSucceedsThenPr
     auto osContext = engines[contextId].osContext;
     osContext->ensureContextInitialized(false);
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
 
     bo.bind(osContext, 0, false);
     EXPECT_TRUE(bo.bindInfo[contextId][0]);
 
-    std::string bindOutput = testing::internal::GetCapturedStdout();
+    std::string bindOutput = capture.getCapturedStdout();
     std::stringstream expected;
-    expected << "bind BO-0 to VM 0, drmVmId = " << drm->latestCreatedVmId << ", range: 0 - 0, size: 0, result: 0\n";
+    expected << "bind BO-0 to VM " << drm->latestCreatedVmId << ", vmHandleId = 0"
+             << ", range: 0 - 0, size: 0, result: 0\n";
     EXPECT_STREQ(bindOutput.c_str(), expected.str().c_str()) << bindOutput;
     expected.str("");
-    testing::internal::CaptureStdout();
+
+    capture.captureStdout();
 
     bo.unbind(osContext, 0);
     EXPECT_FALSE(bo.bindInfo[contextId][0]);
 
-    std::string unbindOutput = testing::internal::GetCapturedStdout();
-    expected << "unbind BO-0 from VM 0, drmVmId = " << drm->latestCreatedVmId << ", range: 0 - 0, size: 0, result: 0\n";
+    std::string unbindOutput = capture.getCapturedStdout();
+    expected << "unbind BO-0 from VM " << drm->latestCreatedVmId << ", vmHandleId = 0"
+             << ", range: 0 - 0, size: 0, result: 0\n";
     EXPECT_STREQ(unbindOutput.c_str(), expected.str().c_str()) << unbindOutput;
 }
 
@@ -559,7 +600,8 @@ TEST(DrmBufferObject, givenPrintBOBindingResultWhenBOBindAndUnbindFailsThenPrint
 
     std::string bindOutput = testing::internal::GetCapturedStderr();
     std::stringstream expected;
-    expected << "bind BO-0 to VM 0, drmVmId = " << drm->latestCreatedVmId << ", range: 0 - 0, size: 0, result: -1, errno: 22\n";
+    expected << "bind BO-0 to VM " << drm->latestCreatedVmId << ", vmHandleId = 0"
+             << ", range: 0 - 0, size: 0, result: -1, errno: 22\n";
     EXPECT_TRUE(hasSubstr(expected.str(), expected.str())) << bindOutput;
     expected.str("");
     testing::internal::CaptureStderr();
@@ -569,7 +611,8 @@ TEST(DrmBufferObject, givenPrintBOBindingResultWhenBOBindAndUnbindFailsThenPrint
     EXPECT_TRUE(bo.bindInfo[contextId][0]);
 
     std::string unbindOutput = testing::internal::GetCapturedStderr();
-    expected << "unbind BO-0 from VM 0, drmVmId = " << drm->latestCreatedVmId << ", range: 0 - 0, size: 0, result: -1, errno: 22";
+    expected << "unbind BO-0 from VM " << drm->latestCreatedVmId << ", vmHandleId = 0"
+             << ", range: 0 - 0, size: 0, result: -1, errno: 22";
     EXPECT_TRUE(hasSubstr(unbindOutput, expected.str())) << unbindOutput;
 }
 
@@ -664,7 +707,7 @@ TEST_P(DrmBufferObjectBindTestWithForcePagingFenceSucceeds, givenDrmWhenBindOper
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -672,7 +715,7 @@ TEST_P(DrmBufferObjectBindTestWithForcePagingFenceSucceeds, givenDrmWhenBindOper
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -732,7 +775,7 @@ TEST_P(DrmBufferObjectBindTestWithForcePagingFenceFalseWaitUserFenceNotCalled, g
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -740,7 +783,7 @@ TEST_P(DrmBufferObjectBindTestWithForcePagingFenceFalseWaitUserFenceNotCalled, g
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -798,7 +841,7 @@ TEST(DrmBufferObject, givenDrmWhenBindOperationSucceedsWithForcePagingFenceWithD
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -806,7 +849,7 @@ TEST(DrmBufferObject, givenDrmWhenBindOperationSucceedsWithForcePagingFenceWithD
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -952,7 +995,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsAndForceFenceWaitThenFe
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -960,7 +1003,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsAndForceFenceWaitThenFe
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -1005,7 +1048,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsWaitBeforeBindFalseAndF
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -1013,7 +1056,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsWaitBeforeBindFalseAndF
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);
@@ -1058,7 +1101,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsWaitBeforeBindTrueAndFo
     class MockDrmWithWaitUserFence : public DrmMock {
       public:
         MockDrmWithWaitUserFence(RootDeviceEnvironment &rootDeviceEnvironment)
-            : DrmMock(rootDeviceEnvironment), waitUserFenceCalled(false) {}
+            : DrmMock(rootDeviceEnvironment) {}
 
         int waitUserFence(uint32_t ctxId, uint64_t address, uint64_t value, ValueWidth dataWidth, int64_t timeout, uint16_t flags, bool userInterrupt,
                           uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override {
@@ -1066,7 +1109,7 @@ TEST(DrmBufferObject, givenDrmWhenUnBindOperationSucceedsWaitBeforeBindTrueAndFo
             return 0;
         }
 
-        bool waitUserFenceCalled;
+        bool waitUserFenceCalled = false;
     };
 
     auto drm = new MockDrmWithWaitUserFence(*executionEnvironment->rootDeviceEnvironments[0]);

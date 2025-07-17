@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -129,12 +129,19 @@ TEST(AubHelper, givenAllocationTypeWhenAskingIfOneTimeWritableThenReturnCorrectR
     }
 }
 
-TEST(AubHelper, givenSetBufferHostMemoryAlwaysAubWritableWhenAskingIfBufferHostMemoryAllocationIsOneTimeAubWritableThenReturnCorrectResult) {
+TEST(AubHelper, givenAlwaysAubWritableAndEnableTbxFaultManagerSetExternallyThenAllocationIsOneTimeAubWritableShouldReturnCorrectResult) {
     DebugManagerStateRestore stateRestore;
+    NEO::debugManager.flags.EnableTbxPageFaultManager.set(0);
+    NEO::debugManager.flags.SetCommandStreamReceiver.set(2);
 
     for (auto isAlwaysAubWritable : {false, true}) {
-        NEO::debugManager.flags.SetBufferHostMemoryAlwaysAubWritable.set(isAlwaysAubWritable);
-        EXPECT_NE(AubHelper::isOneTimeAubWritableAllocationType(AllocationType::bufferHostMemory), isAlwaysAubWritable);
+        for (auto isTbxFaultManagerEnabled : {false, true}) {
+            NEO::debugManager.flags.SetBufferHostMemoryAlwaysAubWritable.set(isAlwaysAubWritable);
+            NEO::debugManager.flags.EnableTbxPageFaultManager.set(isTbxFaultManagerEnabled);
+
+            bool isOneTimeAubWritable = AubHelper::isOneTimeAubWritableAllocationType(AllocationType::bufferHostMemory);
+            EXPECT_EQ(!isAlwaysAubWritable || isTbxFaultManagerEnabled, isOneTimeAubWritable);
+        }
     }
 }
 

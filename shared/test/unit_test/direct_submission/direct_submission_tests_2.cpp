@@ -25,6 +25,7 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/dispatch_flags_helper.h"
 #include "shared/test/common/helpers/relaxed_ordering_commands_helper.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/ult_hw_config.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/helpers/variable_backup.h"
@@ -33,10 +34,10 @@
 #include "shared/test/common/mocks/mock_io_functions.h"
 #include "shared/test/common/test_macros/hw_test.h"
 #include "shared/test/unit_test/fixtures/direct_submission_fixture.h"
-#include "shared/test/unit_test/mocks/mock_direct_submission_diagnostic_collector.h"
 
 namespace CpuIntrinsicsTests {
 extern std::atomic<uint32_t> sfenceCounter;
+extern std::atomic<uint32_t> mfenceCounter;
 } // namespace CpuIntrinsicsTests
 
 using DirectSubmissionTest = Test<DirectSubmissionFixture>;
@@ -48,10 +49,10 @@ struct DirectSubmissionDispatchMiMemFenceTest : public DirectSubmissionDispatchB
         DirectSubmissionDispatchBufferTest::SetUp();
 
         auto &productHelper = pDevice->getProductHelper();
-        miMemFenceSupported = pDevice->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : productHelper.isGlobalFenceInDirectSubmissionRequired(pDevice->getHardwareInfo());
+        miMemFenceSupported = pDevice->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : productHelper.isAcquireGlobalFenceInDirectSubmissionRequired(pDevice->getHardwareInfo());
 
         auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-        heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(compilerProductHelper.isHeaplessModeEnabled());
+        heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo));
     }
 
     template <typename FamilyType>
@@ -128,7 +129,7 @@ HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenMiMemFenceSupportedWhenIni
 
     EXPECT_TRUE(directSubmission.initialize(true));
 
-    EXPECT_EQ(miMemFenceSupported, directSubmission.systemMemoryFenceAddressSet);
+    EXPECT_EQ(directSubmission.globalFenceAllocation != nullptr, directSubmission.systemMemoryFenceAddressSet);
 
     validateFenceProgramming<FamilyType>(directSubmission, 1, expectedSysMemFenceAddress);
 }
@@ -150,7 +151,7 @@ HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenMiMemFenceSupportedWhenDis
 
     validateFenceProgramming<FamilyType>(directSubmission, 1, expectedSysMemFenceAddress);
 
-    EXPECT_EQ(miMemFenceSupported, directSubmission.systemMemoryFenceAddressSet);
+    EXPECT_EQ(directSubmission.globalFenceAllocation != nullptr, directSubmission.systemMemoryFenceAddressSet);
 }
 
 HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenMiMemFenceSupportedWhenSysMemFenceIsAlreadySentThenDontReprogram) {
@@ -192,6 +193,16 @@ HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenDebugFlagSetToFalseWhenCre
     EXPECT_TRUE(directSubmission.initialize(true));
 
     EXPECT_FALSE(directSubmission.miMemFenceRequired);
+    EXPECT_EQ(directSubmission.systemMemoryFenceAddressSet, directSubmission.globalFenceAllocation != nullptr);
+}
+
+HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenNoGlobalFenceAllocationWhenInitializeThenDoNotProgramGlobalFence) {
+    MockDirectSubmissionHw<FamilyType, RenderDispatcher<FamilyType>> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
+    directSubmission.globalFenceAllocation = nullptr;
+    directSubmission.systemMemoryFenceAddressSet = false;
+
+    EXPECT_TRUE(directSubmission.initialize(true));
+
     EXPECT_FALSE(directSubmission.systemMemoryFenceAddressSet);
 }
 
@@ -199,7 +210,7 @@ HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenDebugFlagSetToTrueWhenCrea
     DebugManagerStateRestore restorer;
     debugManager.flags.DirectSubmissionInsertExtraMiMemFenceCommands.set(1);
 
-    if (heaplessStateInit) {
+    if (heaplessStateInit || pDevice->getHardwareInfo().capabilityTable.isIntegratedDevice) {
         GTEST_SKIP();
     }
 
@@ -210,7 +221,7 @@ HWTEST_F(DirectSubmissionDispatchMiMemFenceTest, givenDebugFlagSetToTrueWhenCrea
 
     EXPECT_TRUE(directSubmission.initialize(true));
 
-    EXPECT_TRUE(directSubmission.systemMemoryFenceAddressSet);
+    EXPECT_EQ(directSubmission.systemMemoryFenceAddressSet, directSubmission.globalFenceAllocation != nullptr);
     EXPECT_TRUE(directSubmission.miMemFenceRequired);
 }
 
@@ -530,88 +541,6 @@ HWTEST_F(DirectSubmissionDispatchBufferTest,
 }
 
 HWTEST_F(DirectSubmissionDispatchBufferTest,
-         givenDirectSubmissionDebugBufferModeOneWhenDispatchWorkloadCalledThenExpectNoStartAndLoadDataImm) {
-    using MI_BATCH_BUFFER_START = typename FamilyType::MI_BATCH_BUFFER_START;
-    using MI_STORE_DATA_IMM = typename FamilyType::MI_STORE_DATA_IMM;
-    using Dispatcher = RenderDispatcher<FamilyType>;
-
-    MockDirectSubmissionHw<FamilyType, Dispatcher> regularDirectSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
-    size_t regularSizeDispatch = regularDirectSubmission.getSizeDispatch(false, false, regularDirectSubmission.dispatchMonitorFenceRequired(false));
-
-    MockDirectSubmissionHw<FamilyType, Dispatcher> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
-
-    directSubmission.workloadMode = 1;
-    bool ret = directSubmission.allocateResources();
-    EXPECT_TRUE(ret);
-
-    size_t startSize = directSubmission.getSizeStartSection();
-    size_t storeDataSize = Dispatcher::getSizeStoreDwordCommand();
-
-    size_t debugSizeDispatch = directSubmission.getSizeDispatch(false, false, directSubmission.dispatchMonitorFenceRequired(false));
-    EXPECT_EQ(debugSizeDispatch, (regularSizeDispatch - startSize + storeDataSize));
-
-    directSubmission.workloadModeOneExpectedValue = 0x40u;
-    directSubmission.semaphoreGpuVa = 0xAFF0000;
-    directSubmission.dispatchWorkloadSection(batchBuffer, directSubmission.dispatchMonitorFenceRequired(batchBuffer.hasStallingCmds));
-    size_t expectedDispatchSize = debugSizeDispatch - directSubmission.getSizeNewResourceHandler();
-    EXPECT_EQ(expectedDispatchSize, directSubmission.ringCommandStream.getUsed());
-
-    HardwareParse hwParse;
-    hwParse.parseCommands<FamilyType>(directSubmission.ringCommandStream, 0);
-
-    if (directSubmission.getSizePrefetchMitigation() == sizeof(MI_BATCH_BUFFER_START)) {
-        EXPECT_EQ(1u, hwParse.getCommandCount<MI_BATCH_BUFFER_START>());
-    } else {
-        EXPECT_EQ(0u, hwParse.getCommandCount<MI_BATCH_BUFFER_START>());
-    }
-
-    MI_STORE_DATA_IMM *storeData = hwParse.getCommand<MI_STORE_DATA_IMM>();
-    ASSERT_NE(nullptr, storeData);
-    EXPECT_EQ(0x40u + 1u, storeData->getDataDword0());
-    uint64_t expectedGpuVa = directSubmission.semaphoreGpuVa;
-    auto semaphore = static_cast<RingSemaphoreData *>(directSubmission.semaphorePtr);
-    expectedGpuVa += ptrDiff(&semaphore->diagnosticModeCounter, directSubmission.semaphorePtr);
-    EXPECT_EQ(expectedGpuVa, storeData->getAddress());
-}
-
-HWTEST_F(DirectSubmissionDispatchBufferTest,
-         givenDirectSubmissionDebugBufferModeTwoWhenDispatchWorkloadCalledThenExpectNoStartAndNoLoadDataImm) {
-    using MI_BATCH_BUFFER_START = typename FamilyType::MI_BATCH_BUFFER_START;
-    using MI_STORE_DATA_IMM = typename FamilyType::MI_STORE_DATA_IMM;
-
-    MockDirectSubmissionHw<FamilyType, RenderDispatcher<FamilyType>> regularDirectSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
-    size_t regularSizeDispatch = regularDirectSubmission.getSizeDispatch(false, false, regularDirectSubmission.dispatchMonitorFenceRequired(false));
-
-    MockDirectSubmissionHw<FamilyType, RenderDispatcher<FamilyType>> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
-
-    directSubmission.workloadMode = 2;
-    bool ret = directSubmission.allocateResources();
-    EXPECT_TRUE(ret);
-
-    size_t startSize = directSubmission.getSizeStartSection();
-
-    size_t debugSizeDispatch = directSubmission.getSizeDispatch(false, false, directSubmission.dispatchMonitorFenceRequired(false));
-    EXPECT_EQ(debugSizeDispatch, (regularSizeDispatch - startSize));
-
-    directSubmission.currentQueueWorkCount = 0x40u;
-    directSubmission.dispatchWorkloadSection(batchBuffer, directSubmission.dispatchMonitorFenceRequired(batchBuffer.dispatchMonitorFence));
-    size_t expectedDispatchSize = debugSizeDispatch - directSubmission.getSizeNewResourceHandler();
-    EXPECT_EQ(expectedDispatchSize, directSubmission.ringCommandStream.getUsed());
-
-    HardwareParse hwParse;
-    hwParse.parseCommands<FamilyType>(directSubmission.ringCommandStream, 0);
-
-    if (directSubmission.getSizePrefetchMitigation() == sizeof(MI_BATCH_BUFFER_START)) {
-        EXPECT_EQ(1u, hwParse.getCommandCount<MI_BATCH_BUFFER_START>());
-    } else {
-        EXPECT_EQ(0u, hwParse.getCommandCount<MI_BATCH_BUFFER_START>());
-    }
-
-    MI_STORE_DATA_IMM *storeData = hwParse.getCommand<MI_STORE_DATA_IMM>();
-    EXPECT_EQ(nullptr, storeData);
-}
-
-HWTEST_F(DirectSubmissionDispatchBufferTest,
          givenDirectSubmissionRingStartAndSwitchBuffersWhenDispatchingCommandBufferThenExpectDispatchInCommandBufferAndQueueCountIncrease) {
     using MI_BATCH_BUFFER_START = typename FamilyType::MI_BATCH_BUFFER_START;
 
@@ -777,14 +706,15 @@ HWTEST_F(DirectSubmissionDispatchBufferTest, givenDirectSubmissionPrintBuffersWh
     FlushStampTracker flushStamp(true);
     MockDirectSubmissionHw<FamilyType, RenderDispatcher<FamilyType>> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
 
     bool ret = directSubmission.initialize(false);
     EXPECT_TRUE(ret);
     ret = directSubmission.dispatchCommandBuffer(batchBuffer, flushStamp);
     EXPECT_TRUE(ret);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
 
     auto pos = output.find("Ring buffer 0");
     EXPECT_TRUE(pos != std::string::npos);
@@ -950,7 +880,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, DirectSubmissionDispatchBufferTest,
 }
 
 HWTEST_F(DirectSubmissionDispatchBufferTest,
-         givenRenderDirectSubmissionWhenDispatchWorkloadCalledWithMonitorFenceThenExpectPostSyncOperationWithNotifyFlag) {
+         givenRenderDirectSubmissionWhenDispatchWorkloadCalledWithMonitorFenceThenExpectPostSyncOperationWithoutNotifyFlag) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     using POST_SYNC_OPERATION = typename PIPE_CONTROL::POST_SYNC_OPERATION;
     using Dispatcher = RenderDispatcher<FamilyType>;
@@ -977,7 +907,7 @@ HWTEST_F(DirectSubmissionDispatchBufferTest,
         auto pipeControl = genCmdCast<PIPE_CONTROL *>(*it);
         if (pipeControl->getPostSyncOperation() == POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA) {
             foundFenceUpdate = true;
-            EXPECT_TRUE(pipeControl->getNotifyEnable());
+            EXPECT_FALSE(pipeControl->getNotifyEnable());
             break;
         }
     }
@@ -985,7 +915,7 @@ HWTEST_F(DirectSubmissionDispatchBufferTest,
 }
 
 HWTEST_F(DirectSubmissionDispatchBufferTest,
-         givenBlitterDirectSubmissionUsingNotifyEnabledWhenDispatchWorkloadCalledWithMonitorFenceThenExpectPostSyncOperationWithNotifyFlag) {
+         givenBlitterDirectSubmissionWhenDispatchWorkloadCalledWithMonitorFenceThenExpectPostSyncOperationWithoutNotifyFlag) {
     using MI_FLUSH_DW = typename FamilyType::MI_FLUSH_DW;
     using Dispatcher = BlitterDispatcher<FamilyType>;
 
@@ -1011,7 +941,43 @@ HWTEST_F(DirectSubmissionDispatchBufferTest,
         auto miFlush = genCmdCast<MI_FLUSH_DW *>(*it);
         if (miFlush->getPostSyncOperation() == MI_FLUSH_DW::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA_QWORD) {
             foundFenceUpdate = true;
-            EXPECT_TRUE(miFlush->getNotifyEnable());
+            EXPECT_FALSE(miFlush->getNotifyEnable());
+            break;
+        }
+    }
+    EXPECT_TRUE(foundFenceUpdate);
+}
+
+HWTEST_F(DirectSubmissionDispatchBufferTest,
+         givenRenderDirectSubmissionWhenDispatchWorkloadCalledWithMonitorFenceAndNotifyEnableRequiredThenExpectPostSyncOperationWithNotifyFlag) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+    using POST_SYNC_OPERATION = typename PIPE_CONTROL::POST_SYNC_OPERATION;
+    using Dispatcher = RenderDispatcher<FamilyType>;
+
+    FlushStampTracker flushStamp(true);
+
+    MockDirectSubmissionHw<FamilyType, Dispatcher> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
+    directSubmission.disableMonitorFence = false;
+    directSubmission.notifyKmdDuringMonitorFence = true;
+
+    bool ret = directSubmission.initialize(true);
+    EXPECT_TRUE(ret);
+
+    size_t sizeUsedBefore = directSubmission.ringCommandStream.getUsed();
+    ret = directSubmission.dispatchCommandBuffer(batchBuffer, flushStamp);
+    EXPECT_TRUE(ret);
+
+    HardwareParse hwParse;
+    hwParse.parsePipeControl = true;
+    hwParse.parseCommands<FamilyType>(directSubmission.ringCommandStream, sizeUsedBefore);
+    hwParse.findHardwareCommands<FamilyType>();
+
+    bool foundFenceUpdate = false;
+    for (auto it = hwParse.pipeControlList.begin(); it != hwParse.pipeControlList.end(); it++) {
+        auto pipeControl = genCmdCast<PIPE_CONTROL *>(*it);
+        if (pipeControl->getPostSyncOperation() == POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA) {
+            foundFenceUpdate = true;
+            EXPECT_TRUE(pipeControl->getNotifyEnable());
             break;
         }
     }
@@ -1043,13 +1009,20 @@ HWTEST_F(DirectSubmissionDispatchBufferTest, givenDebugFlagSetWhenDispatchingWor
         MockDirectSubmissionHw<FamilyType, Dispatcher> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
         EXPECT_TRUE(directSubmission.initialize(true));
 
-        auto initialCounterValue = CpuIntrinsicsTests::sfenceCounter.load();
+        auto initialSfenceCounterValue = CpuIntrinsicsTests::sfenceCounter.load();
+        auto initialMfenceCounterValue = CpuIntrinsicsTests::mfenceCounter.load();
 
         EXPECT_TRUE(directSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
 
-        uint32_t expectedCount = (debugFlag == -1) ? 2 : static_cast<uint32_t>(debugFlag);
+        uint32_t expectedSfenceCount = (debugFlag == -1) ? 2 : static_cast<uint32_t>(debugFlag);
+        uint32_t expectedMfenceCount = 0u;
+        if (!pDevice->getHardwareInfo().capabilityTable.isIntegratedDevice && !pDevice->getProductHelper().isAcquireGlobalFenceInDirectSubmissionRequired(pDevice->getHardwareInfo()) && expectedSfenceCount > 0u) {
+            --expectedSfenceCount;
+            ++expectedMfenceCount;
+        }
 
-        EXPECT_EQ(initialCounterValue + expectedCount, CpuIntrinsicsTests::sfenceCounter);
+        EXPECT_EQ(initialSfenceCounterValue + expectedSfenceCount, CpuIntrinsicsTests::sfenceCounter);
+        EXPECT_EQ(initialMfenceCounterValue + expectedMfenceCount, CpuIntrinsicsTests::mfenceCounter);
     }
 }
 
@@ -1066,13 +1039,20 @@ HWTEST_F(DirectSubmissionDispatchBufferTest, givenDebugFlagSetWhenStoppingRingbu
         MockDirectSubmissionHw<FamilyType, Dispatcher> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
         EXPECT_TRUE(directSubmission.initialize(true));
 
-        auto initialCounterValue = CpuIntrinsicsTests::sfenceCounter.load();
+        auto initialSfenceCounterValue = CpuIntrinsicsTests::sfenceCounter.load();
+        auto initialMfenceCounterValue = CpuIntrinsicsTests::mfenceCounter.load();
 
         EXPECT_TRUE(directSubmission.stopRingBuffer(false));
 
-        uint32_t expectedCount = (debugFlag == -1) ? 2 : static_cast<uint32_t>(debugFlag);
+        uint32_t expectedSfenceCount = (debugFlag == -1) ? 2 : static_cast<uint32_t>(debugFlag);
+        uint32_t expectedMfenceCount = 0u;
+        if (!pDevice->getHardwareInfo().capabilityTable.isIntegratedDevice && !directSubmission.pciBarrierPtr && !pDevice->getProductHelper().isAcquireGlobalFenceInDirectSubmissionRequired(pDevice->getHardwareInfo()) && expectedSfenceCount > 0u) {
+            --expectedSfenceCount;
+            ++expectedMfenceCount;
+        }
 
-        EXPECT_EQ(initialCounterValue + expectedCount, CpuIntrinsicsTests::sfenceCounter);
+        EXPECT_EQ(initialSfenceCounterValue + expectedSfenceCount, CpuIntrinsicsTests::sfenceCounter);
+        EXPECT_EQ(initialMfenceCounterValue + expectedMfenceCount, CpuIntrinsicsTests::mfenceCounter);
     }
 }
 
@@ -1578,7 +1558,7 @@ HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenDebugFlagSetWhenDispatching
     EXPECT_EQ(1u, directSubmission.dispatchStaticRelaxedOrderingSchedulerCalled);
     EXPECT_TRUE(verifyStaticSchedulerProgramming<FamilyType>(*directSubmission.relaxedOrderingSchedulerAllocation,
                                                              directSubmission.deferredTasksListAllocation->getGpuAddress(), directSubmission.semaphoreGpuVa, 123,
-                                                             pDevice->getRootDeviceEnvironment().getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER)));
+                                                             pDevice->getRootDeviceEnvironment().getGmmHelper()->getL3EnabledMOCS()));
 }
 
 HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenNewNumberOfClientsWhenDispatchingWorkThenIncraseQueueSize, IsAtLeastXeHpcCore) {
@@ -1592,7 +1572,7 @@ HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenNewNumberOfClientsWhenDispa
     EXPECT_EQ(RelaxedOrderingHelper::queueSizeMultiplier, directSubmission.currentRelaxedOrderingQueueSize);
     EXPECT_TRUE(verifyStaticSchedulerProgramming<FamilyType>(*directSubmission.relaxedOrderingSchedulerAllocation,
                                                              directSubmission.deferredTasksListAllocation->getGpuAddress(), directSubmission.semaphoreGpuVa, RelaxedOrderingHelper::queueSizeMultiplier,
-                                                             pDevice->getRootDeviceEnvironment().getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER)));
+                                                             pDevice->getRootDeviceEnvironment().getGmmHelper()->getL3EnabledMOCS()));
 
     const uint64_t expectedQueueSizeValueVa = directSubmission.relaxedOrderingSchedulerAllocation->getGpuAddress() +
                                               RelaxedOrderingHelper::StaticSchedulerSizeAndOffsetSection<FamilyType>::drainRequestSectionStart +
@@ -1672,7 +1652,7 @@ HWTEST2_F(DirectSubmissionRelaxedOrderingTests, whenInitializingThenDispatchStat
         EXPECT_EQ(1u, directSubmission.dispatchStaticRelaxedOrderingSchedulerCalled);
         EXPECT_TRUE(verifyStaticSchedulerProgramming<FamilyType>(*directSubmission.relaxedOrderingSchedulerAllocation,
                                                                  directSubmission.deferredTasksListAllocation->getGpuAddress(), directSubmission.semaphoreGpuVa, RelaxedOrderingHelper::queueSizeMultiplier,
-                                                                 pDevice->getRootDeviceEnvironment().getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER)));
+                                                                 pDevice->getRootDeviceEnvironment().getGmmHelper()->getL3EnabledMOCS()));
     }
 
     {
@@ -1825,7 +1805,7 @@ HWTEST_F(DirectSubmissionRelaxedOrderingTests, whenDispatchingWorkThenDispatchTa
     EXPECT_EQ(8u, miMathCmd->DW0.BitField.DwordLength);
 
     if constexpr (FamilyType::isUsingMiMathMocs) {
-        EXPECT_EQ(miMathCmd->DW0.BitField.MemoryObjectControlState, pDevice->getRootDeviceEnvironment().getGmmHelper()->getMOCS(GMM_RESOURCE_USAGE_OCL_BUFFER));
+        EXPECT_EQ(miMathCmd->DW0.BitField.MemoryObjectControlState, pDevice->getRootDeviceEnvironment().getGmmHelper()->getL3EnabledMOCS());
     }
 
     auto miAluCmd = reinterpret_cast<MI_MATH_ALU_INST_INLINE *>(++miMathCmd);
@@ -2692,34 +2672,6 @@ HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenBbWithNonStallingCmdsAndWit
         EXPECT_EQ(0u, directSubmission.dispatchRelaxedOrderingQueueStallCalled);
         EXPECT_EQ(0u, directSubmission.dispatchTaskStoreSectionCalled);
     }
-}
-
-HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenRelaxedOrderingSchedulerRequiredWhenAskingForCmdsSizeThenReturnCorrectValue, IsAtLeastXeHpcCore) {
-    using Dispatcher = RenderDispatcher<FamilyType>;
-    MockDirectSubmissionHw<FamilyType, Dispatcher> directSubmission(*pDevice->getDefaultEngine().commandStreamReceiver);
-
-    size_t expectedBaseSemaphoreSectionSize = directSubmission.getSizePrefetchMitigation();
-    if (directSubmission.isDisablePrefetcherRequired) {
-        expectedBaseSemaphoreSectionSize += 2 * directSubmission.getSizeDisablePrefetcher();
-    }
-
-    if (directSubmission.miMemFenceRequired) {
-        expectedBaseSemaphoreSectionSize += MemorySynchronizationCommands<FamilyType>::getSizeForSingleAdditionalSynchronizationForDirectSubmission(pDevice->getRootDeviceEnvironment());
-    }
-
-    EXPECT_EQ(expectedBaseSemaphoreSectionSize + RelaxedOrderingHelper::DynamicSchedulerSizeAndOffsetSection<FamilyType>::totalSize, directSubmission.getSizeSemaphoreSection(true));
-    EXPECT_EQ(expectedBaseSemaphoreSectionSize + EncodeSemaphore<FamilyType>::getSizeMiSemaphoreWait(), directSubmission.getSizeSemaphoreSection(false));
-
-    size_t expectedBaseEndSize = Dispatcher::getSizeStopCommandBuffer() +
-                                 Dispatcher::getSizeCacheFlush(directSubmission.rootDeviceEnvironment) +
-                                 (Dispatcher::getSizeStartCommandBuffer() - Dispatcher::getSizeStopCommandBuffer()) +
-                                 MemoryConstants::cacheLineSize;
-    if (directSubmission.disableMonitorFence) {
-        expectedBaseEndSize += Dispatcher::getSizeMonitorFence(pDevice->getRootDeviceEnvironment());
-    }
-
-    EXPECT_EQ(expectedBaseEndSize + directSubmission.getSizeDispatchRelaxedOrderingQueueStall(), directSubmission.getSizeEnd(true));
-    EXPECT_EQ(expectedBaseEndSize, directSubmission.getSizeEnd(false));
 }
 
 HWTEST2_F(DirectSubmissionRelaxedOrderingTests, givenSchedulerRequiredWhenDispatchingReturnPtrsThenAddOffset, IsAtLeastXeHpcCore) {

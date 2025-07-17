@@ -9,14 +9,25 @@
 
 #include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
+#include "shared/source/memory_manager/unified_memory_manager.h"
 #include "shared/source/page_fault_manager/cpu_page_fault_manager.h"
 
 namespace NEO {
 
 bool TbxPageFaultManager::verifyAndHandlePageFault(void *ptr, bool handleFault) {
-    std::unique_lock<SpinLock> lock{mtxTbx};
+    std::unique_lock<RecursiveSpinLock> lock{mtxTbx};
     auto allocPtr = getFaultData(memoryDataTbx, ptr, handleFault);
     if (allocPtr == nullptr) {
+        if (handleFault) {
+            std::unique_lock<RecursiveSpinLock> lock{mtx};
+            auto allocPtr = getFaultData(memoryData, ptr, handleFault);
+            if (allocPtr != nullptr) {
+                auto faultData = memoryData[allocPtr];
+                if (faultData.domain == CpuPageFaultManager::AllocationDomain::gpu) {
+                    this->allowCPUMemoryAccess(allocPtr, faultData.size);
+                }
+            }
+        }
         return CpuPageFaultManager::verifyAndHandlePageFault(ptr, handleFault);
     }
     if (handleFault) {
@@ -43,7 +54,7 @@ void TbxPageFaultManager::handlePageFault(void *ptr, PageFaultDataTbx &faultData
 }
 
 void TbxPageFaultManager::removeAllocation(GraphicsAllocation *alloc) {
-    std::unique_lock<SpinLock> lock{mtxTbx};
+    std::unique_lock<RecursiveSpinLock> lock{mtxTbx};
     for (auto &data : memoryDataTbx) {
         auto allocPtr = data.first;
         auto faultData = data.second;
@@ -56,7 +67,7 @@ void TbxPageFaultManager::removeAllocation(GraphicsAllocation *alloc) {
 }
 
 void TbxPageFaultManager::insertAllocation(CommandStreamReceiver *csr, GraphicsAllocation *alloc, uint32_t bank, void *ptr, size_t size) {
-    std::unique_lock<SpinLock> lock{mtxTbx};
+    std::unique_lock<RecursiveSpinLock> lock{mtxTbx};
 
     if (this->memoryDataTbx.find(ptr) == this->memoryDataTbx.end()) {
         PageFaultDataTbx pageFaultData{};

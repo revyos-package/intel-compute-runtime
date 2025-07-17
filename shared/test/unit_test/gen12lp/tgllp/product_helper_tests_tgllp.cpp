@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -20,7 +20,7 @@
 #include "shared/test/unit_test/os_interface/product_helper_tests.h"
 
 #include "aubstream/product_family.h"
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 
 using namespace NEO;
 
@@ -92,6 +92,7 @@ TGLLPTEST_F(TgllpHwInfo, givenBoolWhenCallTgllpHardwareInfoSetupThenFeatureTable
             EXPECT_EQ(setParamBool, featureTable.flags.ftrAstcLdr2D);
             EXPECT_EQ(setParamBool, featureTable.flags.ftrGpGpuMidBatchPreempt);
             EXPECT_EQ(setParamBool, featureTable.flags.ftrGpGpuThreadGroupLevelPreempt);
+            EXPECT_FALSE(featureTable.flags.ftrHeaplessMode);
 
             EXPECT_EQ(setParamBool, workaroundTable.flags.wa4kAlignUVOffsetNV12LinearSurface);
             EXPECT_EQ(setParamBool, workaroundTable.flags.waUntypedBufferCompression);
@@ -113,16 +114,6 @@ TGLLPTEST_F(TgllpHwInfo, givenSetCommandStreamReceiverInAubModeForTgllpProductFa
 
     EXPECT_TRUE(rootDeviceEnvironment->initAubCenterCalled);
     EXPECT_FALSE(rootDeviceEnvironment->localMemoryEnabledReceived);
-}
-
-TGLLPTEST_F(TgllpHwInfo, givenProductHelperStringThenAfterSetupResultingVmeIsDisabled) {
-    HardwareInfo hwInfo = *defaultHwInfo;
-
-    uint64_t config = 0x100060010;
-    hardwareInfoSetup[productFamily](&hwInfo, false, config, nullptr);
-    EXPECT_FALSE(hwInfo.capabilityTable.ftrSupportsVmeAvcTextureSampler);
-    EXPECT_FALSE(hwInfo.capabilityTable.ftrSupportsVmeAvcPreemption);
-    EXPECT_FALSE(hwInfo.capabilityTable.supportsVme);
 }
 
 TGLLPTEST_F(TgllpHwInfo, givenSetCommandStreamReceiverInAubModeWithOverrideGpuAddressSpaceWhenPrepareDeviceEnvironmentsForProductFamilyOverrideIsCalledThenAubManagerIsInitializedWithCorrectGpuAddressSpace) {

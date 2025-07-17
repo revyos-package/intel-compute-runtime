@@ -658,7 +658,7 @@ TEST_F(SysmanGlobalOperationsFixture,
 }
 
 TEST_F(SysmanGlobalOperationsFixture,
-       GivenValidDeviceHandleWhenCallingzesDeviceGetPropertiesForCheckingDriverVersionWhenDriverVersionFileReadFailsThenVerifyzesDeviceGetPropertiesCallSucceeds) {
+       GivenValidDeviceHandleWhenCallingZesDeviceGetPropertiesForCheckingDriverVersionWhenDriverVersionFileReadFailsThenVerifyzesDeviceGetPropertiesCallSucceeds) {
 
     MockGlobalOperationsFsAccess *pFsAccess = new MockGlobalOperationsFsAccess();
     MockGlobalOperationsSysfsAccess *pSysfsAccess = new MockGlobalOperationsSysfsAccess();
@@ -677,7 +677,7 @@ TEST_F(SysmanGlobalOperationsFixture,
 }
 
 TEST_F(SysmanGlobalOperationsFixture,
-       GivenValidDeviceHandleWhenCallingzesDeviceGetPropertiesForCheckingDevicePropertiesWhenVendorIsUnKnownThenVerifyzesDeviceGetPropertiesCallSucceeds) {
+       GivenValidDeviceHandleWhenCallingZesDeviceGetPropertiesForCheckingDevicePropertiesWhenVendorIsUnKnownThenVerifyzesDeviceGetPropertiesCallSucceeds) {
     pSysfsAccess->mockReadVal[static_cast<int>(MockGlobalOperationsSysfsAccess::Index::mockSubsystemVendor)] = "0xa086";
     pSysfsAccess->mockReadVal[static_cast<int>(MockGlobalOperationsSysfsAccess::Index::mockVendor)] = "0x1806"; // Unknown Vendor id
     zes_device_properties_t properties = {ZES_STRUCTURE_TYPE_DEVICE_PROPERTIES};
@@ -839,14 +839,12 @@ TEST_F(SysmanGlobalOperationsFixture, GivenGemCreateIoctlFailsWithEINVALWhenCall
     EXPECT_EQ(0u, deviceState.reset);
 }
 
-TEST_F(SysmanGlobalOperationsFixture, GivenDeviceInUseWhenCallingzesDeviceResetExtThenResetExtCallReturnSuccess) {
+TEST_F(SysmanGlobalOperationsFixture, GivenDeviceInUseWhenCallingZesDeviceResetExtThenResetExtCallReturnSuccess) {
     init(true);
 
     std::unique_ptr<SysmanProductHelper> pSysmanProductHelper = std::make_unique<MockSysmanProductHelper>();
     std::swap(pLinuxSysmanImp->pSysmanProductHelper, pSysmanProductHelper);
 
-    DebugManagerStateRestore dbgRestore;
-    debugManager.flags.VfBarResourceAllocationWa.set(false);
     zes_reset_properties_t pProperties = {.stype = ZES_STRUCTURE_TYPE_RESET_PROPERTIES, .pNext = nullptr, .force = true, .resetType = ZES_RESET_TYPE_WARM};
     ze_result_t result = zesDeviceResetExt(pSysmanDevice->toHandle(), &pProperties);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
@@ -894,8 +892,6 @@ TEST_F(SysmanGlobalOperationsFixture, GivenDeviceInUseWhenCallingZesDeviceResetE
 
 TEST_F(SysmanGlobalOperationsFixture, GivenDeviceInUseWhenCallingResetExtWithInvalidTypeThenFailureIsReturned) {
     init(true);
-    DebugManagerStateRestore dbgRestore;
-    debugManager.flags.VfBarResourceAllocationWa.set(false);
     zes_reset_properties_t pProperties = {.stype = ZES_STRUCTURE_TYPE_RESET_PROPERTIES, .pNext = nullptr, .force = true, .resetType = ZES_RESET_TYPE_FORCE_UINT32};
     ze_result_t result = zesDeviceResetExt(pSysmanDevice->toHandle(), &pProperties);
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, result);
@@ -903,8 +899,6 @@ TEST_F(SysmanGlobalOperationsFixture, GivenDeviceInUseWhenCallingResetExtWithInv
 
 TEST_F(SysmanGlobalOperationsFixture, GivenGettingSysfsPathFailsWhenCallingResetExtThenFailureIsReturned) {
     init(true);
-    DebugManagerStateRestore dbgRestore;
-    debugManager.flags.VfBarResourceAllocationWa.set(false);
     pSysfsAccess->mockDeviceUnbound = true;
     zes_reset_properties_t pProperties = {.stype = ZES_STRUCTURE_TYPE_RESET_PROPERTIES, .pNext = nullptr, .force = true, .resetType = ZES_RESET_TYPE_FORCE_UINT32};
     ze_result_t result = zesDeviceResetExt(pSysmanDevice->toHandle(), &pProperties);
@@ -912,8 +906,6 @@ TEST_F(SysmanGlobalOperationsFixture, GivenGettingSysfsPathFailsWhenCallingReset
 }
 
 TEST_F(SysmanGlobalOperationsFixture, GivenForceTrueWhenCallingResetThenSuccessIsReturned) {
-    DebugManagerStateRestore dbgRestore;
-    debugManager.flags.VfBarResourceAllocationWa.set(false);
     ze_result_t result = zesDeviceReset(device, true);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 }

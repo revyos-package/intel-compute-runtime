@@ -5,12 +5,8 @@
  *
  */
 
-#include "shared/source/helpers/timestamp_packet.h"
 #include "shared/source/memory_manager/surface.h"
-#include "shared/source/os_interface/os_context.h"
 #include "shared/test/common/cmd_parse/hw_parse.h"
-#include "shared/test/common/mocks/mock_csr.h"
-#include "shared/test/common/mocks/mock_execution_environment.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
 #include "shared/test/common/mocks/mock_timestamp_container.h"
 #include "shared/test/common/test_macros/hw_test.h"
@@ -30,6 +26,8 @@
 #include "opencl/test/unit_test/mocks/mock_mdi.h"
 
 namespace NEO {
+class GraphicsAllocation;
+class TagNodeBase;
 
 template <typename GfxFamily>
 class MockCommandQueueWithCacheFlush : public MockCommandQueueHw<GfxFamily> {
@@ -239,7 +237,11 @@ HWTEST_F(DispatchFlagsTests, whenEnqueueCommandWithoutKernelThenPassCorrectDispa
 
     EXPECT_EQ(blocking, mockCsr->passedDispatchFlags.blocking);
     EXPECT_FALSE(mockCsr->passedDispatchFlags.implicitFlush);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_EQ(L3CachingSettings::notApplicable, mockCsr->passedDispatchFlags.l3CacheSettings);
     EXPECT_EQ(GrfConfig::notApplicable, mockCsr->passedDispatchFlags.numGrfRequired);
     EXPECT_EQ(device->getPreemptionMode(), mockCsr->passedDispatchFlags.preemptionMode);
@@ -270,6 +272,7 @@ HWTEST_F(DispatchFlagsTests, whenEnqueueCommandWithoutKernelThenPassCorrectThrot
 
 HWTEST_F(DispatchFlagsBlitTests, givenBlitEnqueueWhenDispatchingCommandsWithoutKernelThenDoImplicitFlush) {
     using CsrType = MockCsrHw2<FamilyType>;
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     debugManager.flags.ForceGpgpuSubmissionForBcsEnqueue.set(1);
     debugManager.flags.EnableTimestampPacket.set(1);
 
@@ -299,6 +302,11 @@ HWTEST_F(DispatchFlagsBlitTests, givenBlitEnqueueWhenDispatchingCommandsWithoutK
     timestampPacketDependencies.cacheFlushNodes.add(mockCmdQ->getGpgpuCommandStreamReceiver().getTimestampPacketAllocator()->getTag());
     BlitProperties blitProperties = mockCmdQ->processDispatchForBlitEnqueue(bcsCsr, multiDispatchInfo, timestampPacketDependencies,
                                                                             eventsRequest, &mockCmdQ->getCS(0), CL_COMMAND_READ_BUFFER, false, false, nullptr);
+    HardwareParse hwParser;
+    hwParser.parseCommands<FamilyType>(mockCmdQ->getCS(0), 0);
+    auto pipeControlIterator = find<PIPE_CONTROL *>(hwParser.cmdList.begin(), hwParser.cmdList.end());
+    auto pipeControlCmd = genCmdCast<PIPE_CONTROL *>(*pipeControlIterator);
+    EXPECT_TRUE(pipeControlCmd->getTextureCacheInvalidationEnable());
 
     BlitPropertiesContainer blitPropertiesContainer;
     blitPropertiesContainer.push_back(blitProperties);
@@ -308,7 +316,11 @@ HWTEST_F(DispatchFlagsBlitTests, givenBlitEnqueueWhenDispatchingCommandsWithoutK
                                           eventsRequest, eventBuilder, 0, csrDeps, &bcsCsr, false);
 
     EXPECT_TRUE(mockCsr->passedDispatchFlags.implicitFlush);
-    EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_FALSE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    } else {
+        EXPECT_TRUE(mockCsr->passedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
     EXPECT_EQ(L3CachingSettings::notApplicable, mockCsr->passedDispatchFlags.l3CacheSettings);
     EXPECT_EQ(GrfConfig::notApplicable, mockCsr->passedDispatchFlags.numGrfRequired);
 }
@@ -546,6 +558,9 @@ HWTEST_F(DispatchFlagsTests, givenMockKernelWhenSettingAdditionalKernelExecInfoT
 }
 
 HWTEST_F(EnqueueHandlerTest, GivenCommandStreamWithoutKernelAndZeroSurfacesWhenEnqueuedHandlerThenProgramPipeControl) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
     std::unique_ptr<MockCommandQueueWithCacheFlush<FamilyType>> mockCmdQ(new MockCommandQueueWithCacheFlush<FamilyType>(context, pClDevice, 0));
 
     mockCmdQ->commandRequireCacheFlush = true;
@@ -554,7 +569,7 @@ HWTEST_F(EnqueueHandlerTest, GivenCommandStreamWithoutKernelAndZeroSurfacesWhenE
     EXPECT_EQ(CL_SUCCESS, enqueueResult);
 
     auto requiredCmdStreamSize = alignUp(MemorySynchronizationCommands<FamilyType>::getSizeForBarrierWithPostSyncOperation(
-                                             pDevice->getRootDeviceEnvironment(), false),
+                                             pDevice->getRootDeviceEnvironment(), NEO::PostSyncMode::immediateData),
                                          MemoryConstants::cacheLineSize);
 
     EXPECT_EQ(mockCmdQ->getCS(0).getUsed(), requiredCmdStreamSize);

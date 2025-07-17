@@ -1,12 +1,12 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #pragma once
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,7 +27,6 @@ template <typename GfxFamily>
 struct PreambleHelper {
     using MI_LOAD_REGISTER_IMM = typename GfxFamily::MI_LOAD_REGISTER_IMM;
     using PIPE_CONTROL = typename GfxFamily::PIPE_CONTROL;
-    using FrontEndStateCommand = typename GfxFamily::FrontEndStateCommand;
 
     static void programL3(LinearStream *pCommandStream, uint32_t l3Config, bool isBcs);
     static void programPipelineSelect(LinearStream *pCommandStream,

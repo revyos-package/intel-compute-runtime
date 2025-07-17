@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2023 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -9,13 +9,10 @@
 #include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
-#include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/test_macros/test.h"
 
-#include "opencl/source/command_queue/command_queue_hw.h"
 #include "opencl/source/command_queue/gpgpu_walker.h"
 #include "opencl/source/event/user_event.h"
-#include "opencl/source/helpers/hardware_commands_helper.h"
 #include "opencl/test/unit_test/command_queue/command_enqueue_fixture.h"
 #include "opencl/test/unit_test/mocks/mock_command_queue.h"
 
@@ -205,7 +202,11 @@ HWTEST_F(BarrierTest, WhenEnqueingBarrierWithWaitListThenDependenciesShouldSync)
     // in this case only cmdQ raises the taskLevel while csr stays intact
     EXPECT_EQ(8u, pCmdQ->taskLevel);
     if (csr.peekTimestampPacketWriteEnabled()) {
-        EXPECT_EQ(pCmdQ->taskLevel + 1, commandStreamReceiver.peekTaskLevel());
+        auto expectedTaskLevel = pCmdQ->taskLevel;
+        if (!commandStreamReceiver.isUpdateTagFromWaitEnabled()) {
+            expectedTaskLevel++;
+        }
+        EXPECT_EQ(expectedTaskLevel, commandStreamReceiver.peekTaskLevel());
     } else {
         EXPECT_EQ(7u, commandStreamReceiver.peekTaskLevel());
     }

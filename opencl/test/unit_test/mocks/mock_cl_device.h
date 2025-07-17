@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -18,6 +18,12 @@ class SubDevice;
 template <typename GfxFamily>
 class UltCommandStreamReceiver;
 struct HardwareInfo;
+class BuiltIns;
+class ExecutionEnvironment;
+class MemoryManager;
+enum PreemptionMode : uint32_t;
+struct DeviceInfo;
+struct EngineControl;
 
 extern CommandStreamReceiver *createCommandStream(ExecutionEnvironment &executionEnvironment,
                                                   uint32_t rootDeviceIndex,
@@ -71,7 +77,7 @@ class MockClDevice : public ClDevice {
     static ExecutionEnvironment *prepareExecutionEnvironment(const HardwareInfo *pHwInfo, uint32_t rootDeviceIndex);
 
     SubDevice *createSubDevice(uint32_t subDeviceIndex) { return device.createSubDevice(subDeviceIndex); }
-    std::unique_ptr<CommandStreamReceiver> createCommandStreamReceiver() const { return device.createCommandStreamReceiver(); }
+    std::unique_ptr<CommandStreamReceiver> createCommandStreamReceiver() const;
     BuiltIns *getBuiltIns() const { return getDevice().getBuiltIns(); }
 
     bool areOcl21FeaturesSupported() const;

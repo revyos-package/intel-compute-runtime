@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -23,6 +23,7 @@ class TestedDrmCommandStreamReceiver : public DrmCommandStreamReceiver<GfxFamily
     using BaseClass::execObjectsStorage;
     using BaseClass::residency;
     using BaseClass::useUserFenceWait;
+    using BaseClass::vmBindAvailable;
     using CommandStreamReceiver::activePartitions;
     using CommandStreamReceiver::clearColorAllocation;
     using CommandStreamReceiver::commandStream;
@@ -32,10 +33,12 @@ class TestedDrmCommandStreamReceiver : public DrmCommandStreamReceiver<GfxFamily
     using CommandStreamReceiver::getTagAddress;
     using CommandStreamReceiver::getTagAllocation;
     using CommandStreamReceiver::globalFenceAllocation;
+    using CommandStreamReceiver::heaplessStateInitEnabled;
     using CommandStreamReceiver::heaplessStateInitialized;
     using CommandStreamReceiver::immWritePostSyncWriteOffset;
     using CommandStreamReceiver::latestSentTaskCount;
     using CommandStreamReceiver::makeResident;
+    using CommandStreamReceiver::pushAllocationsForMakeResident;
     using CommandStreamReceiver::tagAddress;
     using CommandStreamReceiver::taskCount;
     using CommandStreamReceiver::timeStampPostSyncWriteOffset;
@@ -46,15 +49,14 @@ class TestedDrmCommandStreamReceiver : public DrmCommandStreamReceiver<GfxFamily
     using CommandStreamReceiverHw<GfxFamily>::blitterDirectSubmission;
     using CommandStreamReceiverHw<GfxFamily>::CommandStreamReceiver::lastSentSliceCount;
 
-    TestedDrmCommandStreamReceiver(GemCloseWorkerMode mode,
-                                   ExecutionEnvironment &executionEnvironment,
+    TestedDrmCommandStreamReceiver(ExecutionEnvironment &executionEnvironment,
                                    const DeviceBitfield deviceBitfield)
-        : DrmCommandStreamReceiver<GfxFamily>(executionEnvironment, 0, deviceBitfield, mode) {
+        : DrmCommandStreamReceiver<GfxFamily>(executionEnvironment, 0, deviceBitfield) {
     }
     TestedDrmCommandStreamReceiver(ExecutionEnvironment &executionEnvironment,
                                    uint32_t rootDeviceIndex,
                                    const DeviceBitfield deviceBitfield)
-        : DrmCommandStreamReceiver<GfxFamily>(executionEnvironment, rootDeviceIndex, deviceBitfield, GemCloseWorkerMode::gemCloseWorkerInactive) {
+        : DrmCommandStreamReceiver<GfxFamily>(executionEnvironment, rootDeviceIndex, deviceBitfield) {
     }
 
     void overrideDispatchPolicy(DispatchMode overrideValue) {
@@ -129,19 +131,23 @@ class TestedDrmCommandStreamReceiver : public DrmCommandStreamReceiver<GfxFamily
         this->drm = proxyDrm;
     }
 
+    void stopDirectSubmission(bool blocking, bool needsLock) override {
+        stopDirectSubmissionCalled = true;
+    }
+
     void *latestReadBackAddress = nullptr;
     uint32_t fillReusableAllocationsListCalled = 0;
+    bool stopDirectSubmissionCalled = false;
 };
 
 template <typename GfxFamily>
 class TestedDrmCommandStreamReceiverWithFailingExec : public TestedDrmCommandStreamReceiver<GfxFamily> {
   public:
-    TestedDrmCommandStreamReceiverWithFailingExec(GemCloseWorkerMode mode,
-                                                  ExecutionEnvironment &executionEnvironment,
+    TestedDrmCommandStreamReceiverWithFailingExec(ExecutionEnvironment &executionEnvironment,
                                                   const DeviceBitfield deviceBitfield)
-        : TestedDrmCommandStreamReceiver<GfxFamily>(mode,
-                                                    executionEnvironment,
-                                                    deviceBitfield) {
+        : TestedDrmCommandStreamReceiver<GfxFamily>(
+              executionEnvironment,
+              deviceBitfield) {
     }
     TestedDrmCommandStreamReceiverWithFailingExec(ExecutionEnvironment &executionEnvironment,
                                                   uint32_t rootDeviceIndex,

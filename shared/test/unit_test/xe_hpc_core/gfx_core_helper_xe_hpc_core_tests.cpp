@@ -51,10 +51,10 @@ XE_HPC_CORETEST_F(GfxCoreHelperXeHpcCoreTest, givenSlmSizeWhenEncodingThenReturn
     auto &gfxCoreHelper = mockExecutionEnvironment.rootDeviceEnvironments[0]->getHelper<GfxCoreHelper>();
 
     for (auto &testInput : computeSlmValuesXeHpcTestsInput) {
-        EXPECT_EQ(testInput.expected, gfxCoreHelper.computeSlmValues(hwInfo, testInput.slmSize));
+        EXPECT_EQ(testInput.expected, gfxCoreHelper.computeSlmValues(hwInfo, testInput.slmSize, nullptr, false));
     }
 
-    EXPECT_THROW(gfxCoreHelper.computeSlmValues(hwInfo, 129 * MemoryConstants::kiloByte), std::exception);
+    EXPECT_THROW(gfxCoreHelper.computeSlmValues(hwInfo, 129 * MemoryConstants::kiloByte, nullptr, false), std::exception);
 }
 
 XE_HPC_CORETEST_F(GfxCoreHelperXeHpcCoreTest, WhenGettingIsCpuImageTransferPreferredThenTrueIsReturned) {
@@ -63,13 +63,12 @@ XE_HPC_CORETEST_F(GfxCoreHelperXeHpcCoreTest, WhenGettingIsCpuImageTransferPrefe
     EXPECT_TRUE(gfxCoreHelper.isCpuImageTransferPreferred(*defaultHwInfo));
 }
 
-XE_HPC_CORETEST_F(GfxCoreHelperXeHpcCoreTest, givenGfxCoreHelperWhenCheckTimestampWaitSupportThenReturnTrue) {
-    MockExecutionEnvironment mockExecutionEnvironment{};
-    auto &gfxCoreHelper = mockExecutionEnvironment.rootDeviceEnvironments[0]->getHelper<GfxCoreHelper>();
-    EXPECT_TRUE(gfxCoreHelper.isTimestampWaitSupportedForQueues());
-}
-
 using ProductHelperTestXeHpcCore = Test<DeviceFixture>;
+
+XE_HPC_CORETEST_F(ProductHelperTestXeHpcCore, givenProductHelperWhenCheckTimestampWaitSupportThenReturnTrue) {
+    auto &helper = getHelper<ProductHelper>();
+    EXPECT_TRUE(helper.isTimestampWaitSupportedForQueues(false));
+}
 
 XE_HPC_CORETEST_F(ProductHelperTestXeHpcCore, givenProductHelperWhenCheckTimestampWaitSupportForEventsThenReturnTrue) {
     auto &helper = getHelper<ProductHelper>();

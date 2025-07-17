@@ -11,6 +11,7 @@
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/direct_submission/direct_submission_controller.h"
 #include "shared/source/execution_environment/root_device_environment.h"
+#include "shared/source/helpers/api_specific_config.h"
 #include "shared/source/helpers/cache_policy.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/definitions/indirect_detection_versions.h"
@@ -19,8 +20,9 @@
 #include "shared/source/helpers/kernel_helpers.h"
 #include "shared/source/helpers/local_memory_access_modes.h"
 #include "shared/source/helpers/preamble.h"
+#include "shared/source/helpers/ray_tracing_helper.h"
+#include "shared/source/helpers/string_helpers.h"
 #include "shared/source/kernel/kernel_descriptor.h"
-#include "shared/source/kernel/kernel_properties.h"
 #include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
 #include "shared/source/memory_manager/memory_manager.h"
@@ -34,13 +36,11 @@
 #include "ocl_igc_shared/indirect_access_detection/version.h"
 
 #include <bitset>
-#include <limits>
 
 namespace NEO {
 
 template <PRODUCT_FAMILY gfxProduct>
 int ProductHelperHw<gfxProduct>::configureHardwareCustom(HardwareInfo *hwInfo, OSInterface *osIface) const {
-    enableCompression(hwInfo);
     enableBlitterOperationsSupport(hwInfo);
 
     return 0;
@@ -148,10 +148,10 @@ uint64_t ProductHelperHw<gfxProduct>::getDeviceMemCapabilities() const {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-uint64_t ProductHelperHw<gfxProduct>::getSingleDeviceSharedMemCapabilities() const {
+uint64_t ProductHelperHw<gfxProduct>::getSingleDeviceSharedMemCapabilities(bool isKmdMigrationAvailable) const {
     uint64_t capabilities = UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess;
 
-    if (isKmdMigrationSupported() || getConcurrentAccessMemCapabilitiesSupported(UsmAccessCapabilities::sharedSingleDevice)) {
+    if (isKmdMigrationAvailable || getConcurrentAccessMemCapabilitiesSupported(UsmAccessCapabilities::sharedSingleDevice)) {
         capabilities |= UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess;
     }
 
@@ -182,13 +182,12 @@ uint64_t ProductHelperHw<gfxProduct>::getHostMemCapabilities(const HardwareInfo 
 
 template <PRODUCT_FAMILY gfxProduct>
 uint64_t ProductHelperHw<gfxProduct>::getSharedSystemMemCapabilities(const HardwareInfo *hwInfo) const {
-    bool supported = false;
 
-    if (debugManager.flags.EnableSharedSystemUsmSupport.get() != -1) {
-        supported = !!debugManager.flags.EnableSharedSystemUsmSupport.get();
+    if ((debugManager.flags.EnableRecoverablePageFaults.get() == 0) || (debugManager.flags.EnableSharedSystemUsmSupport.get() != 1)) {
+        return 0;
     }
 
-    return (supported ? (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess) : 0);
+    return (hwInfo->capabilityTable.sharedSystemMemCapabilities);
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -219,7 +218,12 @@ uint64_t ProductHelperHw<gfxProduct>::getDeviceMemoryMaxBandWidthInBytesPerSecon
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::overrideAllocationCacheable(const AllocationData &allocationData) const {
+bool ProductHelperHw<gfxProduct>::overrideAllocationCpuCacheable(const AllocationData &allocationData) const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::is2MBLocalMemAlignmentEnabled() const {
     return false;
 }
 
@@ -237,6 +241,11 @@ template <PRODUCT_FAMILY gfxProduct>
 uint32_t ProductHelperHw<gfxProduct>::getMaxThreadsForWorkgroup(const HardwareInfo &hwInfo, uint32_t maxNumEUsPerSubSlice) const {
     uint32_t numThreadsPerEU = hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount;
     return maxNumEUsPerSubSlice * numThreadsPerEU;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getPreferredWorkgroupCountPerSubslice() const {
+    return 0;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -300,11 +309,6 @@ bool ProductHelperHw<gfxProduct>::isDisableOverdispatchAvailable(const HardwareI
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::allowCompression(const HardwareInfo &hwInfo) const {
-    return true;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
 LocalMemoryAccessMode ProductHelperHw<gfxProduct>::getDefaultLocalMemoryAccessMode(const HardwareInfo &hwInfo) const {
     return LocalMemoryAccessMode::defaultMode;
 }
@@ -318,11 +322,6 @@ LocalMemoryAccessMode ProductHelperHw<gfxProduct>::getLocalMemoryAccessMode(cons
         return static_cast<LocalMemoryAccessMode>(debugManager.flags.ForceLocalMemoryAccessMode.get());
     }
     return getDefaultLocalMemoryAccessMode(hwInfo);
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isAssignEngineRoundRobinSupported() const {
-    return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -382,21 +381,6 @@ bool ProductHelperHw<gfxProduct>::restartDirectSubmissionForHostptrFree() const 
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isAdjustDirectSubmissionTimeoutOnThrottleAndAcLineStatusEnabled() const {
-    return false;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-TimeoutParams ProductHelperHw<gfxProduct>::getDirectSubmissionControllerTimeoutParams(bool acLineConnected, QueueThrottle queueThrottle) const {
-    TimeoutParams params{};
-    params.maxTimeout = std::chrono::microseconds{DirectSubmissionController::defaultTimeout};
-    params.timeout = std::chrono::microseconds{DirectSubmissionController::defaultTimeout};
-    params.timeoutDivisor = 1;
-    params.directSubmissionEnabled = true;
-    return params;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::isForceEmuInt32DivRemSPWARequired(const HardwareInfo &hwInfo) const {
     return false;
 }
@@ -437,65 +421,30 @@ bool ProductHelperHw<gfxProduct>::isDisableScratchPagesSupported() const {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isDisableScratchPagesRequiredForDebugger() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::areSecondaryContextsSupported() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isPrimaryContextsAggregationSupported() const {
     return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::isDcFlushAllowed() const {
     using GfxProduct = typename HwMapper<gfxProduct>::GfxProduct;
-    bool dcFlushAllowed = GfxProduct::isDcFlushAllowed && !this->mitigateDcFlush();
+    bool dcFlushAllowed = GfxProduct::isDcFlushAllowed;
 
     if (debugManager.flags.AllowDcFlush.get() != -1) {
         dcFlushAllowed = debugManager.flags.AllowDcFlush.get();
     }
 
     return dcFlushAllowed;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::mitigateDcFlush() const {
-    return false;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isDcFlushMitigated() const {
-    using GfxProduct = typename HwMapper<gfxProduct>::GfxProduct;
-    bool dcFlushAllowed = GfxProduct::isDcFlushAllowed;
-    return this->isDcFlushAllowed() != dcFlushAllowed;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::overrideUsageForDcFlushMitigation(AllocationType allocationType) const {
-    return this->isDcFlushMitigated() && (this->overridePatToUCAndTwoWayCohForDcFlushMitigation(allocationType) || overridePatToUCAndOneWayCohForDcFlushMitigation(allocationType));
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::overridePatToUCAndTwoWayCohForDcFlushMitigation(AllocationType allocationType) const {
-    return this->isDcFlushMitigated() &&
-           (this->overrideCacheableForDcFlushMitigation(allocationType) ||
-            allocationType == AllocationType::timestampPacketTagBuffer ||
-            allocationType == AllocationType::tagBuffer ||
-            allocationType == AllocationType::gpuTimestampDeviceBuffer);
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::overridePatToUCAndOneWayCohForDcFlushMitigation(AllocationType allocationType) const {
-    return this->isDcFlushMitigated() &&
-           (allocationType == AllocationType::internalHeap ||
-            allocationType == AllocationType::linearStream);
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::overrideCacheableForDcFlushMitigation(AllocationType allocationType) const {
-    return this->isDcFlushMitigated() &&
-           (allocationType == AllocationType::externalHostPtr ||
-            allocationType == AllocationType::bufferHostMemory ||
-            allocationType == AllocationType::mapAllocation ||
-            allocationType == AllocationType::svmCpu ||
-            allocationType == AllocationType::svmZeroCopy ||
-            allocationType == AllocationType::internalHostMemory ||
-            allocationType == AllocationType::printfSurface);
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -509,11 +458,6 @@ bool ProductHelperHw<gfxProduct>::getUuid(NEO::DriverModel *driverModel, const u
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isFlushTaskAllowed() const {
-    return true;
-}
-
-template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::isSystolicModeConfigurable(const HardwareInfo &hwInfo) const {
     return getPipelineSelectPropertySystolicModeSupport();
 }
@@ -524,13 +468,18 @@ bool ProductHelperHw<gfxProduct>::isCopyEngineSelectorEnabled(const HardwareInfo
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isGlobalFenceInCommandStreamRequired(const HardwareInfo &hwInfo) const {
+bool ProductHelperHw<gfxProduct>::isReleaseGlobalFenceInCommandStreamRequired(const HardwareInfo &hwInfo) const {
     return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isGlobalFenceInDirectSubmissionRequired(const HardwareInfo &hwInfo) const {
-    return ProductHelperHw<gfxProduct>::isGlobalFenceInCommandStreamRequired(hwInfo);
+bool ProductHelperHw<gfxProduct>::isGlobalFenceInPostSyncRequired(const HardwareInfo &hwInfo) const {
+    return !hwInfo.capabilityTable.isIntegratedDevice;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isAcquireGlobalFenceInDirectSubmissionRequired(const HardwareInfo &hwInfo) const {
+    return ProductHelperHw<gfxProduct>::isReleaseGlobalFenceInCommandStreamRequired(hwInfo);
 };
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -613,8 +562,8 @@ bool ProductHelperHw<gfxProduct>::isBcsReportWaRequired(const HardwareInfo &hwIn
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isBlitSplitEnqueueWARequired(const HardwareInfo &hwInfo) const {
-    return false;
+BcsSplitSettings ProductHelperHw<gfxProduct>::getBcsSplitSettings() const {
+    return {};
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -758,6 +707,15 @@ bool ProductHelperHw<gfxProduct>::getStateBaseAddressPropertyBindingTablePoolBas
 template <PRODUCT_FAMILY gfxProduct>
 void ProductHelperHw<gfxProduct>::fillStateBaseAddressPropertiesSupportStructure(StateBaseAddressPropertiesSupport &propertiesSupport) const {
     propertiesSupport.bindingTablePoolBaseAddress = getStateBaseAddressPropertyBindingTablePoolBaseAddressSupport();
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+void ProductHelperHw<gfxProduct>::parseCcsMode(std::string ccsModeString, std::unordered_map<uint32_t, uint32_t> &rootDeviceNumCcsMap, uint32_t rootDeviceIndex, RootDeviceEnvironment *rootDeviceEnvironment) const {
+
+    auto ccsCount = StringHelpers::toUint32t(ccsModeString);
+
+    rootDeviceNumCcsMap.insert({rootDeviceIndex, ccsCount});
+    rootDeviceEnvironment->setNumberOfCcs(ccsCount);
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -965,6 +923,11 @@ uint32_t ProductHelperHw<gfxProduct>::getCacheLineSize() const {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isSharingWith3dOrMediaAllowed() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::supports2DBlockLoad() const {
     return false;
 }
@@ -986,8 +949,153 @@ uint64_t ProductHelperHw<gfxProduct>::getPatIndex(CacheRegion cacheRegion, Cache
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getGmmResourceUsageOverride(uint32_t usageType) const {
+    return 0u;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::isEvictionIfNecessaryFlagSupported() const {
     return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isL3FlushAfterPostSyncRequired(bool heaplessEnabled) const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::adjustMaxThreadsPerThreadGroup(uint32_t maxThreadsPerThreadGroup, uint32_t simt, uint32_t grfCount, bool isHeaplessModeEnabled) const {
+    return maxThreadsPerThreadGroup;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isMisalignedUserPtr2WayCoherent() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isSvmHeapReservationSupported() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isTimestampWaitSupportedForQueues(bool heaplessEnabled) const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+const std::vector<uint32_t> ProductHelperHw<gfxProduct>::getSupportedLocalDispatchSizes(const HardwareInfo &hwInfo) const {
+    return {};
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getMaxLocalRegionSize(const HardwareInfo &hwInfo) const {
+    return 0;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getMaxLocalSubRegionSize(const HardwareInfo &hwInfo) const {
+    return 0;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint64_t ProductHelperHw<gfxProduct>::getHostMemCapabilitiesValue() const {
+    return (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess);
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getMaxThreadsForWorkgroupInDSSOrSS(const HardwareInfo &hwInfo, uint32_t maxNumEUsPerSubSlice, uint32_t maxNumEUsPerDualSubSlice) const {
+    return getMaxThreadsForWorkgroup(hwInfo, maxNumEUsPerDualSubSlice);
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getInternalHeapsPreallocated() const {
+    if (debugManager.flags.SetAmountOfInternalHeapsToPreallocate.get() != -1) {
+        return debugManager.flags.SetAmountOfInternalHeapsToPreallocate.get();
+    }
+    return 0u;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isTile64With3DSurfaceOnBCSSupported(const HardwareInfo &hwInfo) const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isBufferPoolAllocatorSupported() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isHostUsmPoolAllocatorSupported() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isDeviceUsmPoolAllocatorSupported() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::useLocalPreferredForCacheableBuffers() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isDeviceUsmAllocationReuseSupported() const {
+    return ApiSpecificConfig::OCL == ApiSpecificConfig::getApiType();
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isHostUsmAllocationReuseSupported() const {
+    return ApiSpecificConfig::OCL == ApiSpecificConfig::getApiType();
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isCompressionForbiddenCommon(bool defaultValue) const {
+    auto images = debugManager.flags.RenderCompressedImagesEnabled.get();
+    auto buffers = debugManager.flags.RenderCompressedBuffersEnabled.get();
+
+    if (images == -1 && buffers == -1) {
+        return defaultValue;
+    } else {
+        return (images == 0 && buffers == 0);
+    }
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isExposingSubdevicesAllowed() const {
+    return true;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::useAdditionalBlitProperties() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isPackedCopyFormatSupported() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::getStorageInfoLocalOnlyFlag(LocalMemAllocationMode usmDeviceAllocationMode, bool defaultValue) const {
+    return defaultValue;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+void ProductHelperHw<gfxProduct>::adjustRTDispatchGlobals(RTDispatchGlobals &rtDispatchGlobals, const HardwareInfo &hwInfo) const {
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getSyncNumRTStacksPerDss(const HardwareInfo &hwInfo) const {
+    return 0;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+uint32_t ProductHelperHw<gfxProduct>::getNumRtStacksPerDSSForAllocation(const HardwareInfo &hwInfo) const {
+
+    return RayTracingHelper::getAsyncNumRTStacksPerDss();
 }
 
 } // namespace NEO

@@ -112,7 +112,7 @@ CommandContainer::ErrorCode CommandContainer::initialize(Device *device, Allocat
             return ErrorCode::outOfDeviceMemory;
         }
         secondaryCommandStreamForImmediateCmdList = std::make_unique<LinearStream>(cmdBufferAllocationHost->getUnderlyingBuffer(),
-                                                                                   usableSize, this, this->selectedBbCmdSize);
+                                                                                   usableSize, cmdcontainer, this->selectedBbCmdSize);
         secondaryCommandStreamForImmediateCmdList->replaceGraphicsAllocation(cmdBufferAllocationHost);
         cmdBufferAllocations.push_back(cmdBufferAllocationHost);
         addToResidencyContainer(cmdBufferAllocationHost);
@@ -569,9 +569,6 @@ void CommandContainer::storeAllocationAndFlushTagUpdate(GraphicsAllocation *allo
         this->immediateReusableAllocationList->pushTailOne(*allocation);
     } else {
         getHeapHelper()->storeHeapAllocation(allocation);
-    }
-    if (device->getProductHelper().isDcFlushMitigated()) {
-        this->immediateCmdListCsr->registerDcFlushForDcMitigation();
     }
     this->immediateCmdListCsr->flushTagUpdate();
 }

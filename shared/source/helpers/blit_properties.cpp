@@ -8,10 +8,38 @@
 #include "shared/source/helpers/blit_properties.h"
 
 #include "shared/source/command_stream/command_stream_receiver.h"
+#include "shared/source/gmm_helper/gmm.h"
+#include "shared/source/gmm_helper/resource_info.h"
 #include "shared/source/helpers/timestamp_packet.h"
 #include "shared/source/memory_manager/surface.h"
 
 namespace NEO {
+
+BlitProperties BlitProperties::constructPropertiesForMemoryFill(GraphicsAllocation *dstAllocation, size_t size, uint32_t *pattern, size_t patternSize, size_t offset) {
+    return {
+        .blitDirection = BlitterConstants::BlitDirection::fill,
+        .dstAllocation = dstAllocation,
+        .fillPattern = pattern,
+        .dstGpuAddress = dstAllocation->getGpuAddress(),
+        .copySize = {size, 1, 1},
+        .dstOffset = {offset, 0, 0},
+        .srcOffset = {0, 0, 0},
+        .fillPatternSize = patternSize,
+        .isSystemMemoryPoolUsed = MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool())};
+}
+
+BlitProperties BlitProperties::constructPropertiesForSystemMemoryFill(uint64_t dstPtr, size_t size, uint32_t *pattern, size_t patternSize, size_t offset) {
+    return {
+        .blitDirection = BlitterConstants::BlitDirection::fill,
+        .dstAllocation = nullptr,
+        .fillPattern = pattern,
+        .dstGpuAddress = dstPtr,
+        .copySize = {size, 1, 1},
+        .dstOffset = {offset, 0, 0},
+        .srcOffset = {0, 0, 0},
+        .fillPatternSize = patternSize,
+        .isSystemMemoryPoolUsed = true};
+}
 
 BlitProperties BlitProperties::constructPropertiesForReadWrite(BlitterConstants::BlitDirection blitDirection,
                                                                CommandStreamReceiver &commandStreamReceiver,
@@ -115,6 +143,54 @@ BlitProperties BlitProperties::constructPropertiesForCopy(GraphicsAllocation *ds
         .isSystemMemoryPoolUsed = MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool(), srcAllocation->getMemoryPool())};
 }
 
+BlitProperties BlitProperties::constructPropertiesForSystemCopy(GraphicsAllocation *dstAllocation, GraphicsAllocation *srcAllocation, uint64_t dstPtr, uint64_t srcPtr,
+                                                                const Vec3<size_t> &dstOffset, const Vec3<size_t> &srcOffset, Vec3<size_t> copySize,
+                                                                size_t srcRowPitch, size_t srcSlicePitch,
+                                                                size_t dstRowPitch, size_t dstSlicePitch, GraphicsAllocation *clearColorAllocation) {
+    copySize.y = copySize.y ? copySize.y : 1;
+    copySize.z = copySize.z ? copySize.z : 1;
+    uint64_t dst;
+    uint64_t src;
+    if (dstAllocation) {
+        dst = dstAllocation->getGpuAddress();
+    } else {
+        dst = dstPtr;
+    }
+
+    if (srcAllocation) {
+        src = srcAllocation->getGpuAddress();
+    } else {
+        src = srcPtr;
+    }
+
+    bool sysMem;
+    if ((srcAllocation) && (dstAllocation)) {
+        sysMem = MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool(), srcAllocation->getMemoryPool());
+    } else {
+        sysMem = true;
+    }
+
+    return {
+        .blitSyncProperties = {},
+        .csrDependencies = {},
+        .multiRootDeviceEventSync = nullptr,
+        .blitDirection = BlitterConstants::BlitDirection::bufferToBuffer,
+        .auxTranslationDirection = AuxTranslationDirection::none,
+        .dstAllocation = dstAllocation,
+        .srcAllocation = srcAllocation,
+        .clearColorAllocation = clearColorAllocation,
+        .dstGpuAddress = dst,
+        .srcGpuAddress = src,
+        .copySize = copySize,
+        .dstOffset = dstOffset,
+        .srcOffset = srcOffset,
+        .dstRowPitch = dstRowPitch,
+        .dstSlicePitch = dstSlicePitch,
+        .srcRowPitch = srcRowPitch,
+        .srcSlicePitch = srcSlicePitch,
+        .isSystemMemoryPoolUsed = sysMem};
+}
+
 BlitProperties BlitProperties::constructPropertiesForAuxTranslation(AuxTranslationDirection auxTranslationDirection,
                                                                     GraphicsAllocation *allocation, GraphicsAllocation *clearColorAllocation) {
 
@@ -167,5 +243,43 @@ bool BlitProperties::isImageOperation() const {
            blitDirection == BlitterConstants::BlitDirection::imageToHostPtr ||
            blitDirection == BlitterConstants::BlitDirection::imageToImage;
 }
+bool BlitProperties::isSrc1DTiledArray() const {
+    if (srcAllocation->getDefaultGmm()) {
+        return is1DTiledArray(srcAllocation->getDefaultGmm()->gmmResourceInfo.get());
+    }
+    return false;
+}
+bool BlitProperties::isDst1DTiledArray() const {
+    if (dstAllocation->getDefaultGmm()) {
+        return is1DTiledArray(dstAllocation->getDefaultGmm()->gmmResourceInfo.get());
+    }
+    return false;
+}
+bool BlitProperties::is1DTiledArray(GmmResourceInfo *resInfo) const {
+    auto resourceType = resInfo->getResourceType();
+    auto isArray = resInfo->getArraySize() > 1;
+    auto isTiled = resInfo->getResourceFlags()->Info.Tile4 || resInfo->getResourceFlags()->Info.Tile64;
+    if (resourceType == GMM_RESOURCE_TYPE::RESOURCE_1D && isTiled && isArray) {
+        return true;
+    }
+    return false;
+}
+void BlitProperties::transform1DArrayTo2DArrayIfNeeded() {
+    if (this->isSrc1DTiledArray() || this->isDst1DTiledArray()) {
+        this->srcSize.z = this->srcSize.y;
+        this->srcSize.y = 1;
 
+        this->dstSize.z = this->dstSize.y;
+        this->dstSize.y = 1;
+
+        this->srcOffset.z = this->srcOffset.y;
+        this->srcOffset.y = 0;
+
+        this->dstOffset.z = this->dstOffset.y;
+        this->dstOffset.y = 0;
+
+        this->copySize.z = this->copySize.y;
+        this->copySize.y = 1;
+    }
+}
 } // namespace NEO

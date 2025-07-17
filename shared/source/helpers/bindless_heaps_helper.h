@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,6 +8,7 @@
 #pragma once
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/heap_helper.h"
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
 
 #include <array>
@@ -28,10 +29,11 @@ constexpr uint32_t image = 0;
 constexpr uint32_t implicitArgs = 1;
 constexpr uint32_t sampler = 2;
 constexpr uint32_t redescribedImage = 3;
-constexpr uint32_t max = 4;
+constexpr uint32_t packedImage = 4;
+constexpr uint32_t max = 5;
 }; // namespace BindlessImageSlot
 
-class BindlessHeapsHelper {
+class BindlessHeapsHelper : NEO::NonCopyableAndNonMovableClass {
   public:
     enum BindlesHeapType {
         specialSsh = 0,
@@ -42,9 +44,6 @@ class BindlessHeapsHelper {
 
     BindlessHeapsHelper(Device *rootDevice, bool isMultiOsContextCapable);
     MOCKABLE_VIRTUAL ~BindlessHeapsHelper();
-
-    BindlessHeapsHelper(const BindlessHeapsHelper &) = delete;
-    BindlessHeapsHelper &operator=(const BindlessHeapsHelper &) = delete;
 
     GraphicsAllocation *getHeapAllocation(size_t heapSize, size_t alignment, bool allocInFrontWindow);
 
@@ -72,40 +71,43 @@ class BindlessHeapsHelper {
     void clearStateDirtyForContext(uint32_t osContextId);
 
   protected:
-    bool tryReservingMemoryForSpecialSsh(const size_t size, size_t alignment);
-    std::optional<AddressRange> reserveMemoryRange(size_t size, size_t alignment, HeapIndex heapIndex);
+    bool growHeap(BindlesHeapType heapType);
     bool initializeReservedMemory();
     bool isReservedMemoryModeAvailable();
-
-  protected:
-    Device *rootDevice = nullptr;
-    const size_t surfaceStateSize;
-    bool growHeap(BindlesHeapType heapType);
-    MemoryManager *memManager = nullptr;
-    bool isMultiOsContextCapable = false;
-    const uint32_t rootDeviceIndex;
-    std::unique_ptr<IndirectHeap> surfaceStateHeaps[BindlesHeapType::numHeapTypes];
-    GraphicsAllocation *borderColorStates;
-    std::vector<GraphicsAllocation *> ssHeapsAllocations;
-
-    size_t reuseSlotCountThreshold = 512;
-    uint32_t allocatePoolIndex = 0;
-    uint32_t releasePoolIndex = 0;
-    bool allocateFromReusePool = false;
-    std::array<std::vector<SurfaceStateInHeapInfo>, 2> surfaceStateInHeapVectorReuse[2];
-    std::bitset<64> stateCacheDirtyForContext;
+    bool tryReservingMemoryForSpecialSsh(const size_t size, size_t alignment);
+    std::optional<AddressRange> reserveMemoryRange(size_t size, size_t alignment, HeapIndex heapIndex);
 
     std::mutex mtx;
-    DeviceBitfield deviceBitfield;
-    bool globalBindlessDsh = false;
 
-    bool useReservedMemory = false;
-    bool reservedMemoryInitialized = false;
-    uint64_t reservedRangeBase = 0;
+    Device *rootDevice = nullptr;
+    MemoryManager *memManager = nullptr;
+    GraphicsAllocation *borderColorStates = nullptr;
 
+    std::vector<AddressRange> reservedRanges;
+    std::vector<GraphicsAllocation *> ssHeapsAllocations;
+    std::array<std::vector<SurfaceStateInHeapInfo>, 2> surfaceStateInHeapVectorReuse[2];
+    std::unique_ptr<IndirectHeap> surfaceStateHeaps[BindlesHeapType::numHeapTypes];
     std::unique_ptr<HeapAllocator> heapFrontWindow;
     std::unique_ptr<HeapAllocator> heapRegular;
 
-    std::vector<AddressRange> reservedRanges;
+    size_t reuseSlotCountThreshold = 512;
+    uint64_t reservedRangeBase = 0;
+    std::bitset<64> stateCacheDirtyForContext;
+    DeviceBitfield deviceBitfield;
+    const size_t surfaceStateSize;
+
+    const uint32_t rootDeviceIndex;
+    uint32_t allocatePoolIndex = 0;
+    uint32_t releasePoolIndex = 0;
+
+    bool allocateFromReusePool = false;
+    bool globalBindlessDsh = false;
+    bool isMultiOsContextCapable = false;
+    bool reservedMemoryInitialized = false;
+    bool useReservedMemory = false;
+    bool heaplessEnabled = false;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<BindlessHeapsHelper>);
+
 } // namespace NEO

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -28,7 +28,7 @@
 
 namespace NEO {
 
-static const char *spirvWithVersion = "SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0 ";
+static const char *spirvWithVersion = "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0 ";
 
 size_t Device::getMaxParameterSizeFromIGC() const {
     CompilerInterface *compilerInterface = getCompilerInterface();
@@ -75,7 +75,7 @@ void Device::initializeCaps() {
         double percentOfGlobalMemoryAvailable = getPercentOfGlobalMemoryAvailable();
         deviceInfo.globalMemSize = std::min(deviceInfo.globalMemSize, static_cast<uint64_t>(4 * MemoryConstants::gigaByte * percentOfGlobalMemoryAvailable));
         deviceInfo.addressBits = 32;
-        deviceInfo.force32BitAddressess = is64bit;
+        deviceInfo.force32BitAddresses = is64bit;
     }
 
     deviceInfo.globalMemSize = alignDown(deviceInfo.globalMemSize, MemoryConstants::pageSize);
@@ -101,6 +101,10 @@ void Device::initializeCaps() {
         driverModelMaxMemAlloc = this->executionEnvironment->rootDeviceEnvironments[0]->osInterface->getDriverModel()->getMaxMemAllocSize();
     }
     deviceInfo.maxMemAllocSize = std::min<std::uint64_t>(driverModelMaxMemAlloc, deviceInfo.maxMemAllocSize);
+
+    if (debugManager.flags.OverrideMaxMemAllocSizeMb.get() != -1) {
+        deviceInfo.maxMemAllocSize = static_cast<uint64_t>(debugManager.flags.OverrideMaxMemAllocSizeMb.get()) * MemoryConstants::megaByte;
+    }
 
     deviceInfo.profilingTimerResolution = getProfilingTimerResolution();
     if (debugManager.flags.OverrideProfilingTimerResolution.get() != -1) {
@@ -154,7 +158,7 @@ void Device::initializeCaps() {
     deviceInfo.computeUnitsUsedForScratch = gfxCoreHelper.getComputeUnitsUsedForScratch(this->getRootDeviceEnvironment());
     deviceInfo.maxFrontEndThreads = gfxCoreHelper.getMaxThreadsForVfe(hwInfo);
 
-    deviceInfo.localMemSize = hwInfo.capabilityTable.slmSize * MemoryConstants::kiloByte;
+    deviceInfo.localMemSize = hwInfo.capabilityTable.maxProgrammableSlmSize * MemoryConstants::kiloByte;
 
     deviceInfo.imageSupport = hwInfo.capabilityTable.supportsImages;
     deviceInfo.image2DMaxWidth = 16384;
@@ -166,8 +170,6 @@ void Device::initializeCaps() {
     deviceInfo.maxClockFrequency = hwInfo.capabilityTable.maxRenderFrequency;
 
     deviceInfo.maxSubGroups = gfxCoreHelper.getDeviceSubGroupSizes();
-
-    deviceInfo.vmeAvcSupportsPreemption = hwInfo.capabilityTable.ftrSupportsVmeAvcPreemption;
 
     deviceInfo.name = this->getDeviceName();
 

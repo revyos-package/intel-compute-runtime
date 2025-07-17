@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -40,7 +40,9 @@ class IpSamplingMetricSourceImp : public MetricSource {
     MetricIpSamplingOsInterface *getMetricOsInterface() { return metricIPSamplingpOsInterface.get(); }
     IpSamplingMetricStreamerImp *pActiveStreamer = nullptr;
     const MetricDeviceContext &getMetricDeviceContext() const { return metricDeviceContext; }
-    ze_result_t handleMetricGroupExtendedProperties(zet_metric_group_handle_t hMetricGroup, void *pNext) override;
+    ze_result_t handleMetricGroupExtendedProperties(zet_metric_group_handle_t hMetricGroup,
+                                                    zet_metric_group_properties_t *pBaseProperties,
+                                                    void *pNext) override;
     ze_result_t createMetricGroupsFromMetrics(std::vector<zet_metric_handle_t> &metricList,
                                               const char metricGroupNamePrefix[ZET_INTEL_MAX_METRIC_GROUP_NAME_PREFIX_EXP],
                                               const char description[ZET_MAX_METRIC_GROUP_DESCRIPTION],
@@ -48,14 +50,24 @@ class IpSamplingMetricSourceImp : public MetricSource {
                                               std::vector<zet_metric_group_handle_t> &metricGroupList) override {
         return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
+    ze_result_t appendMarker(zet_command_list_handle_t hCommandList, zet_metric_group_handle_t hMetricGroup, uint32_t value) override {
+        return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
 
     void setActivationTracker(MultiDomainDeferredActivationTracker *inputActivationTracker) {
         activationTracker.reset(inputActivationTracker);
     }
+    ze_result_t calcOperationCreate(MetricDeviceContext &metricDeviceContext,
+                                    zet_intel_metric_calculate_exp_desc_t *pCalculateDesc,
+                                    uint32_t *pExcludedMetricCount,
+                                    zet_metric_handle_t *phExcludedMetrics,
+                                    zet_intel_metric_calculate_operation_exp_handle_t *phCalculateOperation) override;
+
     uint32_t metricSourceCount = 0;
+    bool canDisable() override;
 
   protected:
-    void cacheMetricGroup();
+    ze_result_t cacheMetricGroup();
     bool isEnabled = false;
 
     const MetricDeviceContext &metricDeviceContext;
@@ -89,6 +101,9 @@ struct IpSamplingMetricGroupBase : public MetricGroupImp {
     ze_result_t destroy() override {
         return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
+
+    static bool isMultiDeviceCaptureData(const size_t rawDataSize, const uint8_t *pRawData);
+    IpSamplingMetricSourceImp &getMetricSource() { return static_cast<IpSamplingMetricSourceImp &>(metricSource); }
 };
 
 struct IpSamplingMetricGroupImp : public IpSamplingMetricGroupBase {
@@ -116,20 +131,18 @@ struct IpSamplingMetricGroupImp : public IpSamplingMetricGroupBase {
         zet_metric_streamer_handle_t *phMetricStreamer) override;
     static std::unique_ptr<IpSamplingMetricGroupImp> create(IpSamplingMetricSourceImp &metricSource,
                                                             std::vector<IpSamplingMetricImp> &ipSamplingMetrics);
-    IpSamplingMetricSourceImp &getMetricSource() { return static_cast<IpSamplingMetricSourceImp &>(metricSource); }
-    ze_result_t getCalculatedMetricCount(const uint8_t *pMultiMetricData, const size_t rawDataSize, uint32_t &metricValueCount, const uint32_t setIndex);
     ze_result_t getCalculatedMetricValues(const zet_metric_group_calculation_type_t type, const size_t rawDataSize, const uint8_t *pMultiMetricData,
                                           uint32_t &metricValueCount,
                                           zet_typed_value_t *pCalculatedData, const uint32_t setIndex);
+    ze_result_t getCalculatedMetricCount(const uint8_t *pRawData, const size_t rawDataSize, uint32_t &metricValueCount);
+    ze_result_t getCalculatedMetricCount(const uint8_t *pMultiMetricData, const size_t rawDataSize, uint32_t &metricValueCount, const uint32_t setIndex);
 
   private:
     std::vector<std::unique_ptr<IpSamplingMetricImp>> metrics = {};
     zet_metric_group_properties_t properties = {ZET_STRUCTURE_TYPE_METRIC_GROUP_PROPERTIES, nullptr};
-    ze_result_t getCalculatedMetricCount(const size_t rawDataSize, uint32_t &metricValueCount);
     ze_result_t getCalculatedMetricValues(const zet_metric_group_calculation_type_t type, const size_t rawDataSize, const uint8_t *pRawData,
                                           uint32_t &metricValueCount,
                                           zet_typed_value_t *pCalculatedData);
-    bool isMultiDeviceCaptureData(const size_t rawDataSize, const uint8_t *pRawData);
 };
 
 struct MultiDeviceIpSamplingMetricGroupImp : public IpSamplingMetricGroupBase {

@@ -69,7 +69,7 @@ size_t HardwareCommandsHelper<GfxFamily>::getSizeRequiredIOH(const Kernel &kerne
         requiredWalkOrder,
         simdSize);
     auto size = kernel.getCrossThreadDataSize() +
-                getPerThreadDataSizeTotal(simdSize, grfSize, grfCount, numChannels, localWorkSize, isHwLocalIdGeneration, rootDeviceEnvironment);
+                HardwareCommandsHelper::getPerThreadDataSizeTotal(simdSize, grfSize, grfCount, numChannels, localWorkSize, rootDeviceEnvironment);
 
     auto pImplicitArgs = kernel.getImplicitArgs();
     if (pImplicitArgs) {
@@ -148,7 +148,7 @@ size_t HardwareCommandsHelper<GfxFamily>::sendInterfaceDescriptorData(
         pInterfaceDescriptor = inlineInterfaceDescriptor;
         interfaceDescriptor.setKernelStartPointer(kernelStartOffset);
     } else {
-        pInterfaceDescriptor = getInterfaceDescriptor(indirectHeap, offsetInterfaceDescriptor, inlineInterfaceDescriptor);
+        pInterfaceDescriptor = HardwareCommandsHelper::getInterfaceDescriptor(indirectHeap, offsetInterfaceDescriptor, inlineInterfaceDescriptor);
         interfaceDescriptor.setKernelStartPointer(static_cast<uint32_t>(kernelStartOffset));
     }
 
@@ -177,7 +177,8 @@ size_t HardwareCommandsHelper<GfxFamily>::sendInterfaceDescriptorData(
 
     const auto &hardwareInfo = device.getHardwareInfo();
     auto &gfxCoreHelper = device.getGfxCoreHelper();
-    auto programmableIDSLMSize = EncodeDispatchKernel<GfxFamily>::computeSlmValues(hardwareInfo, slmTotalSize);
+    auto releaseHelper = device.getReleaseHelper();
+    auto programmableIDSLMSize = EncodeDispatchKernel<GfxFamily>::computeSlmValues(hardwareInfo, slmTotalSize, releaseHelper, heaplessModeEnabled);
 
     if (debugManager.flags.OverrideSlmAllocationSize.get() != -1) {
         programmableIDSLMSize = static_cast<uint32_t>(debugManager.flags.OverrideSlmAllocationSize.get());
@@ -196,10 +197,11 @@ size_t HardwareCommandsHelper<GfxFamily>::sendInterfaceDescriptorData(
     }
     EncodeDispatchKernel<GfxFamily>::encodeEuSchedulingPolicy(&interfaceDescriptor, kernelDescriptor, defaultPipelinedThreadArbitrationPolicy);
     const uint32_t threadGroupDimensions[] = {walkerCmd->getThreadGroupIdXDimension(), walkerCmd->getThreadGroupIdYDimension(), walkerCmd->getThreadGroupIdXDimension()};
-    EncodeDispatchKernel<GfxFamily>::encodeThreadGroupDispatch(interfaceDescriptor, device, hardwareInfo, threadGroupDimensions, threadGroupCount, kernelDescriptor.kernelAttributes.numGrfRequired, threadsPerThreadGroup, *walkerCmd);
+    EncodeDispatchKernel<GfxFamily>::encodeThreadGroupDispatch(interfaceDescriptor, device, hardwareInfo, threadGroupDimensions, threadGroupCount, kernelDescriptor.kernelMetadata.requiredThreadGroupDispatchSize,
+                                                               kernelDescriptor.kernelAttributes.numGrfRequired, threadsPerThreadGroup, *walkerCmd);
 
     *pInterfaceDescriptor = interfaceDescriptor;
-    return (size_t)offsetInterfaceDescriptor;
+    return static_cast<size_t>(offsetInterfaceDescriptor);
 }
 
 template <typename GfxFamily>
@@ -295,7 +297,7 @@ size_t HardwareCommandsHelper<GfxFamily>::sendIndirectState(
     auto &gfxCoreHelper = device.getGfxCoreHelper();
     auto grfCount = kernel.getDescriptor().kernelAttributes.numGrfRequired;
     auto localWorkItems = localWorkSize[0] * localWorkSize[1] * localWorkSize[2];
-    auto threadsPerThreadGroup = gfxCoreHelper.calculateNumThreadsPerThreadGroup(simd, static_cast<uint32_t>(localWorkItems), grfCount, !localIdsGenerationByRuntime, device.getRootDeviceEnvironment());
+    auto threadsPerThreadGroup = gfxCoreHelper.calculateNumThreadsPerThreadGroup(simd, static_cast<uint32_t>(localWorkItems), grfCount, device.getRootDeviceEnvironment());
 
     uint32_t sizeCrossThreadData = kernel.getCrossThreadDataSize();
 

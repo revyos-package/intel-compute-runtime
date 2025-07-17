@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2024 Intel Corporation
+ * Copyright (C) 2018-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -47,13 +47,16 @@ class WddmMock : public Wddm {
     using Wddm::featureTable;
     using Wddm::forceEvictOnlyIfNecessary;
     using Wddm::getDeviceState;
+    using Wddm::getReadOnlyFlagValue;
     using Wddm::getSystemInfo;
     using Wddm::gfxFeatureTable;
     using Wddm::gfxPlatform;
     using Wddm::gfxWorkaroundTable;
     using Wddm::gmmMemory;
     using Wddm::hwDeviceId;
-    using Wddm::isReadOnlyMemory;
+    using Wddm::isReadOnlyFlagFallbackAvailable;
+    using Wddm::isReadOnlyFlagFallbackSupported;
+    using Wddm::lmemBarSize;
     using Wddm::mapGpuVirtualAddress;
     using Wddm::minAddress;
     using Wddm::pagingFenceAddress;
@@ -64,6 +67,7 @@ class WddmMock : public Wddm {
     using Wddm::populateIpVersion;
     using Wddm::residencyLogger;
     using Wddm::rootDeviceEnvironment;
+    using Wddm::segmentId;
     using Wddm::setNewResourceBoundToPageTable;
     using Wddm::setPlatformSupportEvictIfNecessaryFlag;
     using Wddm::temporaryResources;
@@ -92,7 +96,7 @@ class WddmMock : public Wddm {
     bool submit(uint64_t commandBuffer, size_t size, void *commandHeader, WddmSubmitArguments &submitArguments) override;
     bool waitOnGPU(D3DKMT_HANDLE context) override;
     void *lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock, size_t size) override;
-    void unlockResource(const D3DKMT_HANDLE &handle) override;
+    void unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock) override;
     void kmDafLock(D3DKMT_HANDLE handle) override;
     bool isKmDafEnabled() const override;
     void setKmDafEnabled(bool state);
@@ -178,7 +182,7 @@ class WddmMock : public Wddm {
     WddmMockHelpers::CallResult registerTrimCallbackResult;
     WddmMockHelpers::CallResult getPagingFenceAddressResult;
     WddmMockHelpers::CallResult reserveGpuVirtualAddressResult;
-    WddmMockHelpers::CallResult waitOnPagingFenceFromCpuResult;
+    WddmMockHelpers::WaitOnPagingFenceFromCpuResult waitOnPagingFenceFromCpuResult;
     WddmMockHelpers::CallResult setAllocationPriorityResult;
     WddmMockHelpers::CallResult delayPagingFenceFromCpuResult;
 

@@ -12,62 +12,68 @@
 #include "shared/test/common/mocks/mock_os_context.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
+#include "level_zero/core/source/cmdlist/cmdlist_memory_copy_params.h"
 #include "level_zero/core/source/event/event_imp.h"
+#include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
 #include "level_zero/core/test/unit_tests/fixtures/module_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdlist.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdqueue.h"
 #include "level_zero/core/test/unit_tests/sources/helper/ze_object_utils.h"
+#include "level_zero/driver_experimental/zex_api.h"
 
 namespace L0 {
 namespace ult {
 
+struct InOrderFixtureMockEvent : public EventImp<uint32_t> {
+    using EventImp<uint32_t>::Event::counterBasedMode;
+    using EventImp<uint32_t>::Event::isFromIpcPool;
+    using EventImp<uint32_t>::Event::counterBasedFlags;
+    using EventImp<uint32_t>::Event::isSharableCounterBased;
+    using EventImp<uint32_t>::Event::isTimestampEvent;
+    using EventImp<uint32_t>::eventPoolAllocation;
+    using EventImp<uint32_t>::maxPacketCount;
+    using EventImp<uint32_t>::inOrderExecInfo;
+    using EventImp<uint32_t>::inOrderExecSignalValue;
+    using EventImp<uint32_t>::inOrderAllocationOffset;
+    using EventImp<uint32_t>::csrs;
+    using EventImp<uint32_t>::signalScope;
+    using EventImp<uint32_t>::waitScope;
+    using EventImp<uint32_t>::unsetCmdQueue;
+    using EventImp<uint32_t>::externalInterruptId;
+    using EventImp<uint32_t>::latestUsedCmdQueue;
+    using EventImp<uint32_t>::inOrderTimestampNode;
+    using EventImp<uint32_t>::additionalTimestampNode;
+    using EventImp<uint32_t>::isCompleted;
+
+    void makeCounterBasedInitiallyDisabled(MultiGraphicsAllocation &poolAllocation) {
+        resetInOrderTimestampNode(nullptr, 0);
+        counterBasedMode = CounterBasedMode::initiallyDisabled;
+        resetCompletionStatus();
+        counterBasedFlags = 0;
+        this->eventPoolAllocation = &poolAllocation;
+        this->hostAddressFromPool = ptrOffset(eventPoolAllocation->getGraphicsAllocation(0)->getUnderlyingBuffer(), eventPoolOffset);
+        reset();
+    }
+
+    void makeCounterBasedImplicitlyDisabled(MultiGraphicsAllocation &poolAllocation) {
+        resetInOrderTimestampNode(nullptr, 0);
+        counterBasedMode = CounterBasedMode::implicitlyDisabled;
+        resetCompletionStatus();
+        counterBasedFlags = 0;
+        this->eventPoolAllocation = &poolAllocation;
+        this->hostAddressFromPool = ptrOffset(eventPoolAllocation->getGraphicsAllocation(0)->getUnderlyingBuffer(), eventPoolOffset);
+        reset();
+    }
+};
+
+class WhiteboxInOrderExecInfo : public InOrderExecInfo {
+  public:
+    using InOrderExecInfo::numDevicePartitionsToWait;
+    using InOrderExecInfo::numHostPartitionsToWait;
+    using InOrderExecInfo::tempTimestampNodes;
+};
+
 struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
-    class WhiteboxInOrderExecInfo : public InOrderExecInfo {
-      public:
-        using InOrderExecInfo::numDevicePartitionsToWait;
-        using InOrderExecInfo::numHostPartitionsToWait;
-        using InOrderExecInfo::tempTimestampNodes;
-    };
-
-    struct FixtureMockEvent : public EventImp<uint32_t> {
-        using EventImp<uint32_t>::Event::counterBasedMode;
-        using EventImp<uint32_t>::Event::isFromIpcPool;
-        using EventImp<uint32_t>::Event::counterBasedFlags;
-        using EventImp<uint32_t>::Event::isSharableCounterBased;
-        using EventImp<uint32_t>::eventPoolAllocation;
-        using EventImp<uint32_t>::maxPacketCount;
-        using EventImp<uint32_t>::inOrderExecInfo;
-        using EventImp<uint32_t>::inOrderExecSignalValue;
-        using EventImp<uint32_t>::inOrderAllocationOffset;
-        using EventImp<uint32_t>::csrs;
-        using EventImp<uint32_t>::signalScope;
-        using EventImp<uint32_t>::waitScope;
-        using EventImp<uint32_t>::unsetCmdQueue;
-        using EventImp<uint32_t>::externalInterruptId;
-        using EventImp<uint32_t>::latestUsedCmdQueue;
-        using EventImp<uint32_t>::inOrderTimestampNode;
-
-        void makeCounterBasedInitiallyDisabled(MultiGraphicsAllocation &poolAllocation) {
-            resetInOrderTimestampNode(nullptr);
-            counterBasedMode = CounterBasedMode::initiallyDisabled;
-            resetCompletionStatus();
-            counterBasedFlags = 0;
-            this->eventPoolAllocation = &poolAllocation;
-            this->hostAddressFromPool = ptrOffset(eventPoolAllocation->getGraphicsAllocation(0)->getUnderlyingBuffer(), eventPoolOffset);
-            reset();
-        }
-
-        void makeCounterBasedImplicitlyDisabled(MultiGraphicsAllocation &poolAllocation) {
-            resetInOrderTimestampNode(nullptr);
-            counterBasedMode = CounterBasedMode::implicitlyDisabled;
-            resetCompletionStatus();
-            counterBasedFlags = 0;
-            this->eventPoolAllocation = &poolAllocation;
-            this->hostAddressFromPool = ptrOffset(eventPoolAllocation->getGraphicsAllocation(0)->getUnderlyingBuffer(), eventPoolOffset);
-            reset();
-        }
-    };
-
     void SetUp() override {
         NEO::debugManager.flags.ForcePreemptionMode.set(static_cast<int32_t>(NEO::PreemptionMode::Disabled));
         NEO::debugManager.flags.ResolveDependenciesViaPipeControls.set(0u);
@@ -84,23 +90,41 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
         ::Test<ModuleFixture>::TearDown();
     }
 
-    DestroyableZeUniquePtr<FixtureMockEvent> createStandaloneCbEvent(const ze_base_desc_t *pNext) {
+    DestroyableZeUniquePtr<InOrderFixtureMockEvent> createExternalSyncStorageEvent(uint64_t counterValue, uint64_t incrementValue, uint64_t *deviceAddress) {
+        ze_event_handle_t outEvent = nullptr;
+        zex_counter_based_event_external_storage_properties_t externalStorageAllocProperties = {ZEX_STRUCTURE_COUNTER_BASED_EVENT_EXTERNAL_STORAGE_ALLOC_PROPERTIES};
+        externalStorageAllocProperties.completionValue = counterValue;
+        externalStorageAllocProperties.deviceAddress = deviceAddress;
+        externalStorageAllocProperties.incrementValue = incrementValue;
+
+        zex_counter_based_event_desc_t counterBasedDesc = {ZEX_STRUCTURE_COUNTER_BASED_EVENT_DESC};
+        counterBasedDesc.flags = ZEX_COUNTER_BASED_EVENT_FLAG_IMMEDIATE | ZEX_COUNTER_BASED_EVENT_FLAG_NON_IMMEDIATE;
+        counterBasedDesc.pNext = &externalStorageAllocProperties;
+
+        EXPECT_EQ(ZE_RESULT_SUCCESS, zexCounterBasedEventCreate2(context, device, &counterBasedDesc, &outEvent));
+
+        auto eventObj = static_cast<InOrderFixtureMockEvent *>(Event::fromHandle(outEvent));
+
+        return DestroyableZeUniquePtr<InOrderFixtureMockEvent>(eventObj);
+    }
+
+    DestroyableZeUniquePtr<InOrderFixtureMockEvent> createStandaloneCbEvent(const ze_base_desc_t *pNext) {
         constexpr uint32_t counterBasedFlags = (ZE_EVENT_POOL_COUNTER_BASED_EXP_FLAG_IMMEDIATE | ZE_EVENT_POOL_COUNTER_BASED_EXP_FLAG_NON_IMMEDIATE);
 
         const EventDescriptor eventDescriptor = {
-            nullptr,                           // eventPoolAllocation
-            pNext,                             // extension
-            0,                                 // totalEventSize
-            EventPacketsCount::maxKernelSplit, // maxKernelCount
-            0,                                 // maxPacketsCount
-            counterBasedFlags,                 // counterBasedFlags
-            0,                                 // index
-            0,                                 // signalScope
-            0,                                 // waitScope
-            false,                             // timestampPool
-            false,                             // kernelMappedTsPoolFlag
-            false,                             // importedIpcPool
-            false,                             // ipcPool
+            .eventPoolAllocation = nullptr,
+            .extensions = pNext,
+            .totalEventSize = 0,
+            .maxKernelCount = EventPacketsCount::maxKernelSplit,
+            .maxPacketsCount = 0,
+            .counterBasedFlags = counterBasedFlags,
+            .index = 0,
+            .signalScope = 0,
+            .waitScope = 0,
+            .timestampPool = false,
+            .kernelMappedTsPoolFlag = false,
+            .importedIpcPool = false,
+            .ipcPool = false,
         };
 
         standaloneCbEventStorage.push_back(1);
@@ -111,11 +135,11 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
         auto inOrderExecInfo = NEO::InOrderExecInfo::createFromExternalAllocation(*device->getNEODevice(), nullptr, castToUint64(deviceAddress), nullptr, hostAddress, 1, 1, 1);
 
         ze_result_t result = ZE_RESULT_SUCCESS;
-        auto event = static_cast<FixtureMockEvent *>(Event::create<uint64_t>(eventDescriptor, device, result));
+        auto event = static_cast<InOrderFixtureMockEvent *>(Event::create<uint64_t>(eventDescriptor, device, result));
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
         event->updateInOrderExecState(inOrderExecInfo, 1, 0);
 
-        return DestroyableZeUniquePtr<FixtureMockEvent>(event);
+        return DestroyableZeUniquePtr<InOrderFixtureMockEvent>(event);
     }
 
     template <typename GfxFamily>
@@ -139,7 +163,7 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
 
         for (uint32_t i = 0; i < numEvents; i++) {
             eventDesc.index = i;
-            events.emplace_back(DestroyableZeUniquePtr<FixtureMockEvent>(static_cast<FixtureMockEvent *>(Event::create<typename GfxFamily::TimestampPacketType>(eventPool.get(), &eventDesc, device))));
+            events.emplace_back(DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename GfxFamily::TimestampPacketType>(eventPool.get(), &eventDesc, device))));
             EXPECT_EQ(Event::CounterBasedMode::explicitlyEnabled, events.back()->counterBasedMode);
             EXPECT_TRUE(events.back()->isCounterBased());
             EXPECT_EQ(counterBasedExtension.flags, events.back()->counterBasedFlags);
@@ -165,20 +189,31 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
         mockCmdQs.emplace_back(std::make_unique<Mock<CommandQueue>>(device, csr, &desc));
 
         cmdList->cmdQImmediate = mockCmdQs[createdCmdLists].get();
-        cmdList->isFlushTaskSubmissionEnabled = true;
         cmdList->cmdListType = CommandList::CommandListType::typeImmediate;
         cmdList->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
         cmdList->commandContainer.setImmediateCmdListCsr(csr);
         cmdList->enableInOrderExecution();
 
         if (copyOffloadEnabled) {
-            cmdList->enableCopyOperationOffload(device->getHwInfo().platform.eProductFamily, device, &desc);
+            cmdList->enableCopyOperationOffload();
             cmdList->copyOperationFenceSupported = device->getProductHelper().isDeviceToHostCopySignalingFenceRequired();
         }
+
+        completeHostAddress<gfxCoreFamily>(cmdList.get());
 
         createdCmdLists++;
 
         return cmdList;
+    }
+
+    template <GFXCORE_FAMILY gfxCoreFamily, typename CmdListT>
+    void completeHostAddress(CmdListT *cmdList) {
+        uint64_t maxValue = std::numeric_limits<uint64_t>::max();
+        void *hostAddress = ptrOffset(cmdList->inOrderExecInfo->getBaseHostAddress(), cmdList->inOrderExecInfo->getAllocationOffset());
+        for (uint32_t i = 0; i < cmdList->inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
+            memcpy(hostAddress, &maxValue, sizeof(maxValue));
+            hostAddress = ptrOffset(hostAddress, device->getL0GfxCoreHelper().getImmediateWritePostSyncOffset());
+        }
     }
 
     template <GFXCORE_FAMILY gfxCoreFamily>
@@ -206,7 +241,7 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
 
         cmdList->engineGroupType = EngineGroupType::copy;
 
-        mockCopyOsContext = std::make_unique<NEO::MockOsContext>(0, NEO::EngineDescriptorHelper::getDefaultDescriptor({aub_stream::ENGINE_BCS, EngineUsage::regular}, DeviceBitfield(1)));
+        mockCopyOsContext = std::make_unique<NEO::MockOsContext>(0, NEO::EngineDescriptorHelper::getDefaultDescriptor({device->getProductHelper().getDefaultCopyEngine(), EngineUsage::regular}, DeviceBitfield(1)));
         cmdList->getCsr(false)->setupContext(*mockCopyOsContext);
         return cmdList;
     }
@@ -248,7 +283,7 @@ struct InOrderCmdListFixture : public ::Test<ModuleFixture> {
     std::unique_ptr<NEO::MockOsContext> mockCopyOsContext;
 
     uint32_t createdCmdLists = 0;
-    std::vector<DestroyableZeUniquePtr<FixtureMockEvent>> events;
+    std::vector<DestroyableZeUniquePtr<InOrderFixtureMockEvent>> events;
     std::vector<std::unique_ptr<Mock<CommandQueue>>> mockCmdQs;
     std::vector<uint64_t> standaloneCbEventStorage;
     ze_result_t returnValue = ZE_RESULT_SUCCESS;

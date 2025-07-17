@@ -1,11 +1,12 @@
 /*
- * Copyright (C) 2019-2024 Intel Corporation
+ * Copyright (C) 2019-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
  */
 
 #pragma once
+#include "shared/source/sku_info/sku_info_base.h"
 #include "shared/source/utilities/stackvec.h"
 
 #include <cstdint>
@@ -32,10 +33,8 @@ constexpr auto toUnderlying(EnumT scopedEnumValue) {
 }
 
 template <typename EnumT>
+    requires(std::is_enum_v<EnumT> && !std::is_convertible_v<EnumT, std::underlying_type_t<EnumT>>)
 constexpr auto toEnum(std::underlying_type_t<EnumT> region) {
-    static_assert(std::is_enum_v<EnumT>);
-    static_assert(!std::is_convertible_v<EnumT, std::underlying_type_t<EnumT>>);
-
     return static_cast<EnumT>(region);
 }
 
@@ -62,22 +61,33 @@ enum class TagNodeType {
     timestampPacket,
     hwTimeStamps,
     hwPerfCounter,
-    counter64b
+    counter64b,
+    fillPattern
 };
 
 enum class CacheRegion : uint16_t {
     defaultRegion = 0,
     region1,
     region2,
+    region3,
     count,
     none = 0xFFFF
 };
-constexpr auto toCacheRegion(std::underlying_type_t<CacheRegion> region) { return toEnum<CacheRegion>(region); }
+constexpr inline auto toCacheRegion(std::underlying_type_t<CacheRegion> region) {
+    DEBUG_BREAK_IF(region >= toUnderlying(CacheRegion::count));
+    return toEnum<CacheRegion>(region);
+}
 
 enum class CacheLevel : uint16_t {
     defaultLevel = 0,
+    level2 = 2,
     level3 = 3
 };
+constexpr inline auto toCacheLevel(std::underlying_type_t<CacheRegion> level) {
+    DEBUG_BREAK_IF(level == 1U);
+    DEBUG_BREAK_IF(level > 3U);
+    return toEnum<CacheLevel>(level);
+}
 
 enum class CachePolicy : uint32_t {
     uncached = 0,
@@ -104,7 +114,8 @@ enum class AtomicAccessMode : uint32_t {
     none = 1,
     host = 2,
     device = 3,
-    system = 4
+    system = 4,
+    invalid = 5
 };
 
 enum class SynchronizedDispatchMode : uint32_t {
@@ -113,6 +124,17 @@ enum class SynchronizedDispatchMode : uint32_t {
     limited = 2
 };
 
+enum class LocalMemAllocationMode : uint32_t {
+    hwDefault = 0U,
+    localOnly = 1U,
+    localPreferred = 2U,
+    count = 3U
+};
+constexpr inline auto toLocalMemAllocationMode(std::underlying_type_t<LocalMemAllocationMode> modeFlag) {
+    DEBUG_BREAK_IF(modeFlag >= toUnderlying(LocalMemAllocationMode::count));
+    return toEnum<LocalMemAllocationMode>(modeFlag);
+}
+
 namespace InterruptId {
 static constexpr uint32_t notUsed = std::numeric_limits<uint32_t>::max();
 }
@@ -120,5 +142,14 @@ static constexpr uint32_t notUsed = std::numeric_limits<uint32_t>::max();
 namespace TypeTraits {
 template <typename T>
 constexpr bool isPodV = std::is_standard_layout_v<T> && std::is_trivial_v<T> && std::is_trivially_copyable_v<T>;
-}
+} // namespace TypeTraits
+
+struct BcsSplitSettings {
+    BcsInfoMask allEngines = {};
+    BcsInfoMask h2dEngines = {};
+    BcsInfoMask d2hEngines = {};
+    uint32_t minRequiredTotalCsrCount = 0;
+    uint32_t requiredTileCount = 0;
+    bool enabled = false;
+};
 } // namespace NEO

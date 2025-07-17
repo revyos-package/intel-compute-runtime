@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,6 +11,7 @@
 #include "shared/source/device_binary_format/zebin/zebin_decoder.h"
 #include "shared/source/device_binary_format/zebin/zebin_elf.h"
 #include "shared/source/device_binary_format/zebin/zeinfo_enum_lookup.h"
+#include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/ptr_math.h"
@@ -24,7 +25,7 @@
 #include "shared/test/common/mocks/mock_modules_zebin.h"
 #include "shared/test/common/test_macros/test.h"
 
-#include "platforms.h"
+#include "neo_aot_platforms.h"
 
 #include <numeric>
 #include <vector>
@@ -54,7 +55,7 @@ class DecodeZeInfoKernelEntryFixture {
 
         auto &kernelNode = *yamlParser->createChildrenRange(*yamlParser->findNodeWithKeyDfs("kernels")).begin();
         return NEO::Zebin::ZeInfo::decodeZeInfoKernelEntry(*kernelDescriptor, *yamlParser, kernelNode,
-                                                           grfSize, minScratchSpaceSize, errors, warnings, zeInfoVersion);
+                                                           grfSize, minScratchSpaceSize, samplerStateSize, samplerBorderColorStateSize, errors, warnings, zeInfoVersion);
     }
 
   protected:
@@ -63,6 +64,8 @@ class DecodeZeInfoKernelEntryFixture {
     std::unique_ptr<KernelDescriptor> kernelDescriptor;
     uint32_t grfSize = 32U;
     uint32_t minScratchSpaceSize = 1024U;
+    uint32_t samplerStateSize = 16u;
+    uint32_t samplerBorderColorStateSize = 64u;
     std::string errors, warnings;
 
   private:
@@ -81,9 +84,10 @@ TEST(ZebinValidateTargetTest, givenTargetDeviceCreatedUsingHelperFunctionWhenVal
     MockExecutionEnvironment executionEnvironment;
     auto &rootDeviceEnvironment = *executionEnvironment.rootDeviceEnvironments[0];
     auto hwInfo = *rootDeviceEnvironment.getHardwareInfo();
-    auto targetDevice = getTargetDevice(rootDeviceEnvironment);
     auto &compilerProductHelper = rootDeviceEnvironment.getHelper<CompilerProductHelper>();
     compilerProductHelper.adjustHwInfoForIgc(hwInfo);
+
+    auto targetDevice = getTargetDevice(rootDeviceEnvironment);
 
     EXPECT_TRUE(validateTargetDevice(targetDevice, NEO::Elf::EI_CLASS_32, hwInfo.platform.eProductFamily, hwInfo.platform.eRenderCoreFamily, AOT::UNKNOWN_ISA, {}));
 }
@@ -614,22 +618,22 @@ version: '100'
 
 TEST(ExtractZeInfoKernelSections, GivenKnownSectionsThenCapturesThemProperly) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env:   
+    execution_env:
       grf_count: 128
       simd_size: 32
     debug_env:
       sip_surface_bti: 0
-    payload_arguments: 
+    payload_arguments:
       - arg_type:        global_id_offset
         offset:          0
         size:            12
-    per_thread_payload_arguments: 
+    per_thread_payload_arguments:
       - arg_type:        local_id
         offset:          0
         size:            192
-    binding_table_indices: 
+    binding_table_indices:
       - bti_value:       0
         arg_index:       0
     per_thread_memory_buffers:
@@ -1164,9 +1168,9 @@ kernels:
 
 TEST(ExtractZeInfoKernelSections, GivenUnknownSectionThenEmitsAnError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    apple : 
+    apple :
         - red
         - green
 ...
@@ -1902,9 +1906,9 @@ kernels:
 }
 TEST(ReadZeInfoExecutionEnvironment, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env: 
+    execution_env:
         barrier_count : 7
         disable_mid_thread_preemption : true
         grf_count : 13
@@ -1930,6 +1934,7 @@ kernels:
         work_group_walk_order_dimensions: [0, 1, 2]
         thread_scheduling_mode: age_based
         indirect_stateless_count: 2
+        has_lsc_stores_with_non_default_l1_cache_controls: true
 ...
 )===";
 
@@ -1977,13 +1982,14 @@ kernels:
     using ThreadSchedulingMode = NEO::Zebin::ZeInfo::Types::Kernel::ExecutionEnv::ThreadSchedulingMode;
     EXPECT_EQ(ThreadSchedulingMode::ThreadSchedulingModeAgeBased, execEnv.threadSchedulingMode);
     EXPECT_EQ(2, execEnv.indirectStatelessCount);
+    EXPECT_TRUE(execEnv.hasLscStoresWithNonDefaultL1CacheControls);
 }
 
 TEST(ReadZeInfoExecutionEnvironment, GivenUnknownEntryThenEmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env: 
+    execution_env:
         simd_size : 8
         something_new : 36
 ...
@@ -2007,7 +2013,7 @@ kernels:
 
 TEST(ReadZeInfoExecutionEnvironment, GivenActualKernelStartOffsetThenDontTreatItAsInvalidEntry) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     execution_env:
         simd_size : 8
@@ -2032,9 +2038,9 @@ kernels:
 
 TEST(ReadZeInfoExecutionEnvironment, GivenInvalidValueForKnownEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env: 
+    execution_env:
         simd_size : true
 ...
 )===";
@@ -2056,9 +2062,9 @@ kernels:
 
 TEST(ReadZeInfoExecutionEnvironment, GivenInvalidLengthForKnownCollectionEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env: 
+    execution_env:
         required_work_group_size: [5, 2]
 ...
 )===";
@@ -2080,7 +2086,7 @@ kernels:
 
 TEST(ReadZeInfoAttributes, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     user_attributes:
       intel_reqd_sub_group_size: 16
@@ -2090,6 +2096,7 @@ kernels:
       work_group_size_hint: [256, 2, 1]
       new_user_hint: new_user_hint_value
       invalid_kernel: invalid_kernel_reason
+      intel_reqd_thread_group_dispatch_size: 8
 ...
 )===";
 
@@ -2121,11 +2128,12 @@ kernels:
     EXPECT_TRUE(equals(attributes.otherHints[0].first, "new_user_hint"));
     EXPECT_TRUE(equals(attributes.otherHints[0].second, "new_user_hint_value"));
     EXPECT_TRUE(equals(attributes.invalidKernel.value(), "invalid_kernel_reason"));
+    EXPECT_EQ(8, attributes.intelReqdThreadgroupDispatchSize.value());
 }
 
 TEST(ReadZeInfoDebugEnvironment, givenSipSurfaceBtiEntryThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     debug_env:
         sip_surface_bti: 0
@@ -2151,7 +2159,7 @@ kernels:
 
 TEST(ReadZeInfoDebugEnvironment, givenSipSurfaceOffsetEntryThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     debug_env:
         sip_surface_offset: 0
@@ -2177,7 +2185,7 @@ kernels:
 
 TEST(ReadZeInfoDebugEnvironment, givenUnknownEntryThenEmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     debug_env:
         sip_surface_bti: 0
@@ -2202,7 +2210,7 @@ kernels:
 
 TEST(ReadZeInfoDebugEnvironment, givenInvalidValueForKnownEntryThenFail) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     debug_env:
         sip_surface_bti: any
@@ -2228,7 +2236,7 @@ TEST_F(decodeZeInfoKernelEntryTest, givenValidDebugEnvironmentWithInvalidSipSurf
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
       debug_env:
         sip_surface_bti: 123
@@ -2248,7 +2256,7 @@ TEST_F(decodeZeInfoKernelEntryTest, givenValidDebugEnvironmentWithSIPSurfaceBTIS
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
       debug_env:
         sip_surface_bti: 0
@@ -2354,7 +2362,7 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenKernelAttributesWhenPopulatingKernelDescriptorThenKernelLanguageSourcesAreSetAccordingly) {
     ConstStringRef zeinfo = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     execution_env:
         simd_size: 8
@@ -2362,6 +2370,7 @@ kernels:
       intel_reqd_sub_group_size: 16
       intel_reqd_workgroup_walk_order: [0, 1, 2]
       reqd_work_group_size: [256, 2, 1]
+      intel_reqd_thread_group_dispatch_size: 8
       vec_type_hint:   uint
       work_group_size_hint: [256, 2, 1]
       new_user_hint: new_user_hint_value
@@ -2372,8 +2381,9 @@ kernels:
     EXPECT_TRUE(warnings.empty()) << warnings;
     EXPECT_TRUE(errors.empty()) << errors;
 
-    EXPECT_STREQ("new_user_hint(new_user_hint_value) intel_reqd_sub_group_size(16) intel_reqd_workgroup_walk_order(0,1,2) reqd_work_group_size(256,2,1) work_group_size_hint(256,2,1) vec_type_hint(uint)", kernelDescriptor->kernelMetadata.kernelLanguageAttributes.c_str());
+    EXPECT_STREQ("new_user_hint(new_user_hint_value) intel_reqd_sub_group_size(16) intel_reqd_workgroup_walk_order(0,1,2) reqd_work_group_size(256,2,1) work_group_size_hint(256,2,1) vec_type_hint(uint) intel_reqd_thread_group_dispatch_size(8)", kernelDescriptor->kernelMetadata.kernelLanguageAttributes.c_str());
     EXPECT_EQ(16U, kernelDescriptor->kernelMetadata.requiredSubGroupSize);
+    EXPECT_EQ(8U, kernelDescriptor->kernelMetadata.requiredThreadGroupDispatchSize);
     EXPECT_FALSE(kernelDescriptor->kernelAttributes.flags.isInvalid);
 }
 
@@ -2403,7 +2413,7 @@ TEST(PopulateKernelSourceAttributes, GivenRequiredWalkOrderAttributeWhenPopulati
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenUnknownAttributeWhenPopulatingKernelDescriptorThenErrorIsReturned) {
     ConstStringRef zeinfo = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
     execution_env:
         simd_size: 8
@@ -2442,9 +2452,9 @@ TEST(ReadEnumChecked, GivenInvalidEnumStringThenReturnErrorAndFail) {
 
 TEST(ReadZeInfoPerThreadPayloadArguments, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_payload_arguments: 
+    per_thread_payload_arguments:
         - arg_type : packed_local_ids
           offset : 8
           size : 16
@@ -2479,9 +2489,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadPayloadArguments, GivenUnknownEntryThenEmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_payload_arguments: 
+    per_thread_payload_arguments:
         - arg_type : packed_local_ids
           offset : 8
           size : 16
@@ -2507,9 +2517,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadPayloadArguments, GivenInvalidValueForKnownEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_payload_arguments: 
+    per_thread_payload_arguments:
         - arg_type : packed_local_ids
           offset : true
           size : 16
@@ -2533,9 +2543,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadPayloadArguments, GivenZeroSizeEntryThenSkipsItAndEmitsWarning) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_payload_arguments: 
+    per_thread_payload_arguments:
         - arg_type : packed_local_ids
           offset : 16
           size : 0
@@ -2560,12 +2570,12 @@ kernels:
 
 TEST(ReadZeInfoPayloadArguments, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    payload_arguments: 
+    payload_arguments:
         - arg_type : arg_bypointer
           offset : 16
-          size : 8	
+          size : 8
           arg_index	: 1
           addrmode : stateless
           addrspace	: global
@@ -2630,9 +2640,9 @@ kernels:
 
 TEST(ReadZeInfoPayloadArguments, GivenUnknownEntryThenEmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    payload_arguments: 
+    payload_arguments:
         - arg_type : arg_byvalue
           offset : 24
           size : 4
@@ -2699,9 +2709,9 @@ kernels:
 
 TEST(ReadZeInfoBindingTableIndices, GivenInvalidValueForKnownEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    payload_arguments: 
+    payload_arguments:
         - arg_type : arg_byvalue
           offset : 24
           size : true
@@ -2727,9 +2737,9 @@ kernels:
 
 TEST(ReadZeInfoBindingTableIndices, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    binding_table_indices: 
+    binding_table_indices:
         - bti_value : 1
           arg_index : 7
         - bti_value : 5
@@ -2761,9 +2771,9 @@ kernels:
 
 TEST(ReadZeInfoBindingTableIndices, GivenUnknownEntryThenEmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    binding_table_indices: 
+    binding_table_indices:
         - bti_value : 1
           arg_index : 7
           something_new : true
@@ -2791,9 +2801,9 @@ kernels:
 
 TEST(ReadZeInfoPayloadArguments, GivenInvalidValueForKnownEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    binding_table_indices: 
+    binding_table_indices:
         - bti_value : 1
           arg_index : any
 ...
@@ -2816,9 +2826,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadMemoryBuffers, GivenValidYamlEntriesThenSetProperMembers) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_memory_buffers: 
+    per_thread_memory_buffers:
       - type:            scratch
         usage:           single_space
         size:            64
@@ -2867,11 +2877,11 @@ kernels:
 
 TEST(ReadZeInfoPerThreadMemoryBuffers, GivenPerSimtThreadPrivateMemoryThenSetsProperFlag) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    execution_env:   
+    execution_env:
       simd_size: 16
-    per_thread_memory_buffers: 
+    per_thread_memory_buffers:
       - type:            global
         usage:           private_space
         size:            128
@@ -2902,9 +2912,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadMemoryBuffers, GivenUnknownEntryThenEmmitsError) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_memory_buffers: 
+    per_thread_memory_buffers:
       - type:            scratch
         usage:           single_space
         size:            64
@@ -2934,9 +2944,9 @@ kernels:
 
 TEST(ReadZeInfoPerThreadMemoryBuffers, GivenInvalidValueForKnownEntryThenFails) {
     NEO::ConstStringRef yaml = R"===(---
-kernels:         
+kernels:
   - name:            some_kernel
-    per_thread_memory_buffers: 
+    per_thread_memory_buffers:
       - type:            scratch
         usage:           single_space
         size:            eight
@@ -3464,7 +3474,7 @@ TEST(DecodeSingleDeviceBinaryZebin, WhenDecodeZeInfoFailsThenDecodingFails) {
     auto &gfxCoreHelper = mockExecutionEnvironment.rootDeviceEnvironments[0]->getHelper<NEO::GfxCoreHelper>();
     std::string brokenZeInfo = "version : \'" + versionToString(Zebin::ZeInfo::zeInfoDecoderVersion) + R"===('
 kernels:
-    - 
+    -
 )===";
     ZebinTestData::ValidEmptyProgram zebin;
     zebin.removeSection(NEO::Zebin::Elf::SectionHeaderTypeZebin::SHT_ZEBIN_ZEINFO, NEO::Zebin::Elf::SectionNames::zeInfo);
@@ -3613,7 +3623,7 @@ functions:
     - name: fun
       execution_env:
         grf_count: 128
-        simd_size: 8 
+        simd_size: 8
 )===";
 
     ZebinTestData::ValidEmptyProgram zebin;
@@ -3677,7 +3687,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenMinimalExecutionEnvThenPopulateKernelDe
     ConstStringRef zeinfo = R"===(
     kernels:
         - name : some_kernel
-          execution_env:   
+          execution_env:
             simd_size: 32
             grf_count: 128
 )===";
@@ -3743,10 +3753,10 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidPerThreadPayloadArgYamlEntriesTh
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         grf_count: 128
         simd_size: 32
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        local_id
           offset:          aaa
           size:            8
@@ -3761,10 +3771,10 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidPayloadArgYamlEntriesThenFails) 
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         grf_count: 128
         simd_size: 32
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        global_id_offset
           offset:          aaa
           size:            12
@@ -3779,10 +3789,10 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidPerThreadMemoryBufferYamlEntries
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         grf_count: 128
         simd_size: 32
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
         - type:        scratch
           usage:       spill_fill_space
           size:        eight
@@ -3797,7 +3807,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidSimdSizeThenFails) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 7
 )===";
     auto err = decodeZeInfoKernelEntry(zeinfo);
@@ -3812,7 +3822,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidSimdSizeThenSetsItCorrectly) {
         std::string zeinfo = R"===(
     kernels:
         - name : some_kernel
-          execution_env:   
+          execution_env:
             simd_size: )===" +
                              std::to_string(simdSize) + "\n";
         auto err = decodeZeInfoKernelEntry(zeinfo);
@@ -3851,7 +3861,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidThreadSchedulingModesThenPopulateC
         std::string zeinfo = R"===(
         kernels:
             - name: some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
                 thread_scheduling_mode: )===" +
                              str.str() +
@@ -3870,9 +3880,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidLocalIdThenAlignUpChannelSizeToGrf
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 16
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        local_id
           offset:          0
           size:            192
@@ -3890,9 +3900,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidPerThreadArgThenPopulatesKernelDes
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 32
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        local_id
           offset:          0
           size:            192
@@ -3908,9 +3918,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidPayloadArgThenFails) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        local_id
           offset:          0
           size:            12
@@ -3928,9 +3938,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenZebinAppendElwsThenInjectsElwsArg) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        local_size
           offset:          16
           size:            12
@@ -3953,9 +3963,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenInvalidBindingTableYamlEntriesThenFails
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        arg_byvalue
           offset:          0
           size:            12
@@ -3974,9 +3984,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidBindingTableEntriesThenGeneratesSs
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        arg_bypointer
           offset:          0
           size:            8
@@ -4013,9 +4023,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenBtiEntryForWrongArgTypeThenFail) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        arg_byvalue
           offset:          0
           size:            12
@@ -4034,9 +4044,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidArgSamplerThenGeneratesDsh) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type:        arg_bypointer
           size:            8
           addrspace:       sampler
@@ -4067,11 +4077,11 @@ kernels:
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsGlobalAndUsageIsNotPrivateThenFails) {
     {
         ConstStringRef zeinfo = R"===(
-  kernels:         
+  kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            global
             usage:           spill_fill_space
             size:            64
@@ -4085,11 +4095,11 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsGlobalAn
 
     {
         ConstStringRef zeinfo = R"===(
-  kernels:         
+  kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            global
             usage:           single_space
             size:            64
@@ -4104,11 +4114,11 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsGlobalAn
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsSlmThenFails) {
     ConstStringRef zeinfo = R"===(
-  kernels:         
+  kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            slm
             usage:           spill_fill_space
             size:            64
@@ -4122,11 +4132,11 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsSlmThenF
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenTypeIsGlobalAndUsageIsPrivateThenSetsProperFieldsInDescriptor) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            global
             usage:           private_space
             size:            256
@@ -4140,11 +4150,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, givenPerSimtThreadBufferWhenPopulatingThenCalculatesCorrectSize) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            global
             usage:           private_space
             size:            256
@@ -4159,12 +4169,12 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferOfSizeBiggerThanMinimalWhenTypeIsScratchAndSimtThreadThenSetsProperFieldsInDescriptor) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
         spill_size: 2048
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           spill_fill_space
             size:            2048
@@ -4181,12 +4191,12 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferBiggerThanMinimalWhenSlotAndSimtThreadIsProvidedThenSetsProperFieldsInDescriptorInCorrectSlot) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
         private_size: 2048
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            2048
@@ -4204,13 +4214,13 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryForSpillAndPrivateDefinedInSeparateFieldsThenProperFieldsInDescriptorAreSet) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
         private_size: 256
         spill_size: 512
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           single_space
             size:            1024
@@ -4231,13 +4241,13 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryForSpillAndPrivateDefinedInOlderZeInfoThenFallbackToLegacySlotMeaning) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
         private_size: 256
         spill_size: 512
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           single_space
             size:            1024
@@ -4258,11 +4268,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferOfSizeBiggerThanMinimalWhenTypeIsScratchThenSetsProperFieldsInDescriptor) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            1540
@@ -4277,11 +4287,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenSlotIsProvidedThenSetsProperFieldsInDescriptorInCorrectSlot) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            1024
@@ -4297,11 +4307,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWhenSlotIsInvalidThenFails) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            512
@@ -4315,11 +4325,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWithInvalidSizeThenErrorIsReturned) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            0
@@ -4332,11 +4342,11 @@ kernels:
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenPerThreadMemoryBufferWithMultipleScratchEntriesForTheSameSlotThenFails) {
     ConstStringRef zeinfo = R"===(
-kernels:         
+kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_memory_buffers: 
+      per_thread_memory_buffers:
           - type:            scratch
             usage:           private_space
             size:            512
@@ -4354,7 +4364,7 @@ TEST(DecodeZebinTest, GivenKernelWithoutCorrespondingTextSectionThenFail) {
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
 )===";
     NEO::ProgramInfo programInfo;
@@ -4405,7 +4415,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenValidExecutionEnvironmentThenPopulateKe
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         barrier_count : 7
         disable_mid_thread_preemption : true
         grf_count : 13
@@ -4487,9 +4497,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeLocalIdWhenOffsetIsNonZeroThenFa
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        local_id
           offset:          4
           size:            192
@@ -4504,9 +4514,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeLocalIdWhenSizeIsInvalidThenFail
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        local_id
           offset:          0
           size:            7
@@ -4526,10 +4536,10 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeLocalIdWhenSizeIsValidThenCalcul
             std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: )===" +
                                  std::to_string(simdSize) + R"===(
-              per_thread_payload_arguments: 
+              per_thread_payload_arguments:
                 - arg_type:        local_id
                   offset:          0
                   size:            )===" +
@@ -4554,9 +4564,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypePackedLocalIdWhenOffsetIsNonZero
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 1
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        packed_local_ids
           offset:          4
           size:            6
@@ -4571,9 +4581,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypePackedLocalIdWhenSizeIsInvalidTh
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 1
-      per_thread_payload_arguments: 
+      per_thread_payload_arguments:
         - arg_type:        packed_local_ids
           offset:          0
           size:            1
@@ -4593,10 +4603,10 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypePackedLocalIdWhenSizeIsValidThen
             std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: )===" +
                                  std::to_string(simdSize) + R"===(
-              per_thread_payload_arguments: 
+              per_thread_payload_arguments:
                 - arg_type:        packed_local_ids
                   offset:          0
                   size:            )===" +
@@ -4631,12 +4641,12 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenBufferPointerArgWhenAddressSpaceIsKnown
         std::string zeinfo = R"===(
         kernels:
             - name : 'some_kernel'
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : arg_bypointer
                   offset : 16
-                  size : 8	
+                  size : 8
                   arg_index	: 0
                   addrmode : stateless
                   )===" + (addressSpace.first.empty() ? "" : ("addrspace	: " + addressSpace.first.str())) +
@@ -4659,9 +4669,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPointerArgWhenAddressSpaceIsImageThenPo
     ConstStringRef zeinfo = R"===(
     kernels:
         - name : 'some_kernel'
-            execution_env:   
+            execution_env:
                 simd_size: 32
-            payload_arguments: 
+            payload_arguments:
               - arg_type : arg_bypointer
                 arg_index	: 0
                 addrspace:       image
@@ -4690,12 +4700,12 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPointerArgWhenAccessQualifierIsKnownThe
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : arg_bypointer
                   offset : 16
-                  size : 8	
+                  size : 8
                   arg_index	: 0
                   addrmode : stateless
                   )===" + (accessQualifier.first.empty() ? "" : ("access_type	: " + accessQualifier.first.str())) +
@@ -4718,12 +4728,12 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenNonPointerArgWhenAddressSpaceIsStateles
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : arg_bypointer
                   offset : 16
-                  size : 8	
+                  size : 8
                   arg_index	: 0
                   addrmode : stateless
                   addrspace : )===" +
@@ -4741,12 +4751,12 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPointerArgWhenMemoryAddressingModeIsUkn
     ConstStringRef zeinfo = R"===(
 kernels:
     - name : some_kernel
-      execution_env:   
+      execution_env:
         simd_size: 8
-      payload_arguments: 
+      payload_arguments:
         - arg_type : arg_bypointer
             offset : 16
-            size : 8	
+            size : 8
             arg_index	: 0
 )===";
     auto err = decodeZeInfoKernelEntry(zeinfo);
@@ -4767,12 +4777,12 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPointerArgWhenMemoryAddressingModeIsKno
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : arg_bypointer
                   offset : 16
-                  size : 8	
+                  size : 8
                   arg_index	: 0
                   )===" + (addressingMode.first.empty() ? "" : ("addrmode	: " + addressingMode.first.str())) +
                              R"===(
@@ -4833,6 +4843,7 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenPointerArgWhenMemoryAddressingModeIsKno
                 break;
             case AddressingMode::memoryAddressingModeBindless:
                 EXPECT_EQ(24U, argAsImage.bindless);
+                EXPECT_EQ(8U, argAsImage.size);
                 EXPECT_EQ(32U, argAsSampler.bindless);
                 break;
             }
@@ -4844,9 +4855,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeLocalSizeWhenArgSizeIsInvalidThe
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : local_size
                   offset : 16
                   size : 7
@@ -4864,9 +4875,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeLocalSizeWhenArgSizeValidThenPop
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : local_size
                   offset : 16
                   size : )===" +
@@ -4888,9 +4899,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeGlobaIdOffsetWhenArgSizeIsInvali
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : global_id_offset
                   offset : 16
                   size : 7
@@ -4953,9 +4964,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeGroupCountWhenArgSizeIsInvalidTh
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : group_count
                   offset : 16
                   size : 7
@@ -4973,9 +4984,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeGroupCountWhenArgSizeValidThenPo
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : group_count
                   offset : 16
                   size : )===" +
@@ -4997,9 +5008,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeEnqueuedLocalSizeWhenArgSizeIsIn
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : enqueued_local_size
                   offset : 16
                   size : 7
@@ -5038,9 +5049,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeEnqueuedLocalSizeWhenArgSizeVali
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : enqueued_local_size
                   offset : 16
                   size : )===" +
@@ -5062,9 +5073,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeGlobalSizeWhenArgSizeIsInvalidTh
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : global_size
                   offset : 16
                   size : 7
@@ -5079,9 +5090,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsInvalidThenF
     ConstStringRef zeInfoRegionGroupSize = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_size
                   offset : 16
                   size : 7
@@ -5094,9 +5105,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsInvalidThenF
     ConstStringRef zeInfoRegionGroupDim = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_dimension
                   offset : 16
                   size : 7
@@ -5109,9 +5120,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsInvalidThenF
     ConstStringRef zeInfoRegionGroupCount = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_wg_count
                   offset : 16
                   size : 7
@@ -5126,9 +5137,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsCorrectThenR
     ConstStringRef zeInfoRegionGroupSize = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_size
                   offset : 16
                   size : 12
@@ -5145,9 +5156,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsCorrectThenR
     ConstStringRef zeInfoRegionGroupDim = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_dimension
                   offset : 16
                   size : 4
@@ -5163,9 +5174,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsCorrectThenR
     ConstStringRef zeInfoRegionGroupCount = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_wg_count
                   offset : 16
                   size : 4
@@ -5181,9 +5192,9 @@ TEST_F(decodeZeInfoKernelEntryTest, givenRegionArgTypesWhenArgSizeIsCorrectThenR
     ConstStringRef zeInfoRegionGroupBarrier = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : region_group_barrier_buffer
                   offset : 16
                   size : 8
@@ -5204,9 +5215,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeGlobalSizeWhenArgSizeValidThenPo
         std::string zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type : global_size
                   offset : 16
                   size : )===" +
@@ -5228,9 +5239,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeBufferOffsetWhenOffsetAndSizeVal
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type: buffer_offset
                   offset: 8
                   size: 4
@@ -5265,7 +5276,7 @@ TEST_F(decodeZeInfoKernelEntryTest, givenPureStatefulArgWithBufferAddressWhenThe
                   arg_index: 0
               binding_table_indices:
                 - bti_value: 0
-                  arg_index: 0         
+                  arg_index: 0
 )===";
     auto err = decodeZeInfoKernelEntry(zeinfo);
     EXPECT_EQ(NEO::DecodeError::success, err);
@@ -5284,9 +5295,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenNoArgsThenPopulatesKernelDescriptor) {
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              
+
 )===";
     auto err = decodeZeInfoKernelEntry(zeinfo);
     EXPECT_EQ(NEO::DecodeError::success, err);
@@ -5338,9 +5349,9 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeWorkDimensionsWhenSizeIsValidThe
     ConstStringRef zeinfo = R"===(
         kernels:
             - name : some_kernel
-              execution_env:   
+              execution_env:
                 simd_size: 32
-              payload_arguments: 
+              payload_arguments:
                 - arg_type: work_dimensions
                   offset: 32
                   size: 4
@@ -5350,6 +5361,27 @@ TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeWorkDimensionsWhenSizeIsValidThe
     EXPECT_TRUE(errors.empty()) << errors;
     EXPECT_TRUE(warnings.empty()) << warnings;
     EXPECT_EQ(32U, kernelDescriptor->payloadMappings.dispatchTraits.workDim);
+}
+
+TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeBufferSizeWhenSizeIsValidThenPopulatesKernelDescriptor) {
+    ConstStringRef zeinfo = R"===(
+        kernels:
+            - name : some_kernel
+              execution_env:
+                simd_size: 32
+              payload_arguments:
+                - arg_type: buffer_size
+                  offset: 32
+                  size: 8
+                  arg_index: 0
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+    EXPECT_TRUE(errors.empty()) << errors;
+    EXPECT_TRUE(warnings.empty()) << warnings;
+    ASSERT_EQ(1U, kernelDescriptor->payloadMappings.explicitArgs.size());
+    const auto &arg = kernelDescriptor->payloadMappings.explicitArgs[0].as<ArgDescPointer>();
+    EXPECT_EQ(32, arg.bufferSize);
 }
 
 TEST_F(decodeZeInfoKernelEntryTest, GivenArgTypeImplicitArgBufferWhenPopulatingKernelDescriptorThenProperOffsetIsSetAndImplicitArgsAreRequired) {
@@ -5369,6 +5401,46 @@ kernels:
     EXPECT_TRUE(warnings.empty()) << warnings;
     EXPECT_EQ(4u, kernelDescriptor->payloadMappings.implicitArgs.implicitArgsBuffer);
     EXPECT_TRUE(kernelDescriptor->kernelAttributes.flags.requiresImplicitArgs);
+}
+
+TEST_F(decodeZeInfoKernelEntryTest, GivenExecEnvRequireImplicitArgBufferTrueWhenPopulatingKernelDescriptorThenImplicitArgsAreRequired) {
+    ConstStringRef zeinfo = R"===(
+kernels:
+    - name : some_kernel
+      execution_env:
+        simd_size: 32
+        require_iab: true
+      payload_arguments:
+        - arg_type: work_dimensions
+            offset: 32
+            size: 4
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+    EXPECT_TRUE(errors.empty()) << errors;
+    EXPECT_TRUE(warnings.empty()) << warnings;
+    EXPECT_TRUE(NEO::isUndefinedOffset(kernelDescriptor->payloadMappings.implicitArgs.implicitArgsBuffer));
+    EXPECT_TRUE(kernelDescriptor->kernelAttributes.flags.requiresImplicitArgs);
+}
+
+TEST_F(decodeZeInfoKernelEntryTest, GivenExecEnvRequireImplicitArgBufferFalseWhenPopulatingKernelDescriptorThenImplicitArgsAreNotRequired) {
+    ConstStringRef zeinfo = R"===(
+kernels:
+    - name : some_kernel
+      execution_env:
+        simd_size: 32
+        require_iab: false
+      payload_arguments:
+        - arg_type: work_dimensions
+            offset: 32
+            size: 4
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+    EXPECT_TRUE(errors.empty()) << errors;
+    EXPECT_TRUE(warnings.empty()) << warnings;
+    EXPECT_TRUE(NEO::isUndefinedOffset(kernelDescriptor->payloadMappings.implicitArgs.implicitArgsBuffer));
+    EXPECT_FALSE(kernelDescriptor->kernelAttributes.flags.requiresImplicitArgs);
 }
 
 TEST(PopulateArgDescriptorCrossthreadPayload, GivenArgTypeWorkDimensionsWhenSizeIsInvalidThenPopulateKernelDescriptorFails) {
@@ -6532,7 +6604,7 @@ TEST(ValidateTargetDeviceTests, givenMismatechAotConfigWhenValidatingTargetDevic
     targetDevice.aotConfig.value = 0x00001234;
     targetDevice.maxPointerSizeInBytes = 8u;
 
-    auto mismatchedAotConfig = static_cast<AOT::PRODUCT_CONFIG>(0x00004321); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange), NEO-12901
+    auto mismatchedAotConfig = static_cast<AOT::PRODUCT_CONFIG>(0x00004321); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
     Zebin::Elf::ZebinTargetFlags targetMetadata;
     auto res = validateTargetDevice(targetDevice, Zebin::Elf::EI_CLASS_64, productFamily, renderCoreFamily, mismatchedAotConfig, targetMetadata);
     EXPECT_FALSE(res);
@@ -6629,11 +6701,11 @@ TEST(ValidateTargetDeviceTests, givenDeviceInCompatModeWhenValidatingTargetDevic
                                             productConfigToCompare,
                                             targetMetadata);
 
-            auto prodConfCompatPairItr = AOT::compatibilityMapping.find(productConfigToCompare);
+            auto prodConfCompatPairItr = AOT::getCompatibilityMapping().find(productConfigToCompare);
 
             if (targetDevice.aotConfig.value == productConfigToCompare) {
                 EXPECT_TRUE(res);
-            } else if (prodConfCompatPairItr != AOT::compatibilityMapping.end()) {
+            } else if (prodConfCompatPairItr != AOT::getCompatibilityMapping().end()) {
                 auto prodConfVec = prodConfCompatPairItr->second;
                 auto found = std::find(prodConfVec.begin(), prodConfVec.end(), currentDevice.second);
                 if (found != prodConfVec.end()) {
@@ -7068,6 +7140,75 @@ kernels:
     ASSERT_EQ(192u, kernelDescriptor->generatedSsh.size());
 }
 
+TEST_F(decodeZeInfoKernelEntryTest, GivenImageArgWithReadOnlyAccessWhenPopulatingKernelDescriptorThenHasImageWriteArgIsFalse) {
+    ConstStringRef zeinfo = R"===(
+kernels:
+    - name : some_kernel
+      execution_env:
+        simd_size: 32
+      payload_arguments:
+        - arg_type:        arg_bypointer
+          offset:          24
+          size:            8
+          arg_index:       0
+          addrmode:        bindless
+          addrspace:       image
+          access_type:     readonly
+          image_type:      image_2d
+...
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+
+    EXPECT_FALSE(kernelDescriptor->kernelAttributes.hasImageWriteArg);
+}
+
+TEST_F(decodeZeInfoKernelEntryTest, GivenImageArgWithWriteOnlyAccessWhenPopulatingKernelDescriptorThenHasImageWriteArgIsTrue) {
+    ConstStringRef zeinfo = R"===(
+kernels:
+    - name : some_kernel
+      execution_env:
+        simd_size: 32
+      payload_arguments:
+        - arg_type:        arg_bypointer
+          offset:          32
+          size:            8
+          arg_index:       1
+          addrmode:        bindless
+          addrspace:       image
+          access_type:     writeonly
+          image_type:      image_2d
+...
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+
+    EXPECT_TRUE(kernelDescriptor->kernelAttributes.hasImageWriteArg);
+}
+
+TEST_F(decodeZeInfoKernelEntryTest, GivenImageArgWithReadWriteAccessWhenPopulatingKernelDescriptorThenHasImageWriteArgIsTrue) {
+    ConstStringRef zeinfo = R"===(
+kernels:
+    - name : some_kernel
+      execution_env:
+        simd_size: 32
+      payload_arguments:
+        - arg_type:        arg_bypointer
+          offset:          24
+          size:            8
+          arg_index:       0
+          addrmode:        bindless
+          addrspace:       image
+          access_type:     readwrite
+          image_type:      image_2d
+...
+)===";
+    auto err = decodeZeInfoKernelEntry(zeinfo);
+    EXPECT_EQ(NEO::DecodeError::success, err);
+
+    EXPECT_TRUE(kernelDescriptor->kernelAttributes.hasImageWriteArg);
+}
+
 TEST(PopulateInlineSamplers, GivenInvalidSamplerIndexThenPopulateInlineSamplersFails) {
     NEO::KernelDescriptor kd;
     std::string errors, warnings;
@@ -7078,6 +7219,42 @@ TEST(PopulateInlineSamplers, GivenInvalidSamplerIndexThenPopulateInlineSamplersF
     auto err = NEO::Zebin::ZeInfo::populateKernelInlineSampler(kd, inlineSamplerSrc, errors, warnings);
     EXPECT_EQ(NEO::DecodeError::invalidBinary, err);
     EXPECT_FALSE(errors.empty());
+}
+
+TEST(GenerateDsh, given4SamplersWhenGenerateDSHIsCalledThenDshIsGeneratedCorrectly) {
+
+    NEO::KernelDescriptor kd;
+    auto numSamplers = 4u;
+    kd.payloadMappings.samplerTable.numSamplers = numSamplers;
+    uint32_t samplerBorderColorStateSize = 64u;
+    uint32_t samplerStateSize = 16u;
+    NEO::Zebin::ZeInfo::generateDSH(kd, samplerStateSize, samplerBorderColorStateSize);
+
+    EXPECT_EQ(numSamplers, kd.payloadMappings.samplerTable.numSamplers);
+    EXPECT_EQ(samplerBorderColorStateSize, kd.payloadMappings.samplerTable.tableOffset);
+    EXPECT_EQ(0u, kd.payloadMappings.samplerTable.borderColor);
+
+    size_t dshSize = samplerBorderColorStateSize + numSamplers * samplerStateSize;
+    auto expectedSize = samplerBorderColorStateSize > 0 ? alignUp(dshSize, samplerBorderColorStateSize) : dshSize;
+    EXPECT_EQ(expectedSize, kd.generatedDsh.size());
+}
+
+TEST(GenerateDsh, given4SamplersWithoutSamplerBorderColorStateWhenGenerateDSHIsCalledThenDshIsGeneratedCorrectly) {
+
+    NEO::KernelDescriptor kd;
+    auto numSamplers = 4u;
+    kd.payloadMappings.samplerTable.numSamplers = numSamplers;
+    uint32_t samplerBorderColorStateSize = 0u;
+    uint32_t samplerStateSize = 16u;
+    NEO::Zebin::ZeInfo::generateDSH(kd, samplerStateSize, samplerBorderColorStateSize);
+
+    EXPECT_EQ(numSamplers, kd.payloadMappings.samplerTable.numSamplers);
+    EXPECT_EQ(samplerBorderColorStateSize, kd.payloadMappings.samplerTable.tableOffset);
+    EXPECT_EQ(0u, kd.payloadMappings.samplerTable.borderColor);
+
+    size_t dshSize = samplerBorderColorStateSize + numSamplers * samplerStateSize;
+    auto expectedSize = samplerBorderColorStateSize > 0 ? alignUp(dshSize, samplerBorderColorStateSize) : dshSize;
+    EXPECT_EQ(expectedSize, kd.generatedDsh.size());
 }
 
 TEST(PopulateInlineSamplers, GivenInvalidAddrModeThenPopulateInlineSamplersFails) {

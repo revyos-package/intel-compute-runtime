@@ -13,7 +13,7 @@
 #include "shared/source/os_interface/linux/drm_wrappers.h"
 #include "shared/source/utilities/stackvec.h"
 
-#include "igfxfmid.h"
+#include "neo_igfxfmid.h"
 
 #include <cinttypes>
 #include <cstddef>
@@ -46,6 +46,7 @@ struct MemoryRegion {
     MemoryClassInstance region;
     uint64_t probedSize;
     uint64_t unallocatedSize;
+    uint64_t cpuVisibleSize;
     std::bitset<4> tilesMask;
 };
 
@@ -129,6 +130,7 @@ class IoctlHelper {
     virtual uint32_t getPreferredLocationAdvise() = 0;
     virtual std::optional<MemoryClassInstance> getPreferredLocationRegion(PreferredLocation memoryLocation, uint32_t memoryInstance) = 0;
     virtual bool setVmBoAdvise(int32_t handle, uint32_t attribute, void *region) = 0;
+    virtual bool setVmSharedSystemMemAdvise(uint64_t handle, const size_t size, const uint32_t attribute, const uint64_t param, const std::vector<uint32_t> &vmIds) { return true; }
     virtual bool setVmBoAdviseForChunking(int32_t handle, uint64_t start, uint64_t length, uint32_t attribute, void *region) = 0;
     virtual bool setVmPrefetch(uint64_t start, uint64_t length, uint32_t region, uint32_t vmId) = 0;
     virtual bool setGemTiling(void *setTiling) = 0;
@@ -152,11 +154,9 @@ class IoctlHelper {
     virtual int vmBind(const VmBindParams &vmBindParams) = 0;
     virtual int vmUnbind(const VmBindParams &vmBindParams) = 0;
     virtual int getResetStats(ResetStats &resetStats, uint32_t *status, ResetStatsFault *resetStatsFault) = 0;
-    virtual bool getEuStallProperties(std::array<uint64_t, 12u> &properties, uint64_t dssBufferSize,
-                                      uint64_t samplingRate, uint64_t pollPeriod, uint64_t engineInstance, uint64_t notifyNReports) = 0;
     virtual bool isEuStallSupported() = 0;
     virtual uint32_t getEuStallFdParameter() = 0;
-    virtual bool perfOpenEuStallStream(uint32_t euStallFdParameter, std::array<uint64_t, 12u> &properties, int32_t *stream) = 0;
+    virtual bool perfOpenEuStallStream(uint32_t euStallFdParameter, uint32_t &samplingPeriodNs, uint64_t engineInstance, uint64_t notifyNReports, uint64_t gpuTimeStampfrequency, int32_t *stream) = 0;
     virtual bool perfDisableEuStallStream(int32_t *stream) = 0;
     virtual UuidRegisterResult registerUuid(const std::string &uuid, uint32_t uuidClass, uint64_t ptr, uint64_t size) = 0;
     virtual UuidRegisterResult registerStringClassUuid(const std::string &uuid, uint64_t ptr, uint64_t size) = 0;
@@ -195,6 +195,11 @@ class IoctlHelper {
     virtual void setupIpVersion();
     virtual bool isImmediateVmBindRequired() const { return false; }
 
+    virtual void configureCcsMode(std::vector<std::string> &files, const std::string expectedFilePrefix, uint32_t ccsMode,
+                                  std::vector<std::tuple<std::string, uint32_t>> &deviceCcsModeVec) = 0;
+
+    void writeCcsMode(const std::string &gtFile, uint32_t ccsMode,
+                      std::vector<std::tuple<std::string, uint32_t>> &deviceCcsModeVec);
     uint32_t getFlagsForPrimeHandleToFd() const;
     virtual std::unique_ptr<MemoryInfo> createMemoryInfo() = 0;
     virtual size_t getLocalMemoryRegionsSize(const MemoryInfo *memoryInfo, uint32_t subDevicesCount, uint32_t deviceBitfield) const = 0;
@@ -220,14 +225,15 @@ class IoctlHelper {
 
     virtual void insertEngineToContextParams(ContextParamEngines<> &contextParamEngines, uint32_t engineId, const EngineClassInstance *engineClassInstance, uint32_t tileId, bool hasVirtualEngines) = 0;
     virtual bool isPreemptionSupported() = 0;
-    virtual int getTileIdFromGtId(int gtId) const = 0;
+    virtual uint32_t getTileIdFromGtId(uint32_t gtId) const = 0;
+    virtual uint32_t getGtIdFromTileId(uint32_t tileId, uint16_t engineClass) const = 0;
 
     virtual bool allocateInterrupt(uint32_t &outHandle) { return false; }
     virtual bool releaseInterrupt(uint32_t handle) { return false; }
 
     virtual uint64_t *getPagingFenceAddress(uint32_t vmHandleId, OsContextLinux *osContext);
-    virtual uint64_t acquireGpuRange(DrmMemoryManager &memoryManager, size_t &size, uint32_t rootDeviceIndex, HeapIndex heapIndex);
-    virtual void releaseGpuRange(DrmMemoryManager &memoryManager, void *address, size_t size, uint32_t rootDeviceIndex);
+    virtual uint64_t acquireGpuRange(DrmMemoryManager &memoryManager, size_t &size, uint32_t rootDeviceIndex, AllocationType allocType, HeapIndex heapIndex);
+    virtual void releaseGpuRange(DrmMemoryManager &memoryManager, void *address, size_t size, uint32_t rootDeviceIndex, AllocationType allocType);
     virtual void *mmapFunction(DrmMemoryManager &memoryManager, void *ptr, size_t size, int prot, int flags, int fd, off_t offset);
     virtual int munmapFunction(DrmMemoryManager &memoryManager, void *ptr, size_t size);
     virtual void registerMemoryToUnmap(DrmAllocation &allocation, void *pointer, size_t size, DrmAllocation::MemoryUnmapFunction unmapFunction);
@@ -235,10 +241,15 @@ class IoctlHelper {
     virtual void syncUserptrAlloc(DrmMemoryManager &memoryManager, GraphicsAllocation &allocation) { return; };
 
     virtual bool queryDeviceParams(uint32_t *moduleId, uint16_t *serverType) { return false; }
+    virtual std::unique_ptr<std::vector<uint32_t>> queryDeviceCaps() { return nullptr; }
 
     virtual bool isTimestampsRefreshEnabled() { return false; }
+    virtual uint32_t getNumProcesses() const { return 1; }
 
     virtual bool makeResidentBeforeLockNeeded() const { return false; }
+    virtual bool hasContextFreqHint() { return false; }
+    virtual void fillExtSetparamLowLatency(GemContextCreateExtSetParam &extSetparam) { return; }
+    virtual bool isSmallBarConfigAllowed() const = 0;
 
   protected:
     Drm &drm;
@@ -267,6 +278,8 @@ class IoctlHelperI915 : public IoctlHelper {
     std::string getFileForMaxGpuFrequency() const override;
     std::string getFileForMaxGpuFrequencyOfSubDevice(int tileId) const override;
     std::string getFileForMaxMemoryFrequencyOfSubDevice(int tileId) const override;
+    void configureCcsMode(std::vector<std::string> &files, const std::string expectedFilePrefix, uint32_t ccsMode,
+                          std::vector<std::tuple<std::string, uint32_t>> &deviceCcsModeVec) override;
     bool getTopologyDataAndMap(const HardwareInfo &hwInfo, DrmQueryTopologyData &topologyData, TopologyMap &topologyMap) override;
     bool getFdFromVmExport(uint32_t vmId, uint32_t flags, int32_t *fd) override;
     uint32_t createGem(uint64_t size, uint32_t memoryBanks, std::optional<bool> isCoherent) override;
@@ -274,7 +287,11 @@ class IoctlHelperI915 : public IoctlHelper {
     bool getGemTiling(void *setTiling) override;
     bool setGpuCpuTimes(TimeStampData *pGpuCpuTime, OSTime *osTime) override;
     void insertEngineToContextParams(ContextParamEngines<> &contextParamEngines, uint32_t engineId, const EngineClassInstance *engineClassInstance, uint32_t tileId, bool hasVirtualEngines) override;
-    int getTileIdFromGtId(int gtId) const override { return -1; }
+    uint32_t getTileIdFromGtId(uint32_t gtId) const override { return gtId; }
+    uint32_t getGtIdFromTileId(uint32_t tileId, uint16_t engineClass) const override { return tileId; }
+    bool hasContextFreqHint() override;
+    void fillExtSetparamLowLatency(GemContextCreateExtSetParam &extSetparam) override;
+    bool isSmallBarConfigAllowed() const override { return true; }
 
   protected:
     virtual std::vector<MemoryRegion> translateToMemoryRegions(const std::vector<uint64_t> &regionInfo);
@@ -327,10 +344,8 @@ class IoctlHelperUpstream : public IoctlHelperI915 {
     int vmUnbind(const VmBindParams &vmBindParams) override;
     int getResetStats(ResetStats &resetStats, uint32_t *status, ResetStatsFault *resetStatsFault) override;
     bool isEuStallSupported() override;
-    bool getEuStallProperties(std::array<uint64_t, 12u> &properties, uint64_t dssBufferSize, uint64_t samplingRate,
-                              uint64_t pollPeriod, uint64_t engineInstance, uint64_t notifyNReports) override;
     uint32_t getEuStallFdParameter() override;
-    bool perfOpenEuStallStream(uint32_t euStallFdParameter, std::array<uint64_t, 12u> &properties, int32_t *stream) override;
+    bool perfOpenEuStallStream(uint32_t euStallFdParameter, uint32_t &samplingPeriodNs, uint64_t engineInstance, uint64_t notifyNReports, uint64_t gpuTimeStampfrequency, int32_t *stream) override;
     bool perfDisableEuStallStream(int32_t *stream) override;
     UuidRegisterResult registerUuid(const std::string &uuid, uint32_t uuidClass, uint64_t ptr, uint64_t size) override;
     UuidRegisterResult registerStringClassUuid(const std::string &uuid, uint64_t ptr, uint64_t size) override;
@@ -403,9 +418,7 @@ class IoctlHelperPrelim20 : public IoctlHelperI915 {
     int vmBind(const VmBindParams &vmBindParams) override;
     int vmUnbind(const VmBindParams &vmBindParams) override;
     int getResetStats(ResetStats &resetStats, uint32_t *status, ResetStatsFault *resetStatsFault) override;
-    bool getEuStallProperties(std::array<uint64_t, 12u> &properties, uint64_t dssBufferSize, uint64_t samplingRate,
-                              uint64_t pollPeriod, uint64_t engineInstance, uint64_t notifyNReports) override;
-    bool perfOpenEuStallStream(uint32_t euStallFdParameter, std::array<uint64_t, 12u> &properties, int32_t *stream) override;
+    bool perfOpenEuStallStream(uint32_t euStallFdParameter, uint32_t &samplingPeriodNs, uint64_t engineInstance, uint64_t notifyNReports, uint64_t gpuTimeStampfrequency, int32_t *stream) override;
     bool perfDisableEuStallStream(int32_t *stream) override;
     bool isEuStallSupported() override;
     uint32_t getEuStallFdParameter() override;

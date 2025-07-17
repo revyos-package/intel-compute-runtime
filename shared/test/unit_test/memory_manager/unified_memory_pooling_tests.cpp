@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 Intel Corporation
+ * Copyright (C) 2023-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -30,6 +30,7 @@ TEST_F(UnifiedMemoryPoolingStaticTest, givenUsmAllocPoolWhenCallingStaticMethods
     EXPECT_TRUE(UsmMemAllocPool::alignmentIsAllowed(UsmMemAllocPool::chunkAlignment));
     EXPECT_TRUE(UsmMemAllocPool::alignmentIsAllowed(UsmMemAllocPool::chunkAlignment * 2));
     EXPECT_FALSE(UsmMemAllocPool::alignmentIsAllowed(UsmMemAllocPool::chunkAlignment / 2));
+    EXPECT_FALSE(UsmMemAllocPool::alignmentIsAllowed(UsmMemAllocPool::poolAlignment + UsmMemAllocPool::chunkAlignment));
 
     const RootDeviceIndicesContainer rootDeviceIndices;
     const std::map<uint32_t, DeviceBitfield> deviceBitfields;
@@ -44,22 +45,25 @@ TEST_F(UnifiedMemoryPoolingStaticTest, givenUsmAllocPoolWhenCallingStaticMethods
 }
 
 using UnifiedMemoryPoolingTest = Test<SVMMemoryAllocatorFixture<true>>;
+
 TEST_F(UnifiedMemoryPoolingTest, givenUsmAllocPoolWhenCallingIsInitializedThenReturnCorrectValue) {
     UsmMemAllocPool usmMemAllocPool;
     EXPECT_FALSE(usmMemAllocPool.isInitialized());
+    EXPECT_EQ(0u, usmMemAllocPool.getPoolAddress());
 
     std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 1));
     auto device = deviceFactory->rootDevices[0];
-    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
 
     SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::hostUnifiedMemory, MemoryConstants::pageSize2M, rootDeviceIndices, deviceBitfields);
-    unifiedMemoryProperties.device = device;
-
+    auto mockPool = reinterpret_cast<MockUsmMemAllocPool *>(&usmMemAllocPool);
     EXPECT_TRUE(usmMemAllocPool.initialize(svmManager.get(), unifiedMemoryProperties, 1 * MemoryConstants::megaByte, 0u, 1 * MemoryConstants::megaByte));
     EXPECT_TRUE(usmMemAllocPool.isInitialized());
+    EXPECT_EQ(castToUint64(mockPool->pool), usmMemAllocPool.getPoolAddress());
 
     usmMemAllocPool.cleanup();
     EXPECT_FALSE(usmMemAllocPool.isInitialized());
+    EXPECT_EQ(0u, usmMemAllocPool.getPoolAddress());
     EXPECT_FALSE(usmMemAllocPool.freeSVMAlloc(reinterpret_cast<void *>(0x1), true));
 }
 
@@ -72,7 +76,7 @@ class InitializedUnifiedMemoryPoolingTest : public UnifiedMemoryPoolingTest {
 
         deviceFactory = std::unique_ptr<UltDeviceFactory>(new UltDeviceFactory(1, 1));
         device = deviceFactory->rootDevices[0];
-        svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+        svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
         static_cast<MockMemoryManager *>(device->getMemoryManager())->failInDevicePoolWithError = failAllocation;
 
         poolMemoryProperties = std::make_unique<SVMAllocsManager::UnifiedMemoryProperties>(poolMemoryType, MemoryConstants::pageSize2M, rootDeviceIndices, deviceBitfields);
@@ -316,7 +320,7 @@ class UnifiedMemoryPoolingManagerTest : public SVMMemoryAllocatorFixture<true>, 
         poolInfo2MbTo16Mb = usmMemAllocPoolsManager->poolInfos[3];
         poolInfo16MbTo64Mb = usmMemAllocPoolsManager->poolInfos[4];
         poolInfo64MbTo256Mb = usmMemAllocPoolsManager->poolInfos[5];
-        svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager(), false);
+        svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
         mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
         mockMemoryManager->failInDevicePoolWithError = failAllocation;
         if (InternalMemoryType::deviceUnifiedMemory == poolMemoryType) {

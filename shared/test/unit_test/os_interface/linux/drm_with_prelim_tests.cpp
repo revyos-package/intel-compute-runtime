@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2024 Intel Corporation
+ * Copyright (C) 2021-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -17,6 +17,7 @@
 #include "shared/test/common/helpers/default_hw_info.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
 #include "shared/test/common/helpers/gtest_helpers.h"
+#include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/variable_backup.h"
 #include "shared/test/common/libult/linux/drm_mock.h"
 #include "shared/test/common/libult/linux/drm_query_mock.h"
@@ -124,6 +125,39 @@ TEST(IoctlHelperPrelimTest, whenVmBindIsCalledThenProperValueIsReturnedBasedOnIo
     }
 }
 
+TEST(IoctlHelperPrelimTest, whenVmBindIsCalledThenProperCanonicalOrNonCanonicalAddressIsExpectedInVmBindInputsList) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    IoctlHelperPrelim20 ioctlHelper{drm};
+    uint32_t idx = 0;
+
+    auto testAddress = [&](uint64_t addr) {
+        UserFenceVmBindExt userFence{};
+        userFence.addr = idx + 1;
+
+        VmBindParams vmBindParams{};
+        vmBindParams.userFence = castToUint64(&userFence);
+        vmBindParams.handle = idx + 1;
+        vmBindParams.userptr = idx + 1;
+        vmBindParams.start = addr;
+
+        auto ret = ioctlHelper.vmBind(vmBindParams);
+        EXPECT_EQ(0, ret);
+
+        auto &list = drm.vmBindInputs;
+        EXPECT_EQ(list.size(), idx + 1);
+
+        if (list.size() == idx + 1) {
+            EXPECT_EQ(list[idx].start, vmBindParams.start);
+        }
+
+        idx++;
+    };
+
+    testAddress(0xfffff00000000000); // canonical address test
+    testAddress(0xf00000000000);     // non-canonical address test
+}
+
 TEST(IoctlHelperPrelimTest, whenVmUnbindIsCalledThenProperValueIsReturnedBasedOnIoctlResult) {
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmQueryMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
@@ -188,13 +222,14 @@ TEST_F(IoctlHelperPrelimFixture, givenPrelimsWhenCreateGemExtWithChunkingThenGet
     debugManager.flags.NumberOfBOChunks.set(2);
     size_t allocSize = 2 * MemoryConstants::pageSize64k;
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     auto ioctlHelper = drm->getIoctlHelper();
     uint32_t handle = 0;
     uint32_t getNumOfChunks = 2;
     MemRegionsVec memClassInstance = {{drm_i915_gem_memory_class::I915_MEMORY_CLASS_DEVICE, 0}};
     ioctlHelper->createGemExt(memClassInstance, allocSize, handle, 0, {}, -1, true, getNumOfChunks, std::nullopt, std::nullopt, std::nullopt);
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     std::string expectedOutput("GEM_CREATE_EXT BO-1 with BOChunkingSize 65536, chunkingParamRegion.param.data 65536, numOfChunks 2\n");
     EXPECT_EQ(expectedOutput, output);
     EXPECT_EQ(2u, getNumOfChunks);
@@ -217,14 +252,15 @@ TEST_F(IoctlHelperPrelimFixture, givenPrelimsWhenCreateGemExtWithDebugFlagThenPr
     DebugManagerStateRestore stateRestore;
     debugManager.flags.PrintBOCreateDestroyResult.set(true);
 
-    testing::internal::CaptureStdout();
+    StreamCapture capture;
+    capture.captureStdout();
     auto ioctlHelper = drm->getIoctlHelper();
     uint32_t handle = 0;
     MemRegionsVec memClassInstance = {{drm_i915_gem_memory_class::I915_MEMORY_CLASS_DEVICE, 0}};
     uint32_t numOfChunks = 0;
     ioctlHelper->createGemExt(memClassInstance, 1024, handle, 0, {}, -1, false, numOfChunks, std::nullopt, std::nullopt, std::nullopt);
 
-    std::string output = testing::internal::GetCapturedStdout();
+    std::string output = capture.getCapturedStdout();
     std::string expectedOutput("Performing GEM_CREATE_EXT with { size: 1024, param: 0x1000000010001, memory class: 1, memory instance: 0 }\nGEM_CREATE_EXT has returned: 0 BO-1 with size: 1024\n");
     EXPECT_EQ(expectedOutput, output);
 }
@@ -807,7 +843,7 @@ TEST_F(IoctlHelperPrelimFixture, whenCreateDrmContextIsCalledThenIoctlIsCalledOn
                 drm->ioctlCallsCount = 0u;
                 drm->createDrmContext(vmId, isDirectSubmissionRequested, isCooperativeContextRequested);
 
-                EXPECT_EQ(1u, drm->ioctlCallsCount);
+                EXPECT_EQ(vmId > 0 ? 2u : 1u, drm->ioctlCallsCount);
             }
         }
     }

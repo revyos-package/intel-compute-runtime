@@ -238,7 +238,7 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
     }
 
     auto &commandStream = *obtainCommandStream<commandType>(csrDeps, false, blockQueue, multiDispatchInfo, eventsRequest,
-                                                            blockedCommandsData, surfacesForResidency, numSurfaceForResidency, canUsePipeControlInsteadOfSemaphoresForOnCsrDependencies, isFlushWithPostSyncWrite);
+                                                            blockedCommandsData, surfacesForResidency, numSurfaceForResidency, isFlushWithPostSyncWrite, canUsePipeControlInsteadOfSemaphoresForOnCsrDependencies);
     auto commandStreamStart = commandStream.getUsed();
 
     if (canUsePipeControlInsteadOfSemaphoresForOnCsrDependencies) {
@@ -282,9 +282,10 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
             clearLastBcsPackets();
             setStallingCommandsOnNextFlush(false);
         }
+
         processDispatchForKernels<commandType>(multiDispatchInfo, printfHandler, eventBuilder.getEvent(),
                                                hwTimeStamps, blockQueue, csrDeps, blockedCommandsData.get(),
-                                               timestampPacketDependencies, relaxedOrderingEnabled);
+                                               timestampPacketDependencies, relaxedOrderingEnabled, blocking);
     } else if (isCacheFlushCommand(commandType)) {
         processDispatchForCacheFlush(surfacesForResidency, numSurfaceForResidency, &commandStream, csrDeps);
     } else if (computeCommandStreamReceiver.peekTimestampPacketWriteEnabled()) {
@@ -520,7 +521,7 @@ void CommandQueueHw<GfxFamily>::processDispatchForKernels(const MultiDispatchInf
                                                           CsrDependencies &csrDeps,
                                                           KernelOperation *blockedCommandsData,
                                                           TimestampPacketDependencies &timestampPacketDependencies,
-                                                          bool relaxedOrderingEnabled) {
+                                                          bool relaxedOrderingEnabled, bool blocking) {
     TagNodeBase *hwPerfCounter = nullptr;
     getClFileLogger().dumpKernelArgs(&multiDispatchInfo);
 
@@ -556,6 +557,7 @@ void CommandQueueHw<GfxFamily>::processDispatchForKernels(const MultiDispatchInf
     dispatchWalkerArgs.commandType = commandType;
     dispatchWalkerArgs.event = event;
     dispatchWalkerArgs.relaxedOrderingEnabled = relaxedOrderingEnabled;
+    dispatchWalkerArgs.blocking = blocking;
 
     getGpgpuCommandStreamReceiver().setRequiredScratchSizes(multiDispatchInfo.getRequiredScratchSize(0u), multiDispatchInfo.getRequiredScratchSize(1u));
 
@@ -596,9 +598,11 @@ BlitProperties CommandQueueHw<GfxFamily>::processDispatchForBlitEnqueue(CommandS
 
     if (commandStream) {
         if (timestampPacketDependencies.cacheFlushNodes.peekNodes().size() > 0) {
+            this->isCacheFlushOnNextBcsWriteRequired = false;
             auto cacheFlushTimestampPacketGpuAddress = TimestampPacketHelper::getContextEndGpuAddress(*timestampPacketDependencies.cacheFlushNodes.peekNodes()[0]);
             PipeControlArgs args;
             args.dcFlushEnable = MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, device->getRootDeviceEnvironment());
+            args.textureCacheInvalidationEnable = true;
             MemorySynchronizationCommands<GfxFamily>::addBarrierWithPostSyncOperation(
                 *commandStream,
                 PostSyncMode::immediateData,
@@ -829,7 +833,6 @@ CompletionStamp CommandQueueHw<GfxFamily>::enqueueNonBlocked(
     auto systolicPipelineSelectMode = false;
     Kernel *kernel = nullptr;
     bool auxTranslationRequired = false;
-
     for (auto &dispatchInfo : multiDispatchInfo) {
         if (kernel != dispatchInfo.getKernel()) {
             kernel = dispatchInfo.getKernel();
@@ -845,6 +848,7 @@ CompletionStamp CommandQueueHw<GfxFamily>::enqueueNonBlocked(
         if (kernel->hasUncacheableStatelessArgs()) {
             anyUncacheableArgs = true;
         }
+        this->isCacheFlushOnNextBcsWriteRequired |= kernel->usesImages();
     }
     UNRECOVERABLE_IF(kernel == nullptr);
 
@@ -963,24 +967,15 @@ CompletionStamp CommandQueueHw<GfxFamily>::enqueueNonBlocked(
 
     PRINT_DEBUG_STRING(debugManager.flags.PrintDebugMessages.get(), stdout, "preemption = %d.\n", static_cast<int>(dispatchFlags.preemptionMode));
 
-    CompletionStamp completionStamp = getHeaplessStateInitEnabled() ? csr.flushTaskStateless(
-                                                                          commandStream,
-                                                                          commandStreamStart,
-                                                                          dsh,
-                                                                          ioh,
-                                                                          &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
-                                                                          taskLevel,
-                                                                          dispatchFlags,
-                                                                          getDevice())
-                                                                    : csr.flushTask(
-                                                                          commandStream,
-                                                                          commandStreamStart,
-                                                                          dsh,
-                                                                          ioh,
-                                                                          &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
-                                                                          taskLevel,
-                                                                          dispatchFlags,
-                                                                          getDevice());
+    CompletionStamp completionStamp = csr.flushTask(
+        commandStream,
+        commandStreamStart,
+        dsh,
+        ioh,
+        &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
+        taskLevel,
+        dispatchFlags,
+        getDevice());
 
     if (isHandlingBarrier) {
         clearLastBcsPackets();
@@ -1078,7 +1073,7 @@ void CommandQueueHw<GfxFamily>::enqueueBlocked(
                                                          std::move(printfHandler),
                                                          preemptionMode,
                                                          multiDispatchInfo.peekMainKernel(),
-                                                         (uint32_t)multiDispatchInfo.size(),
+                                                         static_cast<uint32_t>(multiDispatchInfo.size()),
                                                          multiRootDeviceSyncNode);
     }
     if (storeTimestampPackets) {
@@ -1192,24 +1187,15 @@ CompletionStamp CommandQueueHw<GfxFamily>::enqueueCommandWithoutKernel(
             dispatchFlags.csrDependencies.makeResident(getGpgpuCommandStreamReceiver());
         }
 
-        completionStamp = getHeaplessStateInitEnabled() ? getGpgpuCommandStreamReceiver().flushTaskStateless(
-                                                              *commandStream,
-                                                              commandStreamStart,
-                                                              &getIndirectHeap(IndirectHeap::Type::dynamicState, 0u),
-                                                              &getIndirectHeap(IndirectHeap::Type::indirectObject, 0u),
-                                                              &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
-                                                              taskLevel,
-                                                              dispatchFlags,
-                                                              getDevice())
-                                                        : getGpgpuCommandStreamReceiver().flushTask(
-                                                              *commandStream,
-                                                              commandStreamStart,
-                                                              &getIndirectHeap(IndirectHeap::Type::dynamicState, 0u),
-                                                              &getIndirectHeap(IndirectHeap::Type::indirectObject, 0u),
-                                                              &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
-                                                              taskLevel,
-                                                              dispatchFlags,
-                                                              getDevice());
+        completionStamp = getGpgpuCommandStreamReceiver().flushTask(
+            *commandStream,
+            commandStreamStart,
+            &getIndirectHeap(IndirectHeap::Type::dynamicState, 0u),
+            &getIndirectHeap(IndirectHeap::Type::indirectObject, 0u),
+            &getIndirectHeap(IndirectHeap::Type::surfaceState, 0u),
+            taskLevel,
+            dispatchFlags,
+            getDevice());
 
         if (isHandlingBarrier) {
             clearLastBcsPackets();
@@ -1251,15 +1237,6 @@ void CommandQueueHw<GfxFamily>::computeOffsetsValueForRectCommands(size_t *buffe
     size_t computedHostSlicePitch = hostSlicePitch ? hostSlicePitch : region[1] * computedHostRowPitch;
     *bufferOffset = bufferOrigin[2] * computedBufferSlicePitch + bufferOrigin[1] * computedBufferRowPitch + bufferOrigin[0];
     *hostOffset = hostOrigin[2] * computedHostSlicePitch + hostOrigin[1] * computedHostRowPitch + hostOrigin[0];
-}
-
-template <typename GfxFamily>
-size_t CommandQueueHw<GfxFamily>::calculateHostPtrSizeForImage(const size_t *region, size_t rowPitch, size_t slicePitch, Image *image) {
-    auto bytesPerPixel = image->getSurfaceFormatInfo().surfaceFormat.imageElementSizeInBytes;
-    auto dstRowPitch = rowPitch ? rowPitch : region[0] * bytesPerPixel;
-    auto dstSlicePitch = slicePitch ? slicePitch : ((image->getImageDesc().image_type == CL_MEM_OBJECT_IMAGE1D_ARRAY ? 1 : region[1]) * dstRowPitch);
-
-    return Image::calculateHostPtrSize(region, dstRowPitch, dstSlicePitch, bytesPerPixel, image->getImageDesc().image_type);
 }
 
 template <typename GfxFamily>
@@ -1474,9 +1451,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueBlit(const MultiDispatchInfo &multiDisp
     if (!blockQueue && this->getContext().getRootDeviceIndices().size() > 1) {
         migratedMemory = migrateMultiGraphicsAllocationsIfRequired(multiDispatchInfo.peekBuiltinOpParams(), bcsCsr);
     }
-
-    auto gpgpuSubmission = isGpgpuSubmissionForBcsRequired(blockQueue, timestampPacketDependencies, csrDeps.containsCrossEngineDependency);
-    if ((isCacheFlushForBcsRequired() || NEO::EnqueueProperties::Operation::dependencyResolveOnGpu == latestSentEnqueueType) && gpgpuSubmission) {
+    auto textureCacheFlushRequired = isCacheFlushForImageRequired(cmdType);
+    auto gpgpuSubmission = isGpgpuSubmissionForBcsRequired(blockQueue, timestampPacketDependencies, csrDeps.containsCrossEngineDependency, textureCacheFlushRequired);
+    if (gpgpuSubmission && (isCacheFlushForBcsRequired() || NEO::EnqueueProperties::Operation::dependencyResolveOnGpu == latestSentEnqueueType || textureCacheFlushRequired)) {
         timestampPacketDependencies.cacheFlushNodes.add(allocator->getTag());
     }
 

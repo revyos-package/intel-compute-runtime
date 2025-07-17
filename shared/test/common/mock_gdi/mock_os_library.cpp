@@ -67,6 +67,9 @@ void *MockOsLibrary::getProcAddress(const std::string &procName) {
     if (procName == "D3DKMTCreateSynchronizationObject2") {
         return reinterpret_cast<void *>(mockD3DKMTCreateSynchronizationObject2);
     }
+    if (procName == "D3DKMTCreateNativeFence") {
+        return reinterpret_cast<void *>(mockD3DKMTCreateNativeFence);
+    }
     if (procName == "D3DKMTDestroySynchronizationObject") {
         return reinterpret_cast<void *>(mockD3DKMTDestroySynchronizationObject);
     }
@@ -253,11 +256,14 @@ void *MockOsLibrary::getProcAddress(const std::string &procName) {
     if (procName == "D3DKMTUnregisterTrimNotification") {
         return reinterpret_cast<void *>(mockD3DKMTUnregisterTrimNotification);
     }
-    if (procName == "getCreateAllocation2ReadOnlyFailConfig") {
-        return reinterpret_cast<void *>(getCreateAllocation2ReadOnlyFailConfig);
+    if (procName == "setCapturingCreateAllocationFlags") {
+        return reinterpret_cast<void *>(setCapturingCreateAllocationFlags);
     }
-    if (procName == "setCreateAllocation2ReadOnlyFailConfig") {
-        return reinterpret_cast<void *>(setCreateAllocation2ReadOnlyFailConfig);
+    if (procName == "getCapturedCreateAllocationFlags") {
+        return reinterpret_cast<void *>(getCapturedCreateAllocationFlags);
+    }
+    if (procName == "setSupportCreateAllocationWithReadWriteExisitingSysMemory") {
+        return reinterpret_cast<void *>(setSupportCreateAllocationWithReadWriteExisitingSysMemory);
     }
     return nullptr;
 }

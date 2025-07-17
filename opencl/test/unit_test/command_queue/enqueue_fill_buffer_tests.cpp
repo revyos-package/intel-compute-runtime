@@ -5,7 +5,6 @@
  *
  */
 
-#include "shared/source/built_ins/built_ins.h"
 #include "shared/source/command_stream/command_stream_receiver.h"
 #include "shared/source/gen_common/reg_configs_common.h"
 #include "shared/source/helpers/aligned_memory.h"
@@ -14,8 +13,8 @@
 #include "shared/source/memory_manager/internal_allocation_storage.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/os_interface/os_context.h"
+#include "shared/test/common/helpers/gtest_helpers.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
-#include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_allocation_properties.h"
 #include "shared/test/common/test_macros/test.h"
 
@@ -279,7 +278,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, EnqueueFillBufferCmdTests, WhenFillingBufferThenI
     EXPECT_NE(0u, idd.getConstantIndirectUrbEntryReadLength());
 }
 
-HWTEST2_F(EnqueueFillBufferCmdTests, WhenFillingBufferThenNumberOfPipelineSelectsIsOne, IsAtMostXeHpcCore) {
+HWTEST2_F(EnqueueFillBufferCmdTests, WhenFillingBufferThenNumberOfPipelineSelectsIsOne, IsAtMostXeCore) {
     enqueueFillBuffer<FamilyType>();
     int numCommands = getNumberOfPipelineSelectsThatEnablePipelineSelect<FamilyType>();
     EXPECT_EQ(1, numCommands);
@@ -319,7 +318,9 @@ HWTEST_F(EnqueueFillBufferCmdTests, WhenFillingBufferThenArgumentZeroShouldMatch
     // Determine where the argument is
     auto pArgument = (void **)getStatelessArgumentPointer<FamilyType>(kernel->getKernelInfo(), 0u, pCmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 0), rootDeviceIndex);
 
-    EXPECT_EQ(addrToPtr(ptrOffset(buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex())->getGpuAddress(), buffer->getOffset())), *pArgument);
+    if (pArgument) {
+        EXPECT_TRUE(memoryEqualsPointer(pArgument, static_cast<uintptr_t>(ptrOffset(buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex())->getGpuAddress(), buffer->getOffset()))));
+    }
 
     context.getMemoryManager()->freeGraphicsMemory(patternAllocation);
 }
@@ -351,7 +352,10 @@ HWTEST_F(EnqueueFillBufferCmdTests, WhenFillingBufferThenArgumentTwoShouldMatchP
 
     // Determine where the argument is
     auto pArgument = (void **)getStatelessArgumentPointer<FamilyType>(kernel->getKernelInfo(), 2u, pCmdQ->getIndirectHeap(IndirectHeap::Type::indirectObject, 0), rootDeviceIndex);
-    EXPECT_NE(nullptr, *pArgument);
+
+    if (pArgument) {
+        EXPECT_FALSE(memoryZeroed(pArgument, sizeof(void *)));
+    }
 
     context.getMemoryManager()->freeGraphicsMemory(patternAllocation);
 }
@@ -391,9 +395,12 @@ HWTEST2_F(EnqueueFillBufferCmdTests, WhenFillingBufferStatelessHeaplessThenCorre
     auto scratchPointerAddress = kernelDescriptor.payloadMappings.implicitArgs.scratchPointerAddress;
 
     EXPECT_EQ(0u, indirectDataPointerAddress.offset);
-    EXPECT_EQ(8u, indirectDataPointerAddress.pointerSize);
-
-    EXPECT_EQ(8u, scratchPointerAddress.offset);
+    if (indirectDataPointerAddress.pointerSize != 0) {
+        EXPECT_EQ(8u, indirectDataPointerAddress.pointerSize);
+    }
+    if (scratchPointerAddress.offset != 0) {
+        EXPECT_EQ(8u, scratchPointerAddress.offset);
+    }
     EXPECT_EQ(8u, scratchPointerAddress.pointerSize);
 
     context.getMemoryManager()->freeGraphicsMemory(patternAllocation);

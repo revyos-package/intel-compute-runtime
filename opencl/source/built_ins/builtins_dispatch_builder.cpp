@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -11,6 +11,7 @@
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/basic_math.h"
 #include "shared/source/helpers/debug_helpers.h"
+#include "shared/source/helpers/image_helper.h"
 
 #include "opencl/source/built_ins/aux_translation_builtin.h"
 #include "opencl/source/built_ins/built_ins.inl"
@@ -856,7 +857,10 @@ class BuiltInOp<EBuiltInOps::copyImageToImage3d> : public BuiltinDispatchInfoBui
         : BuiltinDispatchInfoBuilder(kernelsLib, device) {
         populate(EBuiltInOps::copyImageToImage3d,
                  "",
-                 "CopyImageToImage3d", kernel);
+                 "CopyImage3dToImage3d", kernelCopyImage3dToImage3d,
+                 "CopyImage1dBufferToImage3d", kernelCopyImage1dBufferToImage3d,
+                 "CopyImage3dToImage1dBuffer", kernelCopyImage3dToImage1dBuffer,
+                 "CopyImage1dBufferToImage1dBuffer", kernelCopyImage1dBufferToImage1dBuffer);
     }
 
     bool buildDispatchInfos(MultiDispatchInfo &multiDispatchInfo) const override {
@@ -871,11 +875,49 @@ class BuiltInOp<EBuiltInOps::copyImageToImage3d> : public BuiltinDispatchInfoBui
         // Redescribe images to be byte-copies
         auto srcImageRedescribed = srcImage->redescribe();
         auto dstImageRedescribed = dstImage->redescribe();
+
+        auto srcImageDescriptor = Image::convertDescriptor(srcImage->getImageDesc());
+        auto srcSurfaceFormatInfo = srcImage->getSurfaceFormatInfo();
+        SurfaceOffsets srcSurfaceOffsets;
+        srcImage->getSurfaceOffsets(srcSurfaceOffsets);
+        ImageInfo srcImgInfo;
+        srcImgInfo.imgDesc = srcImageDescriptor;
+        srcImgInfo.surfaceFormat = &srcSurfaceFormatInfo.surfaceFormat;
+        srcImgInfo.xOffset = srcSurfaceOffsets.xOffset;
+
+        auto dstImageDescriptor = Image::convertDescriptor(dstImage->getImageDesc());
+        auto dstSurfaceFormatInfo = dstImage->getSurfaceFormatInfo();
+        SurfaceOffsets dstSurfaceOffsets;
+        dstImage->getSurfaceOffsets(dstSurfaceOffsets);
+        ImageInfo dstImgInfo;
+        dstImgInfo.imgDesc = dstImageDescriptor;
+        dstImgInfo.surfaceFormat = &dstSurfaceFormatInfo.surfaceFormat;
+        dstImgInfo.xOffset = dstSurfaceOffsets.xOffset;
+
+        const auto *srcAllocation = srcImage->getGraphicsAllocation(clDevice.getRootDeviceIndex());
+        const auto *dstAllocation = dstImage->getGraphicsAllocation(clDevice.getRootDeviceIndex());
+
+        if (ImageHelper::areImagesCompatibleWithPackedFormat(clDevice.getProductHelper(), srcImgInfo, dstImgInfo, srcAllocation, dstAllocation, operationParams.size.x)) {
+            srcImageRedescribed->setIsPackedFormat(true);
+            dstImageRedescribed->setIsPackedFormat(true);
+        }
+
         multiDispatchInfo.pushRedescribedMemObj(std::unique_ptr<MemObj>(srcImageRedescribed)); // life range same as mdi's
         multiDispatchInfo.pushRedescribedMemObj(std::unique_ptr<MemObj>(dstImageRedescribed)); // life range same as mdi's
 
+        bool src1dBuffer = srcImage->getImageDesc().image_type == CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        bool dst1dBuffer = dstImage->getImageDesc().image_type == CL_MEM_OBJECT_IMAGE1D_BUFFER;
+
         // Set-up kernel
-        kernelNoSplit3DBuilder.setKernel(kernel->getKernel(clDevice.getRootDeviceIndex()));
+        if (src1dBuffer && dst1dBuffer) {
+            kernelNoSplit3DBuilder.setKernel(kernelCopyImage1dBufferToImage1dBuffer->getKernel(clDevice.getRootDeviceIndex()));
+        } else if (src1dBuffer) {
+            kernelNoSplit3DBuilder.setKernel(kernelCopyImage1dBufferToImage3d->getKernel(clDevice.getRootDeviceIndex()));
+        } else if (dst1dBuffer) {
+            kernelNoSplit3DBuilder.setKernel(kernelCopyImage3dToImage1dBuffer->getKernel(clDevice.getRootDeviceIndex()));
+        } else {
+            kernelNoSplit3DBuilder.setKernel(kernelCopyImage3dToImage3d->getKernel(clDevice.getRootDeviceIndex()));
+        }
 
         // Set-up source image
         kernelNoSplit3DBuilder.setArg(0, srcImageRedescribed, operationParams.srcMipLevel);
@@ -916,11 +958,17 @@ class BuiltInOp<EBuiltInOps::copyImageToImage3d> : public BuiltinDispatchInfoBui
         if (populateKernels) {
             populate(EBuiltInOps::copyImageToImage3d,
                      "",
-                     "CopyImageToImage3d", kernel);
+                     "CopyImage3dToImage3d", kernelCopyImage3dToImage3d,
+                     "CopyImage1dBufferToImage3d", kernelCopyImage1dBufferToImage3d,
+                     "CopyImage3dToImage1dBuffer", kernelCopyImage3dToImage1dBuffer,
+                     "CopyImage1dBufferToImage1dBuffer", kernelCopyImage1dBufferToImage1dBuffer);
         }
     }
 
-    MultiDeviceKernel *kernel = nullptr;
+    MultiDeviceKernel *kernelCopyImage3dToImage3d = nullptr;
+    MultiDeviceKernel *kernelCopyImage1dBufferToImage3d = nullptr;
+    MultiDeviceKernel *kernelCopyImage3dToImage1dBuffer = nullptr;
+    MultiDeviceKernel *kernelCopyImage1dBufferToImage1dBuffer = nullptr;
 };
 
 template <>
@@ -930,7 +978,10 @@ class BuiltInOp<EBuiltInOps::copyImageToImage3dHeapless> : public BuiltInOp<EBui
         : BuiltInOp<EBuiltInOps::copyImageToImage3d>(kernelsLib, device, false) {
         populate(EBuiltInOps::copyImageToImage3dHeapless,
                  "",
-                 "CopyImageToImage3d", kernel);
+                 "CopyImage3dToImage3d", kernelCopyImage3dToImage3d,
+                 "CopyImage1dBufferToImage3d", kernelCopyImage1dBufferToImage3d,
+                 "CopyImage3dToImage1dBuffer", kernelCopyImage3dToImage1dBuffer,
+                 "CopyImage1dBufferToImage1dBuffer", kernelCopyImage1dBufferToImage1dBuffer);
     }
 };
 
@@ -1012,6 +1063,28 @@ class BuiltInOp<EBuiltInOps::fillImage3dHeapless> : public BuiltInOp<EBuiltInOps
     }
 };
 
+template <>
+class BuiltInOp<EBuiltInOps::fillImage1dBuffer> : public BuiltInOp<EBuiltInOps::fillImage3d> {
+  public:
+    BuiltInOp(BuiltIns &kernelsLib, ClDevice &device)
+        : BuiltInOp<EBuiltInOps::fillImage3d>(kernelsLib, device, false) {
+        populate(EBuiltInOps::fillImage1dBuffer,
+                 "",
+                 "FillImage1dBuffer", kernel);
+    }
+};
+
+template <>
+class BuiltInOp<EBuiltInOps::fillImage1dBufferHeapless> : public BuiltInOp<EBuiltInOps::fillImage3d> {
+  public:
+    BuiltInOp(BuiltIns &kernelsLib, ClDevice &device)
+        : BuiltInOp<EBuiltInOps::fillImage3d>(kernelsLib, device, false) {
+        populate(EBuiltInOps::fillImage1dBufferHeapless,
+                 "",
+                 "FillImage1dBuffer", kernel);
+    }
+};
+
 BuiltinDispatchInfoBuilder &BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::Type operation, ClDevice &device) {
     uint32_t operationId = static_cast<uint32_t>(operation);
     auto &builtins = *device.getDevice().getBuiltIns();
@@ -1077,6 +1150,12 @@ BuiltinDispatchInfoBuilder &BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuil
         break;
     case EBuiltInOps::auxTranslation:
         std::call_once(operationBuilder.second, [&] { operationBuilder.first = std::make_unique<BuiltInOp<EBuiltInOps::auxTranslation>>(builtins, device); });
+        break;
+    case EBuiltInOps::fillImage1dBuffer:
+        std::call_once(operationBuilder.second, [&] { operationBuilder.first = std::make_unique<BuiltInOp<EBuiltInOps::fillImage1dBuffer>>(builtins, device); });
+        break;
+    case EBuiltInOps::fillImage1dBufferHeapless:
+        std::call_once(operationBuilder.second, [&] { operationBuilder.first = std::make_unique<BuiltInOp<EBuiltInOps::fillImage1dBufferHeapless>>(builtins, device); });
         break;
     default:
         UNRECOVERABLE_IF("getBuiltinDispatchInfoBuilder failed");

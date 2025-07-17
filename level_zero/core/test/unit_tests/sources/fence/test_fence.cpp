@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -241,7 +241,7 @@ TEST_F(FenceSynchronizeTest, givenInfiniteTimeoutWhenWaitingForFenceCompletionTh
     constexpr uint32_t activePartitions = 2;
     constexpr uint32_t postSyncOffset = 16;
 
-    VariableBackup<bool> backupWaitpkgUse(&NEO::WaitUtils::waitpkgUse, false);
+    VariableBackup<WaitUtils::WaitpkgUse> backupWaitpkgUse(&WaitUtils::waitpkgUse, WaitUtils::WaitpkgUse::noUse);
     VariableBackup<uint32_t> backupWaitCount(&NEO::WaitUtils::waitCount, 1);
 
     const auto csr = std::make_unique<MockCommandStreamReceiver>(*neoDevice->getExecutionEnvironment(), 0, neoDevice->getDeviceBitfield());
@@ -293,6 +293,9 @@ HWTEST_F(FenceAubCsrTest, givenCallToFenceHostSynchronizeWithAubModeCsrReturnsSu
     NEO::MockDevice *neoDevice = nullptr;
     L0::Device *device = nullptr;
 
+    EnvironmentWithCsrWrapper environment;
+    environment.setCsrType<MockCsrAub<FamilyType>>();
+
     neoDevice = NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get());
     auto mockBuiltIns = new MockBuiltins();
     MockRootDeviceEnvironment::resetBuiltins(neoDevice->executionEnvironment->rootDeviceEnvironments[0].get(), mockBuiltIns);
@@ -301,9 +304,7 @@ HWTEST_F(FenceAubCsrTest, givenCallToFenceHostSynchronizeWithAubModeCsrReturnsSu
     driverHandle = std::make_unique<Mock<L0::DriverHandleImp>>();
     driverHandle->initialize(std::move(devices));
     device = driverHandle->devices[0];
-    int32_t tag = 1;
-    auto aubCsr = new MockCsrAub<FamilyType>(tag, *neoDevice->executionEnvironment, neoDevice->getRootDeviceIndex(), neoDevice->getDeviceBitfield());
-    neoDevice->resetCommandStreamReceiver(aubCsr);
+    auto aubCsr = static_cast<MockCsrAub<FamilyType> *>(&neoDevice->getUltCommandStreamReceiver<FamilyType>());
 
     Mock<CommandQueue> cmdQueue(device, aubCsr);
     ze_fence_desc_t fenceDesc = {};

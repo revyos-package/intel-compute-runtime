@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2024 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "shared/source/helpers/non_copyable_or_moveable.h"
 #include "shared/source/memory_manager/gfx_partition.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/utilities/stackvec.h"
@@ -22,9 +23,12 @@ struct DriverHandleImp;
 struct Device;
 struct IpcCounterBasedEventData;
 
-struct ContextImp : Context {
+ContextExt *createContextExt(DriverHandle *driverHandle);
+void destroyContextExt(ContextExt *ctxExt);
+
+struct ContextImp : Context, NEO::NonCopyableAndNonMovableClass {
     ContextImp(DriverHandle *driverHandle);
-    ~ContextImp() override = default;
+    ~ContextImp() override;
     ze_result_t destroy() override;
     ze_result_t getStatus() override;
     DriverHandle *getDriverHandle() override;
@@ -187,16 +191,64 @@ struct ContextImp : Context {
         unsigned int elementSizeInBytes,
         size_t *rowPitch) override;
 
+    ContextExt *getContextExt() override {
+        return contextExt;
+    }
+    uint32_t getNumDevices() const {
+        return numDevices;
+    }
+
   protected:
     ze_result_t getIpcMemHandlesImpl(const void *ptr, uint32_t *numIpcHandles, ze_ipc_mem_handle_t *pIpcHandles);
-    void setIPCHandleData(NEO::GraphicsAllocation *graphicsAllocation, uint64_t handle, IpcMemoryData &ipcData, uint64_t ptrAddress, uint8_t type);
+    template <typename IpcDataT>
+    void setIPCHandleData(NEO::GraphicsAllocation *graphicsAllocation, uint64_t handle, IpcDataT &ipcData, uint64_t ptrAddress, uint8_t type, NEO::UsmMemAllocPool *usmPool) {
+        std::map<uint64_t, IpcHandleTracking *>::iterator ipcHandleIterator;
+
+        ipcData = {};
+        if constexpr (std::is_same_v<IpcDataT, IpcMemoryData>) {
+            ipcData.handle = handle;
+            ipcData.type = type;
+        } else if constexpr (std::is_same_v<IpcDataT, IpcOpaqueMemoryData>) {
+            printf("opaque type used\n");
+            ipcData.memoryType = type;
+            ipcData.processId = NEO::SysCalls::getCurrentProcessId();
+            ipcData.type = IpcHandleType::fdHandle;
+            ipcData.handle.fd = static_cast<int>(handle);
+        }
+
+        if (usmPool) {
+            ipcData.poolOffset = usmPool->getOffsetInPool(addrToPtr(ptrAddress));
+            ptrAddress = usmPool->getPoolAddress();
+        }
+
+        auto lock = this->driverHandle->lockIPCHandleMap();
+        ipcHandleIterator = this->driverHandle->getIPCHandleMap().find(handle);
+        if (ipcHandleIterator != this->driverHandle->getIPCHandleMap().end()) {
+            ipcHandleIterator->second->refcnt += 1;
+        } else {
+            IpcHandleTracking *handleTracking = new IpcHandleTracking;
+            handleTracking->alloc = graphicsAllocation;
+            handleTracking->refcnt = 1;
+            handleTracking->ptr = ptrAddress;
+            handleTracking->handle = handle;
+            if constexpr (std::is_same_v<IpcDataT, IpcMemoryData>) {
+                handleTracking->ipcData = ipcData;
+            }
+            this->driverHandle->getIPCHandleMap().insert(std::pair<uint64_t, IpcHandleTracking *>(handle, handleTracking));
+        }
+    }
     bool isAllocationSuitableForCompression(const StructuresLookupTable &structuresLookupTable, Device &device, size_t allocSize);
     size_t getPageAlignedSizeRequired(size_t size, NEO::HeapIndex *heapRequired, size_t *pageSizeRequired);
+    NEO::UsmMemAllocPool *getUsmPoolOwningPtr(const void *ptr, NEO::SvmAllocationData *svmData);
+    bool tryFreeViaPooling(const void *ptr, NEO::SvmAllocationData *svmData, NEO::UsmMemAllocPool *usmPool);
 
     std::map<uint32_t, ze_device_handle_t> devices;
     std::vector<ze_device_handle_t> deviceHandles;
     DriverHandleImp *driverHandle = nullptr;
     uint32_t numDevices = 0;
+    ContextExt *contextExt = nullptr;
 };
+
+static_assert(NEO::NonCopyableAndNonMovable<ContextImp>);
 
 } // namespace L0

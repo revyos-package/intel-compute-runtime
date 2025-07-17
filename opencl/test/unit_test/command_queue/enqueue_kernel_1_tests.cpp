@@ -33,6 +33,28 @@ using namespace NEO;
 typedef HelloWorldFixture<HelloWorldFixtureFactory> EnqueueKernelFixture;
 typedef Test<EnqueueKernelFixture> EnqueueKernelTest;
 
+template <template <typename> class CsrType>
+class EnqueueKernelTestT
+    : public EnqueueKernelTest {
+  public:
+    void SetUp() override {}
+    void TearDown() override {}
+
+    template <typename FamilyType>
+    void setUpT() {
+        EnvironmentWithCsrWrapper environment;
+        environment.setCsrType<CsrType<FamilyType>>();
+        EnqueueKernelTest::SetUp();
+    }
+
+    template <typename FamilyType>
+    void tearDownT() {
+        EnqueueKernelTest::TearDown();
+    }
+};
+
+typedef EnqueueKernelTestT<MockCsrHw2> EnqueueKernelTestWithMockCsrHw2;
+
 TEST_F(EnqueueKernelTest, GivenNullKernelWhenEnqueuingKernelThenInvalidKernelErrorIsReturned) {
     size_t globalWorkSize[3] = {1, 1, 1};
     auto retVal = clEnqueueNDRangeKernel(
@@ -91,6 +113,7 @@ TEST_F(EnqueueKernelTest, givenKernelWhenAllArgsAreSetThenClEnqueueNDRangeKernel
 }
 
 TEST(EnqueueMultiDeviceKernelTest, givenMultiDeviceKernelWhenSetArgDeviceUSMThenOnlyOneKernelIsPatched) {
+    USE_REAL_FILE_SYSTEM();
     REQUIRE_SVM_OR_SKIP(defaultHwInfo);
     auto deviceFactory = std::make_unique<UltClDeviceFactory>(3, 0);
     auto device0 = deviceFactory->rootDevices[0];
@@ -538,7 +561,12 @@ HWTEST_F(EnqueueKernelTest, WhenEnqueingKernelThenCsrTaskLevelIsIncremented) {
 
     callOneWorkItemNDRKernel();
     EXPECT_EQ(pCmdQ->taskCount, csr.peekTaskCount());
-    EXPECT_EQ(pCmdQ->taskLevel + 1, csr.peekTaskLevel());
+
+    auto expectedTaskLevel = pCmdQ->taskLevel;
+    if (!csr.isUpdateTagFromWaitEnabled()) {
+        expectedTaskLevel++;
+    }
+    EXPECT_EQ(expectedTaskLevel, csr.peekTaskLevel());
 }
 
 HWTEST_F(EnqueueKernelTest, WhenEnqueingKernelThenCommandsAreAdded) {
@@ -825,23 +853,25 @@ HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeWhenEnqueueK
     // Three more surfaces from preemptionAllocation, SipKernel and clearColorAllocation
     size_t csrSurfaceCount = (pDevice->getPreemptionMode() == PreemptionMode::MidThread) ? 2 : 0;
     csrSurfaceCount -= pDevice->getHardwareInfo().capabilityTable.supportsImages ? 0 : 1;
-    size_t timestampPacketSurfacesCount = mockCsr->peekTimestampPacketWriteEnabled() ? 1 : 0;
+    size_t timestampPacketSurfacesCount = (mockCsr->peekTimestampPacketWriteEnabled() && !mockCsr->heaplessStateInitialized) ? 1 : 0;
     size_t fenceSurfaceCount = mockCsr->globalFenceAllocation ? 1 : 0;
     size_t clearColorSize = mockCsr->clearColorAllocation ? 1 : 0;
     size_t commandBufferCount = pDevice->getProductHelper().getCommandBuffersPreallocatedPerCommandQueue() > 0 ? 0 : 1;
+    size_t rtSurface = pDevice->getRTMemoryBackedBuffer() ? 1u : 0u;
 
     EXPECT_EQ(mockCsr->heaplessStateInitialized ? 1u : 0u, mockCsr->flushCalledCount);
-    EXPECT_EQ(4u + csrSurfaceCount + timestampPacketSurfacesCount + fenceSurfaceCount + clearColorSize + commandBufferCount, cmdBuffer->surfaces.size());
+    EXPECT_EQ(4u + csrSurfaceCount + timestampPacketSurfacesCount + fenceSurfaceCount + clearColorSize + commandBufferCount + rtSurface, cmdBuffer->surfaces.size());
 }
 
 HWTEST_F(EnqueueKernelTest, givenReducedAddressSpaceGraphicsAllocationForHostPtrWithL3FlushRequiredWhenEnqueueKernelIsCalledThenFlushIsCalledForReducedAddressSpacePlatforms) {
+    EnvironmentWithCsrWrapper environment;
+    environment.setCsrType<MockCsrHw2<FamilyType>>();
     std::unique_ptr<MockClDevice> device;
     std::unique_ptr<CommandQueue> cmdQ;
     auto hwInfoToModify = *defaultHwInfo;
     hwInfoToModify.capabilityTable.gpuAddressSpace = MemoryConstants::max36BitAddress;
     device.reset(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(&hwInfoToModify)});
-    auto mockCsr = new MockCsrHw2<FamilyType>(*device->executionEnvironment, device->getRootDeviceIndex(), device->getDeviceBitfield());
-    device->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&device->getGpgpuCommandStreamReceiver());
     auto memoryManager = mockCsr->getMemoryManager();
     uint32_t hostPtr[10]{};
 
@@ -859,13 +889,14 @@ HWTEST_F(EnqueueKernelTest, givenReducedAddressSpaceGraphicsAllocationForHostPtr
 }
 
 HWTEST_F(EnqueueKernelTest, givenReducedAddressSpaceGraphicsAllocationForHostPtrWithL3FlushUnrequiredWhenEnqueueKernelIsCalledThenFlushIsNotForcedByGraphicsAllocation) {
+    EnvironmentWithCsrWrapper environment;
+    environment.setCsrType<MockCsrHw2<FamilyType>>();
     std::unique_ptr<MockClDevice> device;
     std::unique_ptr<CommandQueue> cmdQ;
     auto hwInfoToModify = *defaultHwInfo;
     hwInfoToModify.capabilityTable.gpuAddressSpace = MemoryConstants::max36BitAddress;
     device.reset(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(&hwInfoToModify)});
-    auto mockCsr = new MockCsrHw2<FamilyType>(*device->executionEnvironment, device->getRootDeviceIndex(), device->getDeviceBitfield());
-    device->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&device->getGpgpuCommandStreamReceiver());
     auto memoryManager = mockCsr->getMemoryManager();
     uint32_t hostPtr[10]{};
 
@@ -883,14 +914,15 @@ HWTEST_F(EnqueueKernelTest, givenReducedAddressSpaceGraphicsAllocationForHostPtr
 }
 
 HWTEST_F(EnqueueKernelTest, givenFullAddressSpaceGraphicsAllocationWhenEnqueueKernelIsCalledThenFlushIsNotForcedByGraphicsAllocation) {
+    EnvironmentWithCsrWrapper environment;
+    environment.setCsrType<MockCsrHw2<FamilyType>>();
     HardwareInfo hwInfoToModify;
     std::unique_ptr<MockClDevice> device;
     std::unique_ptr<CommandQueue> cmdQ;
     hwInfoToModify = *defaultHwInfo;
     hwInfoToModify.capabilityTable.gpuAddressSpace = MemoryConstants::max48BitAddress;
     device.reset(new MockClDevice{MockDevice::createWithNewExecutionEnvironment<MockDevice>(&hwInfoToModify)});
-    auto mockCsr = new MockCsrHw2<FamilyType>(*device->executionEnvironment, device->getRootDeviceIndex(), device->getDeviceBitfield());
-    device->resetCommandStreamReceiver(mockCsr);
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&device->getGpgpuCommandStreamReceiver());
     auto memoryManager = mockCsr->getMemoryManager();
     uint32_t hostPtr[10]{};
 
@@ -924,12 +956,11 @@ HWTEST_F(EnqueueKernelTest, givenDefaultCommandStreamReceiverWhenClFlushIsCalled
     EXPECT_EQ(CL_SUCCESS, ret);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeAndBatchedKernelWhenFlushIsCalledThenKernelIsSubmitted) {
-    auto mockCsrmockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCommandStreamReceiverInBatchingModeAndBatchedKernelWhenFlushIsCalledThenKernelIsSubmitted) {
+    auto *mockCsrmockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsrmockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsrmockCsr->useNewResourceImplicitFlush = false;
     mockCsrmockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsrmockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsrmockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -947,10 +978,9 @@ HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeAndBatchedKe
     EXPECT_EQ(mockCsrmockCsr->heaplessStateInitialized ? 2u : 1u, mockCsrmockCsr->flushCalledCount);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeAndBatchedKernelWhenFlushIsCalledTwiceThenNothingChanges) {
-    auto mockCsrmockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCommandStreamReceiverInBatchingModeAndBatchedKernelWhenFlushIsCalledTwiceThenNothingChanges) {
+    auto *mockCsrmockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsrmockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsrmockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsrmockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -999,12 +1029,11 @@ HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeWhenKernelIs
     EXPECT_GT(cmdBuffer2->batchBuffer.startOffset, cmdBuffer1->batchBuffer.startOffset);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeWhenFlushIsCalledOnTwoBatchedKernelsThenTheyAreExecutedInOrder) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCommandStreamReceiverInBatchingModeWhenFlushIsCalledOnTwoBatchedKernelsThenTheyAreExecutedInOrder) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1019,12 +1048,11 @@ HWTEST_F(EnqueueKernelTest, givenCommandStreamReceiverInBatchingModeWhenFlushIsC
     EXPECT_EQ(mockCsr->heaplessStateInitialized ? 2u : 1u, mockCsr->flushCalledCount);
 }
 
-HWCMDTEST_F(IGFX_XE_HP_CORE, EnqueueKernelTest, givenTwoEnqueueProgrammedWithinSameCommandBufferWhenBatchedThenNoBBSBetweenThem) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, EnqueueKernelTestWithMockCsrHw2, givenTwoEnqueueProgrammedWithinSameCommandBufferWhenBatchedThenNoBBSBetweenThem) {
+    auto mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1043,12 +1071,14 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, EnqueueKernelTest, givenTwoEnqueueProgrammedWithinS
     EXPECT_EQ(pCmdQ->getHeaplessStateInitEnabled() ? 0u : 1u, bbsCommands.size());
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenFinishIsCalledThenBatchesSubmissionsAreFlushed) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenFinishIsCalledThenBatchesSubmissionsAreFlushed) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1064,12 +1094,15 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenFinishIsCalledThenBatchesS
     EXPECT_EQ(mockCsr->heaplessStateInitialized ? 2u : 1u, mockCsr->flushCalledCount);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenThressEnqueueKernelsAreCalledThenBatchesSubmissionsAreFlushed) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenThressEnqueueKernelsAreCalledThenBatchesSubmissionsAreFlushed) {
+
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1086,12 +1119,13 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenThressEnqueueKernelsAreCal
     EXPECT_EQ(mockCsr->heaplessStateInitialized ? 2u : 1u, mockCsr->flushCalledCount);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenWaitForEventsIsCalledThenBatchedSubmissionsAreFlushed) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenWaitForEventsIsCalledThenBatchedSubmissionsAreFlushed) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1112,12 +1146,15 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenWaitForEventsIsCalledThenB
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenCommandIsFlushedThenFlushStampIsUpdatedInCommandQueueCsrAndEvent) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenCommandIsFlushedThenFlushStampIsUpdatedInCommandQueueCsrAndEvent) {
+
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1151,10 +1188,9 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenCommandIsFlushedThenFlushS
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenNonBlockingMapFollowsNdrCallThenFlushStampIsUpdatedProperly) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenNonBlockingMapFollowsNdrCallThenFlushStampIsUpdatedProperly) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     EXPECT_TRUE(this->destBuffer->isMemObjZeroCopy());
     MockKernelWithInternals mockKernel(*pClDevice);
@@ -1169,12 +1205,14 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenNonBlockingMapFollowsNdrCa
     clReleaseEvent(event);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenCommandWithEventIsFollowedByCommandWithoutEventThenFlushStampIsUpdatedInCommandQueueCsrAndEvent) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenCommandWithEventIsFollowedByCommandWithoutEventThenFlushStampIsUpdatedInCommandQueueCsrAndEvent) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1208,12 +1246,11 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenCommandWithEventIsFollowed
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenClFlushIsCalledThenQueueFlushStampIsUpdated) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenClFlushIsCalledThenQueueFlushStampIsUpdated) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice);
     size_t gws[3] = {1, 0, 0};
@@ -1229,10 +1266,9 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenClFlushIsCalledThenQueueFl
     EXPECT_EQ(expectedStamp, pCmdQ->flushStamp->peekStamp());
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenWaitForEventsIsCalledWithUnflushedTaskCountThenBatchedSubmissionsAreFlushed) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenWaitForEventsIsCalledWithUnflushedTaskCountThenBatchedSubmissionsAreFlushed) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1247,16 +1283,25 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenWaitForEventsIsCalledWithU
 
     EXPECT_EQ(CL_SUCCESS, status);
     EXPECT_TRUE(mockedSubmissionsAggregator->peekCmdBufferList().peekIsEmpty());
-    EXPECT_EQ(mockCsr->heaplessStateInitialized ? 2u : 1u, mockCsr->flushCalledCount);
+
+    auto expectedFlushCalledCount = mockCsr->heaplessStateInitialized ? 2u : 1u;
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        expectedFlushCalledCount++;
+    }
+
+    EXPECT_EQ(expectedFlushCalledCount, mockCsr->flushCalledCount);
 
     status = clReleaseEvent(event);
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenFinishIsCalledWithUnflushedTaskCountThenBatchedSubmissionsAreFlushed) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenFinishIsCalledWithUnflushedTaskCountThenBatchedSubmissionsAreFlushed) {
+
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1277,15 +1322,17 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenFinishIsCalledWithUnflushe
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenOutOfOrderCommandQueueWhenEnqueueKernelIsMadeThenPipeControlPositionIsRecorded) {
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenOutOfOrderCommandQueueWhenEnqueueKernelIsMadeThenPipeControlPositionIsRecorded) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
     const cl_queue_properties props[3] = {CL_QUEUE_PROPERTIES, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, 0};
     auto ooq = clCreateCommandQueueWithProperties(context, pClDevice, props, nullptr);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1302,6 +1349,9 @@ HWTEST_F(EnqueueKernelTest, givenOutOfOrderCommandQueueWhenEnqueueKernelIsMadeTh
 }
 
 HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelIsMadeThenPipeControlPositionIsRecorded) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
     const cl_queue_properties props[] = {0};
     auto inOrderQueue = clCreateCommandQueueWithProperties(context, pClDevice, props, nullptr);
 
@@ -1323,15 +1373,16 @@ HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelIsMadeThenP
     clReleaseCommandQueue(inOrderQueue);
 }
 
-HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelThatHasSharedObjectsAsArgIsMadeThenPipeControlPositionIsRecorded) {
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenInOrderCommandQueueWhenEnqueueKernelThatHasSharedObjectsAsArgIsMadeThenPipeControlPositionIsRecorded) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
     const cl_queue_properties props[] = {0};
     auto inOrderQueue = clCreateCommandQueueWithProperties(context, pClDevice, props, nullptr);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1349,10 +1400,9 @@ HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelThatHasShar
     clReleaseCommandQueue(inOrderQueue);
 }
 
-HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelThatHasSharedObjectsAsArgIsMadeThenPipeControlDoesntHaveDcFlush) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenInOrderCommandQueueWhenEnqueueKernelThatHasSharedObjectsAsArgIsMadeThenPipeControlDoesntHaveDcFlush) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice, context);
     size_t gws[3] = {1, 0, 0};
@@ -1362,16 +1412,15 @@ HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelThatHasShar
     EXPECT_FALSE(mockCsr->passedDispatchFlags.dcFlush);
 }
 
-HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeThenPipeControlPositionIsNotRecorded) {
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenInOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeThenPipeControlPositionIsNotRecorded) {
     const cl_queue_properties props[] = {0};
     auto inOrderQueue = clCreateCommandQueueWithProperties(context, pClDevice, props, nullptr);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
     mockCsr->timestampPacketWriteEnabled = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1385,21 +1434,29 @@ HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelReturningEv
     EXPECT_FALSE(mockedSubmissionsAggregator->peekCmdBufferList().peekIsEmpty());
     auto cmdBuffer = mockedSubmissionsAggregator->peekCmdBufferList().peekHead();
     EXPECT_EQ(nullptr, cmdBuffer->pipeControlThatMayBeErasedLocation);
-    EXPECT_NE(nullptr, cmdBuffer->epiloguePipeControlLocation);
+
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        EXPECT_EQ(nullptr, cmdBuffer->epiloguePipeControlLocation);
+    } else {
+        EXPECT_NE(nullptr, cmdBuffer->epiloguePipeControlLocation);
+    }
 
     clReleaseCommandQueue(inOrderQueue);
     clReleaseEvent(event);
 }
 
-HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeAndCommandStreamReceiverIsInNTo1ModeThenPipeControlPositionIsRecorded) {
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenInOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeAndCommandStreamReceiverIsInNTo1ModeThenPipeControlPositionIsRecorded) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
     const cl_queue_properties props[] = {0};
+
     auto inOrderQueue = clCreateCommandQueueWithProperties(context, pClDevice, props, nullptr);
 
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
     mockCsr->enableNTo1SubmissionModel();
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
@@ -1420,12 +1477,14 @@ HWTEST_F(EnqueueKernelTest, givenInOrderCommandQueueWhenEnqueueKernelReturningEv
     clReleaseEvent(event);
 }
 
-HWTEST_F(EnqueueKernelTest, givenOutOfOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeThenPipeControlPositionIsRecorded) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenOutOfOrderCommandQueueWhenEnqueueKernelReturningEventIsMadeThenPipeControlPositionIsRecorded) {
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.EnableL3FlushAfterPostSync.set(0);
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
     mockCsr->useNewResourceImplicitFlush = false;
     mockCsr->useGpuIdleImplicitFlush = false;
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     auto mockedSubmissionsAggregator = new MockSubmissionsAggregator();
     mockCsr->overrideSubmissionAggregator(mockedSubmissionsAggregator);
@@ -1448,12 +1507,12 @@ HWTEST_F(EnqueueKernelTest, givenOutOfOrderCommandQueueWhenEnqueueKernelReturnin
     clReleaseEvent(event);
 }
 
-HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenBlockingCallIsMadeThenEventAssociatedWithCommandHasProperFlushStamp) {
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenCsrInBatchingModeWhenBlockingCallIsMadeThenEventAssociatedWithCommandHasProperFlushStamp) {
     DebugManagerStateRestore stateRestore;
     debugManager.flags.MakeEachEnqueueBlocking.set(true);
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice);
     size_t gws[3] = {1, 0, 0};
@@ -1463,15 +1522,18 @@ HWTEST_F(EnqueueKernelTest, givenCsrInBatchingModeWhenBlockingCallIsMadeThenEven
     auto expectedCount = mockCsr->heaplessStateInitialized ? 2u : 1u;
 
     EXPECT_EQ(expectedCount, neoEvent->flushStamp->peekStamp());
+
+    if (mockCsr->isUpdateTagFromWaitEnabled()) {
+        expectedCount++;
+    }
     EXPECT_EQ(expectedCount, mockCsr->flushCalledCount);
 
     auto status = clReleaseEvent(event);
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenKernelWhenItIsEnqueuedThenAllResourceGraphicsAllocationsAreUpdatedWithCsrTaskCount) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
-    pDevice->resetCommandStreamReceiver(mockCsr);
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenKernelWhenItIsEnqueuedThenAllResourceGraphicsAllocationsAreUpdatedWithCsrTaskCount) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
 
     MockKernelWithInternals mockKernel(*pClDevice);
     size_t gws[3] = {1, 0, 0};
@@ -1651,10 +1713,9 @@ TEST_F(EnqueueKernelTest, givenEnqueueCommandWithNullLwsAndWorkDimsResultingInLe
     EXPECT_EQ(CL_SUCCESS, status);
 }
 
-HWTEST_F(EnqueueKernelTest, givenVMEKernelWhenEnqueueKernelThenDispatchFlagsHaveMediaSamplerRequired) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenVMEKernelWhenEnqueueKernelThenDispatchFlagsHaveMediaSamplerRequired) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice, context);
     size_t gws[3] = {1, 0, 0};
@@ -1663,10 +1724,9 @@ HWTEST_F(EnqueueKernelTest, givenVMEKernelWhenEnqueueKernelThenDispatchFlagsHave
     EXPECT_TRUE(mockCsr->passedDispatchFlags.pipelineSelectArgs.mediaSamplerRequired);
 }
 
-HWTEST_F(EnqueueKernelTest, givenContextWithSeveralDevicesWhenEnqueueKernelThenDispatchFlagsHaveCorrectInfoAboutMultipleSubDevicesInContext) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenContextWithSeveralDevicesWhenEnqueueKernelThenDispatchFlagsHaveCorrectInfoAboutMultipleSubDevicesInContext) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice, context);
     size_t gws[3] = {1, 0, 0};
@@ -1679,10 +1739,9 @@ HWTEST_F(EnqueueKernelTest, givenContextWithSeveralDevicesWhenEnqueueKernelThenD
     context->deviceBitfields[rootDeviceIndex].set(3, false);
 }
 
-HWTEST_F(EnqueueKernelTest, givenNonVMEKernelWhenEnqueueKernelThenDispatchFlagsDoesntHaveMediaSamplerRequired) {
-    auto mockCsr = new MockCsrHw2<FamilyType>(*pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
+HWTEST_TEMPLATED_F(EnqueueKernelTestWithMockCsrHw2, givenNonVMEKernelWhenEnqueueKernelThenDispatchFlagsDoesntHaveMediaSamplerRequired) {
+    auto *mockCsr = static_cast<MockCsrHw2<FamilyType> *>(&pDevice->getGpgpuCommandStreamReceiver());
     mockCsr->overrideDispatchPolicy(DispatchMode::batchedDispatch);
-    pDevice->resetCommandStreamReceiver(mockCsr);
 
     MockKernelWithInternals mockKernel(*pClDevice, context);
     size_t gws[3] = {1, 0, 0};
@@ -1747,7 +1806,7 @@ struct PauseOnGpuTests : public EnqueueKernelTest {
         debugPauseStateAddress = csr.getDebugPauseStateGPUAddress();
 
         auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-        auto heapless = compilerProductHelper.isHeaplessModeEnabled();
+        auto heapless = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);
         heaplessStateInit = compilerProductHelper.isHeaplessStateInitEnabled(heapless);
     }
 
@@ -1782,6 +1841,25 @@ struct PauseOnGpuTests : public EnqueueKernelTest {
             EXPECT_EQ(MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, this->pDevice->getRootDeviceEnvironment()), pipeControlCmd->getDcFlushEnable());
 
             EXPECT_EQ(PIPE_CONTROL::POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA, pipeControlCmd->getPostSyncOperation());
+
+            return true;
+        }
+
+        return false;
+    }
+
+    template <typename FamilyType>
+    bool verifyPipeControlNoPostSync(const GenCmdList::iterator &iterator) {
+        using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+        auto pipeControlCmd = genCmdCast<PIPE_CONTROL *>(*iterator);
+        const auto dcFlushEnable = MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, this->pDevice->getRootDeviceEnvironment());
+
+        if (0u == pipeControlCmd->getImmediateData() && 0u == NEO::UnitTestHelper<FamilyType>::getPipeControlPostSyncAddress(*pipeControlCmd) && dcFlushEnable == pipeControlCmd->getDcFlushEnable()) {
+
+            EXPECT_TRUE(pipeControlCmd->getCommandStreamerStallEnable());
+
+            EXPECT_EQ(PIPE_CONTROL::POST_SYNC_OPERATION::POST_SYNC_OPERATION_NO_WRITE, pipeControlCmd->getPostSyncOperation());
 
             return true;
         }
@@ -1854,6 +1932,33 @@ struct PauseOnGpuTests : public EnqueueKernelTest {
         }
     }
 
+    template <typename FamilyType>
+    void findPipeControlsBeforeLoadRegImm(GenCmdList &cmdList) {
+        using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+        using MI_LOAD_REGISTER_IMM = typename FamilyType::MI_LOAD_REGISTER_IMM;
+
+        auto itWalkers = NEO::UnitTestHelper<FamilyType>::findAllWalkerTypeCmds(cmdList.begin(), cmdList.end());
+        for (auto walkerId = 0u; walkerId < itWalkers.size(); walkerId++) {
+
+            auto threshold = walkerId + 1 < itWalkers.size() ? itWalkers[walkerId + 1] : cmdList.end();
+            auto walker = itWalkers[walkerId];
+            auto loadRegImm = find<MI_LOAD_REGISTER_IMM *>(walker, threshold);
+            if (loadRegImm == threshold) {
+                continue;
+            }
+
+            if (verifyLoadRegImm<FamilyType>(loadRegImm)) {
+                auto pipeControl = find<PIPE_CONTROL *>(walker, loadRegImm);
+                while (pipeControl != loadRegImm) {
+                    if (verifyPipeControlNoPostSync<FamilyType>(pipeControl)) {
+                        pipeControlsBeforeLoadRegImm++;
+                    }
+                    pipeControl = find<PIPE_CONTROL *>(++pipeControl, loadRegImm);
+                }
+            }
+        }
+    }
+
     DebugManagerStateRestore restore;
 
     const size_t off[3] = {0, 0, 0};
@@ -1866,6 +1971,7 @@ struct PauseOnGpuTests : public EnqueueKernelTest {
     uint32_t pipeControlBeforeWalkerFound = 0;
     uint32_t pipeControlAfterWalkerFound = 0;
     uint32_t loadRegImmsFound = 0;
+    uint32_t pipeControlsBeforeLoadRegImm = 0;
     bool heaplessStateInit = false;
 };
 
@@ -2037,8 +2143,8 @@ HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenDispatchWalkersThenInse
     EXPECT_EQ(pCmdQ->getHeaplessStateInitEnabled() ? 2u : 1u, loadRegImmsFound);
 }
 
-HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenDispatcMultiplehWalkersThenInsertLoadRegisterImmCommandOnlyOnce) {
-    debugManager.flags.GpuScratchRegWriteAfterWalker.set(1);
+HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenDispatchMultiplehWalkersThenInsertPipeControlAndLoadRegisterImmCommandsOnlyOnce) {
+    debugManager.flags.GpuScratchRegWriteAfterWalker.set(2);
     debugManager.flags.GpuScratchRegWriteRegisterData.set(0x1234);
     debugManager.flags.GpuScratchRegWriteRegisterOffset.set(0x5678);
 
@@ -2054,8 +2160,10 @@ HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenDispatcMultiplehWalkers
     hwParser.parseCommands<FamilyType>(*pCmdQ);
 
     findLoadRegImms<FamilyType>(hwParser.cmdList);
+    findPipeControlsBeforeLoadRegImm<FamilyType>(hwParser.cmdList);
 
     EXPECT_EQ(1u, loadRegImmsFound);
+    EXPECT_EQ(1u, pipeControlsBeforeLoadRegImm);
 }
 
 HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenEstimatingCommandStreamSizeThenMiLoadRegisterImmCommandSizeIsIncluded) {
@@ -2073,7 +2181,7 @@ HWTEST_F(PauseOnGpuTests, givenGpuScratchWriteEnabledWhenEstimatingCommandStream
     EXPECT_EQ(baseCommandStreamSize + sizeof(typename FamilyType::MI_LOAD_REGISTER_IMM), extendedCommandStreamSize);
 }
 
-HWTEST_F(PauseOnGpuTests, givenResolveDependenciesByPipecontrolWhenEstimatingCommandStreamSizeThenPipeControlSizeIsIncluded) {
+HWTEST_F(PauseOnGpuTests, givenResolveDependenciesByPipecontrolWhenEstimatingCommandStreamSizeThenStallingBarrierSizeIsIncluded) {
     MockKernelWithInternals mockKernel(*pClDevice);
     DispatchInfo dispatchInfo;
     MultiDispatchInfo multiDispatchInfo(mockKernel.mockKernel);
@@ -2086,7 +2194,7 @@ HWTEST_F(PauseOnGpuTests, givenResolveDependenciesByPipecontrolWhenEstimatingCom
 
     auto extendedCommandStreamSize = EnqueueOperation<FamilyType>::getTotalSizeRequiredCS(CL_COMMAND_NDRANGE_KERNEL, {}, false, false, false, *pCmdQ, multiDispatchInfo, false, false, true, nullptr);
 
-    EXPECT_EQ(baseCommandStreamSize + MemorySynchronizationCommands<FamilyType>::getSizeForSingleBarrier(false), extendedCommandStreamSize);
+    EXPECT_EQ(baseCommandStreamSize + MemorySynchronizationCommands<FamilyType>::getSizeForStallingBarrier(), extendedCommandStreamSize);
 }
 
 HWTEST_F(PauseOnGpuTests, givenTimestampPacketWriteDisabledAndMarkerWithProfilingWhenEstimatingCommandStreamSizeThenStoreMMIOSizeIsIncluded) {

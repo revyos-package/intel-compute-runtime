@@ -107,10 +107,10 @@ TEST_F(DeviceTest, GivenDebugVariableForcing32BitAllocationsWhenDeviceIsCreatedT
     debugManager.flags.Force32bitAddressing.set(true);
     auto pDevice = std::unique_ptr<Device>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr));
     if constexpr (is64bit) {
-        EXPECT_TRUE(pDevice->getDeviceInfo().force32BitAddressess);
+        EXPECT_TRUE(pDevice->getDeviceInfo().force32BitAddresses);
         EXPECT_TRUE(pDevice->getMemoryManager()->peekForce32BitAllocations());
     } else {
-        EXPECT_FALSE(pDevice->getDeviceInfo().force32BitAddressess);
+        EXPECT_FALSE(pDevice->getDeviceInfo().force32BitAddresses);
         EXPECT_FALSE(pDevice->getMemoryManager()->peekForce32BitAllocations());
     }
     debugManager.flags.Force32bitAddressing.set(false);
@@ -246,9 +246,10 @@ HWTEST_F(DeviceTest, givenMultiDeviceWhenCreatingContextsThenMemoryManagerDefaul
 }
 
 TEST(DeviceCleanup, givenDeviceWhenItIsDestroyedThenFlushBatchedSubmissionsIsCalled) {
+    EnvironmentWithCsrWrapper environment;
+    environment.setCsrType<MockCommandStreamReceiver>();
     auto mockDevice = std::unique_ptr<MockDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(nullptr));
-    MockCommandStreamReceiver *csr = new MockCommandStreamReceiver(*mockDevice->getExecutionEnvironment(), mockDevice->getRootDeviceIndex(), mockDevice->getDeviceBitfield());
-    mockDevice->resetCommandStreamReceiver(csr);
+    MockCommandStreamReceiver *csr = static_cast<MockCommandStreamReceiver *>(&mockDevice->getGpgpuCommandStreamReceiver());
     int flushedBatchedSubmissionsCalledCount = 0;
     csr->flushBatchedSubmissionsCallCounter = &flushedBatchedSubmissionsCalledCount;
     mockDevice.reset(nullptr);
