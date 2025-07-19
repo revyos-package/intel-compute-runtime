@@ -168,6 +168,14 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}${BRANCH_DIR_SUFFIX}image_helper.cpp
 )
 
+if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
+  list(APPEND NEO_CORE_HELPERS
+       ${CMAKE_CURRENT_SOURCE_DIR}/uint16_avx2.h
+       ${CMAKE_CURRENT_SOURCE_DIR}/uint16_sse4.h
+       ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen_sse4.cpp
+  )
+endif()
+
 if(WIN32)
   list(APPEND NEO_CORE_HELPERS
        ${CMAKE_CURRENT_SOURCE_DIR}/windows/path.cpp
