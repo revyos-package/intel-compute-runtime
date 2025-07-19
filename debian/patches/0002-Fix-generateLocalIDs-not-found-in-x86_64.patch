@@ -1,0 +1,34 @@
+From 7f8b9da8ae9416ebbcd7e29b292f3f3bf5ec1011 Mon Sep 17 00:00:00 2001
+From: Han Gao <rabenda.cn@gmail.com>
+Date: Sat, 19 Jul 2025 19:43:34 +0800
+Subject: [PATCH 2/2] Fix generateLocalIDs not found in x86_64
+
+Fixed the issue that generateLocalIDs could not be found when loading the library.
+
+Signed-off-by: Han Gao <rabenda.cn@gmail.com>
+---
+ shared/source/helpers/CMakeLists.txt | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/shared/source/helpers/CMakeLists.txt b/shared/source/helpers/CMakeLists.txt
+index 6fbcdbf2137e..f5815082a253 100644
+--- a/shared/source/helpers/CMakeLists.txt
++++ b/shared/source/helpers/CMakeLists.txt
+@@ -169,6 +169,14 @@ set(NEO_CORE_HELPERS
+     ${CMAKE_CURRENT_SOURCE_DIR}${BRANCH_DIR_SUFFIX}image_helper.cpp
+ )
+ 
++if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
++  list(APPEND NEO_CORE_HELPERS
++       ${CMAKE_CURRENT_SOURCE_DIR}/uint16_avx2.h
++       ${CMAKE_CURRENT_SOURCE_DIR}/uint16_sse4.h
++       ${CMAKE_CURRENT_SOURCE_DIR}/local_id_gen_sse4.cpp
++  )
++endif()
++
+ if(WIN32)
+   list(APPEND NEO_CORE_HELPERS
+        ${CMAKE_CURRENT_SOURCE_DIR}/windows/path.cpp
+-- 
+2.47.2
+

@@ -1,7 +1,7 @@
 From d921a5f6f8654e1310fd3d746a15687c775e33d9 Mon Sep 17 00:00:00 2001
 From: Xinmudotmoe <xinmu@xinmu.moe>
 Date: Thu, 17 Jul 2025 23:48:47 +0800
-Subject: [PATCH] Add riscv support
+Subject: [PATCH 1/2] Add riscv support
 
 Signed-off-by: Xinmudotmoe <xinmu@xinmu.moe>
 Signed-off-by: Han Gao <rabenda.cn@gmail.com>
