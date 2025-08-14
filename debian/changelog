@@ -1,8 +1,8 @@
-intel-compute-runtime (25.27.34303.9-2) UNRELEASED; urgency=medium
+intel-compute-runtime (25.27.34303.9-2) unstable; urgency=medium
 
   * d/rules: Disable GPU Spectre mitigations.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Wed, 13 Aug 2025 19:30:49 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 14 Aug 2025 13:22:52 +0300
 
 intel-compute-runtime (25.27.34303.9-1) unstable; urgency=medium
 
