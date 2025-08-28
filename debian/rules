@@ -9,6 +9,8 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DNEO_DISABLE_MITIGATIONS=TRUE \
+		-DNEO_ENABLE_I915_PRELIM_DETECTION=TRUE \
+		-DNEO_ENABLE_XE_PRELIM_DETECTION=TRUE \
 		-DSKIP_UNIT_TESTS=1 \
 		-Wno-dev
 
