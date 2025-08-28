@@ -9,7 +9,7 @@ Build-Depends:
  debhelper-compat (= 13),
  cmake,
  libigc2,
- libigdfcl2-dev (>= 2.7.11),
+ libigdfcl2-dev (>= 2.16.0),
  libigdgmm-dev (>= 21.2.1),
  libva-dev,
  libze-dev (>= 1.24.1),
