@@ -1,4 +1,4 @@
-intel-compute-runtime (25.31.34666.3-1) UNRELEASED; urgency=medium
+intel-compute-runtime (25.31.34666.3-1) unstable; urgency=medium
 
   [ Timo Aaltonen ]
   * New upstream release.
@@ -13,7 +13,7 @@ intel-compute-runtime (25.31.34666.3-1) UNRELEASED; urgency=medium
   * install: Update libze-intel-gpu-dev.
   * rules: Add i915 and xe prelim detection.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Tue, 19 Aug 2025 20:38:55 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 28 Aug 2025 11:48:53 +0300
 
 intel-compute-runtime (25.27.34303.9-2) unstable; urgency=medium
 
