@@ -4,6 +4,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeCommandListAppendBarrierTracing@Base 24.35.30872.14
  zeCommandListAppendEventReset@Base 24.35.30872.14
  zeCommandListAppendEventResetTracing@Base 24.35.30872.14
+ zeCommandListAppendGraphExp@Base 25.31.34666.3
  zeCommandListAppendImageCopy@Base 24.35.30872.14
  zeCommandListAppendImageCopyFromMemory@Base 24.35.30872.14
  zeCommandListAppendImageCopyFromMemoryExt@Base 24.35.30872.14
@@ -47,6 +48,8 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeCommandListAppendWaitOnEventsTracing@Base 24.35.30872.14
  zeCommandListAppendWriteGlobalTimestamp@Base 24.35.30872.14
  zeCommandListAppendWriteGlobalTimestampTracing@Base 24.35.30872.14
+ zeCommandListBeginCaptureIntoGraphExp@Base 25.31.34666.3
+ zeCommandListBeginGraphCaptureExp@Base 25.31.34666.3
  zeCommandListClose@Base 24.35.30872.14
  zeCommandListCloseTracing@Base 24.35.30872.14
  zeCommandListCreate@Base 24.35.30872.14
@@ -55,6 +58,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeCommandListCreateTracing@Base 24.35.30872.14
  zeCommandListDestroy@Base 24.35.30872.14
  zeCommandListDestroyTracing@Base 24.35.30872.14
+ zeCommandListEndGraphCaptureExp@Base 25.31.34666.3
  zeCommandListGetContextHandle@Base 24.35.30872.14
  zeCommandListGetDeviceHandle@Base 24.35.30872.14
  zeCommandListGetNextCommandIdExp@Base 24.35.30872.14
@@ -63,6 +67,8 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeCommandListHostSynchronize@Base 24.35.30872.14
  zeCommandListImmediateAppendCommandListsExp@Base 24.35.30872.14
  zeCommandListImmediateGetIndex@Base 24.35.30872.14
+ zeCommandListInstantiateGraphExp@Base 25.31.34666.3
+ zeCommandListIsGraphCaptureEnabledExp@Base 25.31.34666.3
  zeCommandListIsImmediate@Base 24.35.30872.14
  zeCommandListReset@Base 24.35.30872.14
  zeCommandListResetTracing@Base 24.35.30872.14
@@ -149,6 +155,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeDriverGetPropertiesTracing@Base 24.35.30872.14
  zeDriverGetTracing@Base 24.35.30872.14
  zeDriverRTASFormatCompatibilityCheckExp@Base 24.35.30872.14
+ zeDriverRTASFormatCompatibilityCheckExt@Base 25.31.34666.3
  zeEventCreate@Base 24.35.30872.14
  zeEventCreateTracing@Base 24.35.30872.14
  zeEventDestroy@Base 24.35.30872.14
@@ -180,6 +187,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeEventQueryStatus@Base 24.35.30872.14
  zeEventQueryStatusTracing@Base 24.35.30872.14
  zeEventQueryTimestampsExp@Base 24.35.30872.14
+ zeExecutableGraphDestroyExp@Base 25.31.34666.3
  zeFabricEdgeGetExp@Base 24.35.30872.14
  zeFabricEdgeGetPropertiesExp@Base 24.35.30872.14
  zeFabricEdgeGetVerticesExp@Base 24.35.30872.14
@@ -222,9 +230,15 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeGetModuleProcAddrTable@Base 24.35.30872.14
  zeGetPhysicalMemProcAddrTable@Base 24.35.30872.14
  zeGetRTASBuilderExpProcAddrTable@Base 24.35.30872.14
+ zeGetRTASBuilderProcAddrTable@Base 25.31.34666.3
  zeGetRTASParallelOperationExpProcAddrTable@Base 24.35.30872.14
+ zeGetRTASParallelOperationProcAddrTable@Base 25.31.34666.3
  zeGetSamplerProcAddrTable@Base 24.35.30872.14
  zeGetVirtualMemProcAddrTable@Base 24.35.30872.14
+ zeGraphCreateExp@Base 25.31.34666.3
+ zeGraphDestroyExp@Base 25.31.34666.3
+ zeGraphDumpContentsExp@Base 25.31.34666.3
+ zeGraphIsEmptyExp@Base 25.31.34666.3
  zeImageCreate@Base 24.35.30872.14
  zeImageCreateTracing@Base 24.35.30872.14
  zeImageDestroy@Base 24.35.30872.14
@@ -313,13 +327,22 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zePhysicalMemCreateTracing@Base 24.35.30872.14
  zePhysicalMemDestroyTracing@Base 24.35.30872.14
  zeRTASBuilderBuildExp@Base 24.35.30872.14
+ zeRTASBuilderBuildExt@Base 25.31.34666.3
+ zeRTASBuilderCommandListAppendCopyExt@Base 25.31.34666.3
  zeRTASBuilderCreateExp@Base 24.35.30872.14
+ zeRTASBuilderCreateExt@Base 25.31.34666.3
  zeRTASBuilderDestroyExp@Base 24.35.30872.14
+ zeRTASBuilderDestroyExt@Base 25.31.34666.3
  zeRTASBuilderGetBuildPropertiesExp@Base 24.35.30872.14
+ zeRTASBuilderGetBuildPropertiesExt@Base 25.31.34666.3
  zeRTASParallelOperationCreateExp@Base 24.35.30872.14
+ zeRTASParallelOperationCreateExt@Base 25.31.34666.3
  zeRTASParallelOperationDestroyExp@Base 24.35.30872.14
+ zeRTASParallelOperationDestroyExt@Base 25.31.34666.3
  zeRTASParallelOperationGetPropertiesExp@Base 24.35.30872.14
+ zeRTASParallelOperationGetPropertiesExt@Base 25.31.34666.3
  zeRTASParallelOperationJoinExp@Base 24.35.30872.14
+ zeRTASParallelOperationJoinExt@Base 25.31.34666.3
  zeSamplerCreate@Base 24.35.30872.14
  zeSamplerCreateTracing@Base 24.35.30872.14
  zeSamplerDestroy@Base 24.35.30872.14
@@ -333,6 +356,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zeVirtualMemUnmapTracing@Base 24.35.30872.14
  zerDeviceTranslateToIdentifier@Base 25.27.34303.9
  zerDriverGetDefaultContext@Base 25.27.34303.9
+ zerDriverGetLastErrorDescription@Base 25.31.34666.3
  zerIdentifierTranslateToDeviceHandle@Base 25.27.34303.9
  zesDeviceEccAvailable@Base 24.35.30872.14
  zesDeviceEccConfigurable@Base 24.35.30872.14
@@ -448,6 +472,7 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zesGetTemperatureProcAddrTable@Base 24.35.30872.14
  zesGetVFManagementExpProcAddrTable@Base 24.35.30872.14
  zesInit@Base 24.35.30872.14
+ zesIntelDevicePciLinkSpeedUpdateExp@Base 25.31.34666.3
  zesLedGetProperties@Base 24.35.30872.14
  zesLedGetState@Base 24.35.30872.14
  zesLedSetColor@Base 24.35.30872.14
@@ -525,6 +550,8 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zetDebugWriteMemory@Base 24.35.30872.14
  zetDebugWriteRegisters@Base 24.35.30872.14
  zetDeviceCreateMetricGroupsFromMetricsExp@Base 24.52.32224.13
+ zetDeviceDisableMetricsExp@Base 25.31.34666.3
+ zetDeviceEnableMetricsExp@Base 25.31.34666.3
  zetDeviceGetConcurrentMetricGroupsExp@Base 24.52.32224.13
  zetDeviceGetDebugProperties@Base 24.35.30872.14
  zetDriverCalculateMetricExportDataExp@Base 24.35.30872.14
@@ -558,6 +585,8 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zetIntelMetricDecoderCreateExp@Base 25.27.34303.9
  zetIntelMetricDecoderDestroyExp@Base 25.27.34303.9
  zetIntelMetricDecoderGetDecodableMetricsExp@Base 25.27.34303.9
+ zetIntelMetricScopeGetPropertiesExp@Base 25.31.34666.3
+ zetIntelMetricScopesGetExp@Base 25.31.34666.3
  zetIntelMetricTracerCreateExp@Base 25.27.34303.9
  zetIntelMetricTracerDecodeExp@Base 25.27.34303.9
  zetIntelMetricTracerDestroyExp@Base 25.27.34303.9
@@ -611,6 +640,11 @@ libze_intel_gpu.so.1 libze-intel-gpu1 #MINVER#
  zetTracerExpSetPrologues@Base 24.35.30872.14
  zexCommandListAppendJump@Base 25.27.34303.9
  zexCommandListAppendLoadRegVariable@Base 25.27.34303.9
+ zexCommandListAppendMILoadRegImm@Base 25.31.34666.3
+ zexCommandListAppendMILoadRegMem@Base 25.31.34666.3
+ zexCommandListAppendMILoadRegReg@Base 25.31.34666.3
+ zexCommandListAppendMIMath@Base 25.31.34666.3
+ zexCommandListAppendMIStoreRegMem@Base 25.31.34666.3
  zexCommandListAppendStoreRegVariable@Base 25.27.34303.9
  zexCommandListAppendVariableLaunchKernel@Base 25.27.34303.9
  zexCommandListGetLabel@Base 25.27.34303.9

@@ -14,6 +14,9 @@ override_dh_auto_configure:
 		-DSKIP_UNIT_TESTS=1 \
 		-Wno-dev
 
+override_dh_makeshlibs:
+	dh_makeshlibs -a -- -c4
+
 override_dh_gencontrol:
 	dh_gencontrol -- \
 		-V"igc:LLVM-Version=$(shell dpkg-query -f '$${Provides}' -W libigc2 | sed -rn 's/.*libigc2\+llvm([0-9]+).*/\1/p')" \
