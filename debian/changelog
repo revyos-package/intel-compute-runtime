@@ -1,10 +1,14 @@
 intel-compute-runtime (25.31.34666.3-1) UNRELEASED; urgency=medium
 
+  [ Timo Aaltonen ]
   * New upstream release.
   * control: Bump build-dep for igc.
   * alternatives: Bump ocloc version.
   * control: Bump gmmlib build-dep.
+
+  [ Pavel Androniychuk ]
   * rules: Drop fortify-source strip, not needed anymore.
+  * install: Update libze-intel-gpu-dev.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Tue, 19 Aug 2025 20:38:55 +0300
 
