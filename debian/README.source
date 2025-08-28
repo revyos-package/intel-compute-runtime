@@ -1,0 +1,10 @@
+The procedure to update to a new upstream release goes usually like
+this:
+
+# git checkout upstream
+# git reset --hard <new upstream tag>
+# git checkout -b master-new
+# git merge -s ours <previous upstream tag on master>
+# git merge master
+# git branch -M master
+# dch -v <new version>; git commit -a -m "version bump"

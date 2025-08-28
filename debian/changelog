@@ -5,6 +5,7 @@ intel-compute-runtime (25.31.34666.3-1) UNRELEASED; urgency=medium
   * control: Bump build-dep for igc.
   * alternatives: Bump ocloc version.
   * control: Bump gmmlib build-dep.
+  * Add README.source.
 
   [ Pavel Androniychuk ]
   * rules: Drop fortify-source strip, not needed anymore.
