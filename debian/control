@@ -21,7 +21,7 @@ Vcs-Browser: https://salsa.debian.org/opencl-team/intel-compute-runtime
 Vcs-Git: https://salsa.debian.org/opencl-team/intel-compute-runtime.git
 
 Package: intel-opencl-icd
-Architecture: any-amd64
+Architecture: any-amd64 any-riscv64
 Depends:
  ${shlibs:Depends},
  ${misc:Depends},
@@ -57,7 +57,7 @@ Description: Intel graphics compute runtime for OpenCL
   - Intel Core Processors with Xe2 HPG GPU (Battlemage)
 
 Package: intel-ocloc
-Architecture: any-amd64
+Architecture: any-amd64 any-riscv64
 Depends: ${shlibs:Depends}, ${misc:Depends},
 Recommends: intel-ocloc-legacy
 Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
@@ -67,7 +67,7 @@ Description: Tool for managing Intel Compute GPU device binary format
  It can be used for generation as well as manipulation of such binary files.
 
 Package: intel-ocloc-dev
-Architecture: any-amd64
+Architecture: any-amd64 any-riscv64
 Depends: ${shlibs:Depends}, ${misc:Depends},
 Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
 Replaces: intel-opencl-icd (<< 23.26.26690.22-1)
@@ -78,7 +78,7 @@ Description: Tool for managing Intel Compute GPU device binary format -- devel f
  This package includes the development headers for intel-ocloc.
 
 Package: libze-intel-gpu1
-Architecture: any-amd64
+Architecture: any-amd64 any-riscv64
 Depends: ${shlibs:Depends}, ${misc:Depends},
 Recommends: libze-intel-gpu-legacy1-1
 Breaks: intel-opencl-icd (<< 23.26.26690.22-1)
@@ -93,7 +93,7 @@ Description: Intel oneAPI L0 support implementation for Intel GPUs -- shared lib
  This package contains the shared library.
 
 Package: libze-intel-gpu-dev
-Architecture: any-amd64
+Architecture: any-amd64 any-riscv64
 Depends: ${shlibs:Depends}, ${misc:Depends},
  libze-intel-gpu1 (= ${binary:Version}),
 Description: Intel oneAPI L0 support implementation for Intel GPUs -- devel files

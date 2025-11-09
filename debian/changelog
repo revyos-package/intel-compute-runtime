@@ -1,3 +1,13 @@
+intel-compute-runtime (25.40.35563.4-0revyos1) unstable; urgency=medium
+
+  * New upstream version 25.40.35563.4
+  * Add riscv support
+  * Update intel-ocloc.alternatives
+  * Update libze-intel-gpu-dev.install
+  * Update libze-intel-gpu1.symbols
+
+ -- Han Gao <rabenda.cn@gmail.com>  Sun, 09 Nov 2025 20:14:36 +0800
+
 intel-compute-runtime (25.31.34666.3-1) unstable; urgency=medium
 
   [ Timo Aaltonen ]
