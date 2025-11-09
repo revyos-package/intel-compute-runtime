@@ -18,7 +18,6 @@ using Family = NEO::Gen12LpFamily;
 #include "shared/source/helpers/blit_commands_helper_base.inl"
 #include "shared/source/helpers/blit_commands_helper_from_gen12lp_to_xe3.inl"
 #include "shared/source/helpers/populate_factory.h"
-#include "shared/source/helpers/state_base_address_tgllp_and_later.inl"
 
 namespace NEO {
 static auto gfxCore = IGFX_GEN12LP_CORE;
@@ -297,12 +296,14 @@ void BlitCommandsHelper<Family>::appendBlitCommandsForImages(const BlitPropertie
     auto dstRowPitch = static_cast<uint32_t>(blitProperties.dstRowPitch);
     uint32_t mipTailLod = 0;
     auto compressionDetails = 0u;
-
-    getBlitAllocationProperties(*srcAllocation, srcRowPitch, srcQPitch, tileType, mipTailLod, compressionDetails,
-                                rootDeviceEnvironment, blitProperties.srcPlane);
-    getBlitAllocationProperties(*dstAllocation, dstRowPitch, dstQPitch, tileType, mipTailLod, compressionDetails,
-                                rootDeviceEnvironment, blitProperties.dstPlane);
-
+    if (srcAllocation) {
+        getBlitAllocationProperties(*srcAllocation, srcRowPitch, srcQPitch, tileType, mipTailLod, compressionDetails,
+                                    rootDeviceEnvironment, blitProperties.srcPlane);
+    }
+    if (dstAllocation) {
+        getBlitAllocationProperties(*dstAllocation, dstRowPitch, dstQPitch, tileType, mipTailLod, compressionDetails,
+                                    rootDeviceEnvironment, blitProperties.dstPlane);
+    }
     blitCmd.setSourcePitch(srcRowPitch);
     blitCmd.setDestinationPitch(dstRowPitch);
 

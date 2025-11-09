@@ -9,6 +9,7 @@
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
+#include "shared/test/common/cmd_parse/hw_parse.h"
 #include "shared/test/common/helpers/relaxed_ordering_commands_helper.h"
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_direct_submission_hw.h"
@@ -48,6 +49,50 @@ struct CopyOffloadInOrderTests : public InOrderCmdListFixture {
     const CopyOffloadMode nonDualStreamMode = CopyOffloadModes::dualStream + 1;
     std::unique_ptr<VariableBackup<NEO::HardwareInfo>> backupHwInfo;
 };
+
+HWCMDTEST_F(IGFX_XE_HP_CORE, CopyOffloadInOrderTests, givenCmdsChainingWhenDispatchingCopyOffloadThenDontSkipImplictDependency) {
+    using MI_SEMAPHORE_WAIT = typename FamilyType::MI_SEMAPHORE_WAIT;
+
+    auto immCmdList = createImmCmdListWithOffload<FamilyType::gfxCoreFamily>();
+
+    if (immCmdList->isHeaplessModeEnabled()) {
+        GTEST_SKIP();
+    }
+
+    auto eventPool = createEvents<FamilyType>(1, false);
+    events[0]->makeCounterBasedImplicitlyDisabled(eventPool->getAllocation());
+
+    auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
+
+    auto eventHandle = events[0]->toHandle();
+
+    auto offset = cmdStream->getUsed();
+
+    void *alloc = nullptr;
+    ze_device_mem_alloc_desc_t deviceDesc = {};
+    auto result = context->allocDeviceMem(device->toHandle(), &deviceDesc, 16384u, 4096u, &alloc);
+    ASSERT_EQ(result, ZE_RESULT_SUCCESS);
+
+    auto findSemaphores = [&](size_t expectedNumSemaphores) {
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream->getCpuBase(), offset), cmdStream->getUsed() - offset));
+
+        auto cmds = findAll<MI_SEMAPHORE_WAIT *>(cmdList.begin(), cmdList.end());
+        EXPECT_EQ(expectedNumSemaphores, cmds.size());
+    };
+
+    immCmdList->appendLaunchKernel(kernel->toHandle(), groupCount, eventHandle, 0, nullptr, launchParams);
+    findSemaphores(1); // chaining
+    EXPECT_TRUE(immCmdList->latestOperationRequiredNonWalkerInOrderCmdsChaining);
+
+    offset = cmdStream->getUsed();
+    uint32_t copyData = 0;
+
+    immCmdList->appendMemoryCopy(&copyData, &copyData, 1, nullptr, 0, nullptr, copyParams);
+    findSemaphores(1); // implicit dependency
+
+    context->freeMem(alloc);
+}
 
 HWTEST_F(CopyOffloadInOrderTests, givenCopyOffloadWhenAskingForOperationModeThenReturnCorrectValue) {
     auto immCmdList = createImmCmdListWithOffload<FamilyType::gfxCoreFamily>();
@@ -221,13 +266,13 @@ HWTEST2_F(CopyOffloadInOrderTests, givenDebugFlagSetWhenCreatingCmdListThenEnabl
     cmdQueueDesc.flags = ZE_COMMAND_QUEUE_FLAG_IN_ORDER;
     cmdQueueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
 
-    auto dcFlushRequired = device->getProductHelper().isDcFlushAllowed();
+    auto crossEngineCacheFlushRequired = device->getGfxCoreHelper().crossEngineCacheFlushRequired();
 
     {
         EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreateImmediate(context, device, &cmdQueueDesc, &cmdListHandle));
         auto cmdList = static_cast<WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> *>(CommandList::fromHandle(cmdListHandle));
 
-        if (dcFlushRequired) {
+        if (crossEngineCacheFlushRequired) {
             EXPECT_EQ(CopyOffloadModes::disabled, cmdList->copyOffloadMode);
             EXPECT_EQ(nullptr, cmdList->cmdQImmediateCopyOffload);
         } else if (device->getProductHelper().useAdditionalBlitProperties()) {
@@ -257,7 +302,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenDebugFlagSetWhenCreatingCmdListThenEnabl
         EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreateImmediate(context, device, &cmdQueueDesc, &cmdListHandle));
         auto cmdList = static_cast<WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> *>(CommandList::fromHandle(cmdListHandle));
 
-        if (dcFlushRequired) {
+        if (crossEngineCacheFlushRequired) {
             EXPECT_EQ(CopyOffloadModes::disabled, cmdList->copyOffloadMode);
             EXPECT_EQ(nullptr, cmdList->cmdQImmediateCopyOffload);
         } else if (device->getProductHelper().useAdditionalBlitProperties()) {
@@ -339,12 +384,12 @@ HWTEST2_F(CopyOffloadInOrderTests, givenQueueDescriptorWhenCreatingCmdListThenEn
 
     cmdQueueDesc.pNext = &copyOffloadDesc;
 
-    auto dcFlushRequired = device->getProductHelper().isDcFlushAllowed();
+    auto crossEngineCacheFlushRequired = device->getGfxCoreHelper().crossEngineCacheFlushRequired();
 
     {
         EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreateImmediate(context, device, &cmdQueueDesc, &cmdListHandle));
         auto cmdList = static_cast<WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> *>(CommandList::fromHandle(cmdListHandle));
-        if (dcFlushRequired) {
+        if (crossEngineCacheFlushRequired) {
             EXPECT_EQ(CopyOffloadModes::disabled, cmdList->copyOffloadMode);
             EXPECT_EQ(nullptr, cmdList->cmdQImmediateCopyOffload);
         } else if (device->getProductHelper().useAdditionalBlitProperties()) {
@@ -384,13 +429,13 @@ HWTEST2_F(CopyOffloadInOrderTests, givenQueueDescriptorWithCopyOffloadFlagWhenCr
     cmdQueueDesc.flags = ZE_COMMAND_QUEUE_FLAG_IN_ORDER | ZE_COMMAND_QUEUE_FLAG_COPY_OFFLOAD_HINT;
     cmdQueueDesc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
 
-    auto dcFlushRequired = device->getProductHelper().isDcFlushAllowed();
+    auto crossEngineCacheFlushRequired = device->getGfxCoreHelper().crossEngineCacheFlushRequired();
 
     {
         EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreateImmediate(context, device, &cmdQueueDesc, &cmdListHandle));
         auto cmdList = static_cast<WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> *>(CommandList::fromHandle(cmdListHandle));
 
-        if (dcFlushRequired) {
+        if (crossEngineCacheFlushRequired) {
             EXPECT_EQ(CopyOffloadModes::disabled, cmdList->copyOffloadMode);
             EXPECT_EQ(nullptr, cmdList->cmdQImmediateCopyOffload);
         } else if (device->getProductHelper().useAdditionalBlitProperties()) {
@@ -435,7 +480,7 @@ HWTEST_F(CopyOffloadInOrderTests, givenNonDualStreamOffloadWhenCreatingCmdListTh
 
         ASSERT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreate(context->toHandle(), device->toHandle(), &cmdListDesc, &hCmdList));
 
-        if (device->getProductHelper().isDcFlushAllowed()) {
+        if (device->getGfxCoreHelper().crossEngineCacheFlushRequired()) {
             EXPECT_EQ(CopyOffloadModes::disabled, static_cast<CommandListImp *>(CommandList::fromHandle(hCmdList))->getCopyOffloadModeForOperation(true));
         } else {
             EXPECT_EQ(nonDualStreamMode, static_cast<CommandListImp *>(CommandList::fromHandle(hCmdList))->getCopyOffloadModeForOperation(true));
@@ -529,7 +574,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOffloadEnabledWhenProgrammingHwCmdsT
         EXPECT_EQ(initialCopyTaskCount + 2, copyQueueCsr->taskCount);
     }
 
-    auto data = allocHostMem(1);
+    auto data = allocHostMem(immCmdList->maxFillPatternSizeForCopyEngine * 2);
     {
         auto offset = cmdStream->getUsed();
 
@@ -545,6 +590,26 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOffloadEnabledWhenProgrammingHwCmdsT
 
         if (!device->getProductHelper().useAdditionalBlitProperties()) {
             EXPECT_EQ(initialMainTaskCount, mainQueueCsr->taskCount);
+        }
+        EXPECT_EQ(initialCopyTaskCount + 3, copyQueueCsr->taskCount);
+    }
+
+    {
+        auto offset = cmdStream->getUsed();
+
+        auto patternSize = immCmdList->maxFillPatternSizeForCopyEngine + 1;
+        immCmdList->appendMemoryFill(data, data, patternSize, 1, nullptr, 0, nullptr, copyParams);
+
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList,
+                                                          ptrOffset(cmdStream->getCpuBase(), offset),
+                                                          (cmdStream->getUsed() - offset)));
+
+        auto fillItor = findBltFillCmd<FamilyType>(cmdList.begin(), cmdList.end());
+        EXPECT_EQ(cmdList.end(), fillItor);
+
+        if (!device->getProductHelper().useAdditionalBlitProperties()) {
+            EXPECT_EQ(initialMainTaskCount + 1, mainQueueCsr->taskCount);
         }
         EXPECT_EQ(initialCopyTaskCount + 3, copyQueueCsr->taskCount);
     }
@@ -574,7 +639,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOffloadEnabledWhenProgrammingHwCmdsT
         EXPECT_NE(cmdList.end(), itor);
 
         if (!device->getProductHelper().useAdditionalBlitProperties()) {
-            EXPECT_EQ(initialMainTaskCount, mainQueueCsr->taskCount);
+            EXPECT_EQ(initialMainTaskCount + 1, mainQueueCsr->taskCount);
         }
         EXPECT_EQ(initialCopyTaskCount + 4, copyQueueCsr->taskCount);
     }
@@ -593,7 +658,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOffloadEnabledWhenProgrammingHwCmdsT
         EXPECT_NE(cmdList.end(), itor);
 
         if (!device->getProductHelper().useAdditionalBlitProperties()) {
-            EXPECT_EQ(initialMainTaskCount, mainQueueCsr->taskCount);
+            EXPECT_EQ(initialMainTaskCount + 1, mainQueueCsr->taskCount);
         }
         EXPECT_EQ(initialCopyTaskCount + 5, copyQueueCsr->taskCount);
     }
@@ -612,7 +677,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOffloadEnabledWhenProgrammingHwCmdsT
         EXPECT_NE(cmdList.end(), itor);
 
         if (!device->getProductHelper().useAdditionalBlitProperties()) {
-            EXPECT_EQ(initialMainTaskCount, mainQueueCsr->taskCount);
+            EXPECT_EQ(initialMainTaskCount + 1, mainQueueCsr->taskCount);
         }
         EXPECT_EQ(initialCopyTaskCount + 6, copyQueueCsr->taskCount);
     }
@@ -903,6 +968,29 @@ HWTEST2_F(CopyOffloadInOrderTests, givenProfilingEventWithRelaxedOrderingWhenApp
     }
 }
 
+HWCMDTEST_F(IGFX_XE_HP_CORE, CopyOffloadInOrderTests, givenCrossEngineDependencyWhenComputeWorkSubmittedThenUseSemaphore) {
+    debugManager.flags.OverrideCopyOffloadMode.set(CopyOffloadModes::dualStream);
+
+    uint32_t counterOffset = 64;
+
+    auto immCmdList = createImmCmdListWithOffload<FamilyType::gfxCoreFamily>();
+    immCmdList->inOrderExecInfo->setAllocationOffset(counterOffset);
+
+    auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
+
+    immCmdList->appendMemoryCopy(&copyData1, &copyData2, 1, nullptr, 0, nullptr, copyParams);
+    EXPECT_TRUE(immCmdList->latestFlushIsDualCopyOffload);
+
+    auto offset = cmdStream->getUsed();
+
+    immCmdList->appendLaunchKernel(kernel->toHandle(), groupCount, nullptr, 0, nullptr, launchParams);
+
+    auto hwCmds = HardwareParse::parseCommandBuffer<FamilyType>(*cmdStream, offset);
+
+    auto itor = find<typename FamilyType::MI_SEMAPHORE_WAIT *>(hwCmds.begin(), hwCmds.end());
+    EXPECT_NE(hwCmds.end(), itor);
+}
+
 HWTEST2_F(CopyOffloadInOrderTests, givenAtomicSignalingModeWhenUpdatingCounterThenUseCorrectHwCommands, IsAtLeastXe2HpgCore) {
     using MI_ATOMIC = typename FamilyType::MI_ATOMIC;
     using ATOMIC_OPCODES = typename FamilyType::MI_ATOMIC::ATOMIC_OPCODES;
@@ -1020,7 +1108,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenDeviceToHostCopyWhenProgrammingThenAddFe
 
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
 
-    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device));
+    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device, result));
 
     auto immCmdList = createImmCmdListWithOffload<FamilyType::gfxCoreFamily>();
 
@@ -1115,7 +1203,7 @@ HWTEST2_F(CopyOffloadInOrderTests, givenCopyOperationWithHostVisibleEventThenMar
 
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
 
-    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device));
+    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device, result));
 
     auto immCmdList = createImmCmdListWithOffload<FamilyType::gfxCoreFamily>();
 
@@ -2421,11 +2509,11 @@ struct StandaloneInOrderTimestampAllocationTests : public InOrderCmdListFixture 
 
 HWTEST_F(StandaloneInOrderTimestampAllocationTests, givenSignalScopeEventWhenSignalEventIsCalledThenProgramPipeControl) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
-    auto eventPool = createEvents<FamilyType>(2, false);
+    auto eventPool = createEvents<FamilyType>(2, true);
 
     auto cmdList = createImmCmdList<FamilyType::gfxCoreFamily>();
 
-    events[0]->signalScope = true;
+    events[0]->signalScope = ZE_EVENT_SCOPE_FLAG_HOST;
     events[1]->signalScope = false;
 
     auto cmdStream = cmdList->getCmdContainer().getCommandStream();
@@ -3529,6 +3617,115 @@ HWTEST2_F(MultiTileInOrderCmdListTests, givenStandaloneEventAndCopyOnlyCmdListWh
     context->freeMem(hostAddress);
 }
 
+HWTEST2_F(MultiTileInOrderCmdListTests, givenExternalSyncStorageWhenCallingAppendSignalInOrderDependencyCounterThenProgramAtomicOperation, IsAtLeastXeHpcCore) {
+    using MI_ATOMIC = typename FamilyType::MI_ATOMIC;
+    using ATOMIC_OPCODES = typename FamilyType::MI_ATOMIC::ATOMIC_OPCODES;
+    using DATA_SIZE = typename FamilyType::MI_ATOMIC::DATA_SIZE;
+
+    const uint64_t incValue = (static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1234) * partitionCount;
+    const uint64_t counterValue = incValue * 2;
+    const uint64_t programmedIncValue = incValue / partitionCount;
+
+    auto devAddress = reinterpret_cast<uint64_t *>(allocDeviceMem(sizeof(uint64_t)));
+
+    auto immCmdList = createImmCmdList<FamilyType::gfxCoreFamily>();
+
+    auto eventObj = createExternalSyncStorageEvent(counterValue, incValue, devAddress);
+
+    auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
+    immCmdList->inOrderAtomicSignalingEnabled = false;
+    immCmdList->appendSignalInOrderDependencyCounter(eventObj.get(), false, false, false, false);
+
+    GenCmdList cmdList;
+    ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, cmdStream->getCpuBase(), cmdStream->getUsed()));
+
+    auto it = find<MI_ATOMIC *>(cmdList.begin(), cmdList.end());
+    ASSERT_NE(cmdList.end(), it);
+
+    auto miAtomic = genCmdCast<MI_ATOMIC *>(*it);
+    EXPECT_EQ(ATOMIC_OPCODES::ATOMIC_8B_ADD, miAtomic->getAtomicOpcode());
+    EXPECT_EQ(DATA_SIZE::DATA_SIZE_QWORD, miAtomic->getDataSize());
+    EXPECT_EQ(getLowPart(programmedIncValue), miAtomic->getOperand1DataDword0());
+    EXPECT_EQ(getHighPart(programmedIncValue), miAtomic->getOperand1DataDword1());
+
+    EXPECT_EQ(castToUint64(devAddress), NEO::UnitTestHelper<FamilyType>::getAtomicMemoryAddress(*miAtomic));
+
+    context->freeMem(devAddress);
+}
+
+HWTEST2_F(MultiTileInOrderCmdListTests, givenExternalSyncStorageAndCopyOnlyCmdListWhenCallingAppendMemoryCopyWithDisabledInOrderSignalingThenSignalAtomicStorage, IsAtLeastXeHpcCore) {
+    using MI_ATOMIC = typename FamilyType::MI_ATOMIC;
+    using ATOMIC_OPCODES = typename FamilyType::MI_ATOMIC::ATOMIC_OPCODES;
+    using DATA_SIZE = typename FamilyType::MI_ATOMIC::DATA_SIZE;
+
+    const uint64_t incValue = (static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1234) * partitionCount;
+    const uint64_t counterValue = incValue * 2;
+    const uint64_t programmedIncValue = incValue / partitionCount;
+
+    auto devAddress = reinterpret_cast<uint64_t *>(allocDeviceMem(sizeof(uint64_t)));
+
+    auto immCmdList = createCopyOnlyImmCmdList<FamilyType::gfxCoreFamily>();
+
+    auto eventObj = createExternalSyncStorageEvent(counterValue, incValue, devAddress);
+
+    auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
+
+    auto offset = cmdStream->getUsed();
+    uint32_t copyData = 0;
+    copyParams.forceDisableCopyOnlyInOrderSignaling = true;
+
+    {
+        immCmdList->appendMemoryCopy(&copyData, &copyData, 1, eventObj->toHandle(), 0, nullptr, copyParams);
+
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream->getCpuBase(), offset), cmdStream->getUsed() - offset));
+
+        auto it = find<MI_ATOMIC *>(cmdList.begin(), cmdList.end());
+
+        if (immCmdList->useAdditionalBlitProperties) {
+            EXPECT_EQ(cmdList.end(), it);
+        } else {
+            ASSERT_NE(cmdList.end(), it);
+
+            auto miAtomic = genCmdCast<MI_ATOMIC *>(*it);
+            EXPECT_EQ(ATOMIC_OPCODES::ATOMIC_8B_ADD, miAtomic->getAtomicOpcode());
+            EXPECT_EQ(DATA_SIZE::DATA_SIZE_QWORD, miAtomic->getDataSize());
+            EXPECT_EQ(getLowPart(programmedIncValue), miAtomic->getOperand1DataDword0());
+            EXPECT_EQ(getHighPart(programmedIncValue), miAtomic->getOperand1DataDword1());
+
+            EXPECT_EQ(castToUint64(devAddress), NEO::UnitTestHelper<FamilyType>::getAtomicMemoryAddress(*miAtomic));
+        }
+    }
+
+    offset = cmdStream->getUsed();
+
+    {
+        ze_copy_region_t region = {0, 0, 0, 1, 1, 1};
+
+        immCmdList->appendMemoryCopyRegion(&copyData, &region, 1, 1, &copyData, &region, 1, 1, eventObj->toHandle(), 0, nullptr, copyParams);
+
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream->getCpuBase(), offset), cmdStream->getUsed() - offset));
+
+        auto it = find<MI_ATOMIC *>(cmdList.begin(), cmdList.end());
+        if (immCmdList->useAdditionalBlitProperties) {
+            EXPECT_EQ(cmdList.end(), it);
+        } else {
+            ASSERT_NE(cmdList.end(), it);
+
+            auto miAtomic = genCmdCast<MI_ATOMIC *>(*it);
+            EXPECT_EQ(ATOMIC_OPCODES::ATOMIC_8B_ADD, miAtomic->getAtomicOpcode());
+            EXPECT_EQ(DATA_SIZE::DATA_SIZE_QWORD, miAtomic->getDataSize());
+            EXPECT_EQ(getLowPart(programmedIncValue), miAtomic->getOperand1DataDword0());
+            EXPECT_EQ(getHighPart(programmedIncValue), miAtomic->getOperand1DataDword1());
+
+            EXPECT_EQ(castToUint64(devAddress), NEO::UnitTestHelper<FamilyType>::getAtomicMemoryAddress(*miAtomic));
+        }
+    }
+
+    context->freeMem(devAddress);
+}
+
 HWTEST2_F(MultiTileInOrderCmdListTests, givenDebugFlagSetWhenAskingForAtomicSignallingThenReturnTrue, IsAtLeastXeCore) {
     auto immCmdList = createMultiTileImmCmdList<FamilyType::gfxCoreFamily>();
     auto heaplessEnabled = immCmdList->isHeaplessModeEnabled();
@@ -3839,7 +4036,7 @@ HWTEST2_F(MultiTileInOrderCmdListTests, givenMultiTileInOrderModeWhenSignalingSy
 
     auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
     immCmdList->inOrderAtomicSignalingEnabled = false;
-    immCmdList->appendSignalInOrderDependencyCounter(nullptr, false, false, false);
+    immCmdList->appendSignalInOrderDependencyCounter(nullptr, false, false, false, false);
 
     GenCmdList cmdList;
     ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, cmdStream->getCpuBase(), cmdStream->getUsed()));
@@ -4008,7 +4205,7 @@ struct BcsSplitInOrderCmdListTests : public InOrderCmdListFixture {
         auto bcsSplit = static_cast<DeviceImp *>(device)->bcsSplit.get();
 
         for (uint32_t i = 0; i < numLinkCopyEngines; i++) {
-            if (static_cast<CommandQueueImp *>(bcsSplit->cmdQs[0])->getTaskCount() != expectedTaskCount) {
+            if (static_cast<WhiteBox<CommandList> *>(bcsSplit->cmdLists[0])->cmdQImmediate->getTaskCount() != expectedTaskCount) {
                 return false;
             }
         }
@@ -4022,13 +4219,13 @@ struct BcsSplitInOrderCmdListTests : public InOrderCmdListFixture {
 
         auto bcsSplit = static_cast<DeviceImp *>(device)->bcsSplit.get();
 
-        cmdList->isBcsSplitNeeded = bcsSplit->setupDevice(cmdList->getCsr(false));
+        cmdList->isBcsSplitNeeded = bcsSplit->setupDevice(cmdList->getCsr(false), false);
 
         return cmdList;
     }
 
     template <typename FamilyType, GFXCORE_FAMILY gfxCoreFamily>
-    void verifySplitCmds(LinearStream &cmdStream, size_t streamOffset, L0::Device *device, uint64_t submissionId, WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> &immCmdList,
+    void verifySplitCmds(LinearStream &cmdStream, size_t streamOffset, size_t subCopyOffset, L0::Device *device, uint64_t submissionId, WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> &immCmdList,
                          uint64_t externalDependencyGpuVa);
 
     std::unique_ptr<VariableBackup<HardwareInfo>> hwInfoBackup;
@@ -4036,7 +4233,7 @@ struct BcsSplitInOrderCmdListTests : public InOrderCmdListFixture {
 };
 
 template <typename FamilyType, GFXCORE_FAMILY gfxCoreFamily>
-void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_t streamOffset, L0::Device *device, uint64_t submissionId,
+void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_t streamOffset, size_t subCopyOffset, L0::Device *device, uint64_t submissionId,
                                                   WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> &immCmdList, uint64_t externalDependencyGpuVa) {
     using XY_COPY_BLT = typename std::remove_const<decltype(FamilyType::cmdInitXyCopyBlt)>::type;
     using MI_STORE_DATA_IMM = typename FamilyType::MI_STORE_DATA_IMM;
@@ -4050,16 +4247,15 @@ void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_
 
     auto counterGpuAddress = inOrderExecInfo->getBaseDeviceAddress();
 
-    GenCmdList cmdList;
-    ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream.getCpuBase(), streamOffset), (cmdStream.getUsed() - streamOffset)));
-
-    auto itor = cmdList.begin();
-
     bool aggregatedEventSplit = bcsSplit->events.aggregatedEventsMode;
 
     for (uint32_t i = 0; i < numLinkCopyEngines; i++) {
-        auto beginItor = itor;
+        auto subCmdStream = bcsSplit->cmdLists[i]->getCmdContainer().getCommandStream();
 
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(subCmdStream->getCpuBase(), subCopyOffset), (subCmdStream->getUsed() - subCopyOffset)));
+
+        auto itor = cmdList.begin();
         auto engineOffset = aggregatedEventSplit ? submissionId : (submissionId * numLinkCopyEngines);
 
         uint64_t signalSubCopyEventGpuVa = 0;
@@ -4135,9 +4331,13 @@ void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_
             ASSERT_TRUE(false);
         }
 
-        auto semaphoreCmds = findAll<MI_SEMAPHORE_WAIT *>(beginItor, itor);
+        auto semaphoreCmds = findAll<MI_SEMAPHORE_WAIT *>(cmdList.begin(), itor);
         EXPECT_EQ(numExpectedSemaphores, semaphoreCmds.size());
     }
+
+    GenCmdList cmdList;
+    ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream.getCpuBase(), streamOffset), (cmdStream.getUsed() - streamOffset)));
+    auto itor = cmdList.begin();
 
     auto semaphoreItor = find<MI_SEMAPHORE_WAIT *>(itor, cmdList.end());
 
@@ -4164,11 +4364,7 @@ void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_
             auto subCopyEventSemaphore = genCmdCast<MI_SEMAPHORE_WAIT *>(*semaphoreItor);
             ASSERT_NE(nullptr, subCopyEventSemaphore);
         }
-
-        itor = ++semaphoreItor;
-
-        EXPECT_EQ(nullptr, genCmdCast<MI_FLUSH_DW *>(*itor)); // no marker event
-
+        itor = semaphoreItor;
     } else {
         for (uint32_t i = 0; i < numLinkCopyEngines; i++) {
             auto subCopyEventSemaphore = genCmdCast<MI_SEMAPHORE_WAIT *>(*semaphoreItor);
@@ -4182,7 +4378,11 @@ void BcsSplitInOrderCmdListTests::verifySplitCmds(LinearStream &cmdStream, size_
         ASSERT_NE(nullptr, genCmdCast<MI_FLUSH_DW *>(*itor)); // marker event
     }
 
-    if (immCmdList.isHeaplessModeEnabled() && !aggregatedEventSplit) {
+    if (!device->getProductHelper().useAdditionalBlitProperties()) {
+        ASSERT_NE(nullptr, genCmdCast<MI_FLUSH_DW *>(*(++itor))); // in-order signal sync
+    }
+
+    if (immCmdList.inOrderAtomicSignalingEnabled) {
         auto inOrderAtomicSignalling = genCmdCast<MI_ATOMIC *>(*(++itor));
         ASSERT_NE(nullptr, inOrderAtomicSignalling);
     }
@@ -4285,11 +4485,12 @@ HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCo
     immCmdList->getCsr(false)->getNextBarrierCount();
 
     size_t offset = cmdStream->getUsed();
+    size_t subCopyOffset = static_cast<DeviceImp *>(device)->bcsSplit->cmdLists[0]->getCmdContainer().getCommandStream()->getUsed();
 
     immCmdList->appendMemoryCopy(&copyData, &copyData, copySize, nullptr, 0, nullptr, copyParams);
 
     // no implicit dependencies
-    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, device, 0, *immCmdList, 0);
+    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, subCopyOffset, device, 0, *immCmdList, 0);
 }
 
 HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCopyAfterBarrierWithImplicitDependenciesThenHandleCorrectInOrderSignaling, IsAtLeastXeHpcCore) {
@@ -4309,6 +4510,7 @@ HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCo
     immCmdList->appendMemoryCopy(&copyData, &copyData, copySize, nullptr, 0, nullptr, copyParams);
 
     size_t offset = cmdStream->getUsed();
+    size_t subCopyOffset = static_cast<DeviceImp *>(device)->bcsSplit->cmdLists[0]->getCmdContainer().getCommandStream()->getUsed();
 
     *immCmdList->getCsr(false)->getBarrierCountTagAddress() = 0u;
     immCmdList->getCsr(false)->getNextBarrierCount();
@@ -4316,7 +4518,7 @@ HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCo
     immCmdList->appendMemoryCopy(&copyData, &copyData, copySize, nullptr, 0, nullptr, copyParams);
 
     // implicit dependencies
-    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, device, 1, *immCmdList, 0);
+    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, subCopyOffset, device, 1, *immCmdList, 0);
 }
 
 HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCopyWithEventDependencyThenRequiredSemaphores, IsAtLeastXeHpcCore) {
@@ -4337,12 +4539,13 @@ HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenAppendingMemoryCo
     immCmdList->appendMemoryCopy(&copyData, &copyData, copySize, nullptr, 0, nullptr, copyParams);
 
     size_t offset = cmdStream->getUsed();
+    size_t subCopyOffset = static_cast<DeviceImp *>(device)->bcsSplit->cmdLists[0]->getCmdContainer().getCommandStream()->getUsed();
 
     *immCmdList->inOrderExecInfo->getBaseHostAddress() = 0;
 
     immCmdList->appendMemoryCopy(&copyData, &copyData, copySize, nullptr, 1, &eventHandle, copyParams);
 
-    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, device, 1, *immCmdList, events[0]->getCompletionFieldGpuAddress(device));
+    verifySplitCmds<FamilyType, FamilyType::gfxCoreFamily>(*cmdStream, offset, subCopyOffset, device, 1, *immCmdList, events[0]->getCompletionFieldGpuAddress(device));
 }
 
 HWTEST2_F(BcsSplitInOrderCmdListTests, givenBcsSplitEnabledWhenDispatchingCopyRegionThenHandleInOrderSignaling, IsAtLeastXeHpcCore) {

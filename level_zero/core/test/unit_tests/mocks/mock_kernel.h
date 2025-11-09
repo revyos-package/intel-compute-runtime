@@ -40,27 +40,18 @@ template <>
 struct WhiteBox<::L0::KernelImp> : public ::L0::KernelImp {
     using BaseClass = ::L0::KernelImp;
     using BaseClass::BaseClass;
-    using ::L0::KernelImp::cooperativeSupport;
     using ::L0::KernelImp::createPrintfBuffer;
-    using ::L0::KernelImp::heaplessEnabled;
-    using ::L0::KernelImp::implicitArgsVersion;
-    using ::L0::KernelImp::implicitScalingEnabled;
-    using ::L0::KernelImp::kernelImmData;
-    using ::L0::KernelImp::localDispatchSupport;
-    using ::L0::KernelImp::maxWgCountPerTileCcs;
-    using ::L0::KernelImp::maxWgCountPerTileCooperative;
-    using ::L0::KernelImp::maxWgCountPerTileRcs;
+    using ::L0::KernelImp::getCrossThreadDataSpan;
+    using ::L0::KernelImp::getDynamicStateHeapDataSpan;
+    using ::L0::KernelImp::getSurfaceStateHeapDataSpan;
     using ::L0::KernelImp::module;
+    using ::L0::KernelImp::ownedSharedState;
     using ::L0::KernelImp::patchBindlessOffsetsInCrossThreadData;
     using ::L0::KernelImp::patchBindlessSurfaceState;
     using ::L0::KernelImp::patchSamplerBindlessOffsetsInCrossThreadData;
-    using ::L0::KernelImp::printfBuffer;
-    using ::L0::KernelImp::rcsAvailable;
+    using ::L0::KernelImp::privateState;
     using ::L0::KernelImp::setAssertBuffer;
-    using ::L0::KernelImp::state;
-    using ::L0::KernelImp::surfaceStateAlignment;
-    using ::L0::KernelImp::surfaceStateAlignmentMask;
-    using ::L0::KernelImp::walkerInlineDataSize;
+    using ::L0::KernelImp::sharedState;
 
     void setBufferSurfaceState(uint32_t argIndex, void *address,
                                NEO::GraphicsAllocation *alloc) override {}
@@ -71,7 +62,17 @@ struct WhiteBox<::L0::KernelImp> : public ::L0::KernelImp {
         return getCrossThreadDataSize() + getPerThreadDataSizeForWholeThreadGroup();
     }
 
-    WhiteBox() : ::L0::KernelImp(nullptr) {}
+    NEO::KernelDescriptor &getDescriptor() {
+        return const_cast<NEO::KernelDescriptor &>(this->sharedState->kernelImmData->getDescriptor());
+    }
+
+    void setModule(Module *module) {
+        this->module = module;
+        DEBUG_BREAK_IF(!this->sharedState);
+        this->sharedState->module = module;
+    }
+
+    WhiteBox() : ::L0::KernelImp() {}
 };
 
 template <>
@@ -89,10 +90,10 @@ struct Mock<::L0::KernelImp> : public WhiteBox<::L0::KernelImp> {
     void setBufferSurfaceState(uint32_t argIndex, void *address, NEO::GraphicsAllocation *alloc) override {}
     void evaluateIfRequiresGenerationOfLocalIdsByRuntime(const NEO::KernelDescriptor &kernelDescriptor) override {
         if (enableForcingOfGenerateLocalIdByHw) {
-            state.kernelRequiresGenerationOfLocalIdsByRuntime = !forceGenerateLocalIdByHw;
+            privateState.kernelRequiresGenerationOfLocalIdsByRuntime = !forceGenerateLocalIdByHw;
         }
     }
-    ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *peerAllocData) override {
+    ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *allocData) override {
         return ZE_RESULT_SUCCESS;
     }
 

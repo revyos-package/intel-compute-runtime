@@ -1455,22 +1455,6 @@ struct MockCompilerInterfaceWithUnknownInterfaceCIFMain : MockCompilerInterface 
     }
 };
 
-TEST(TestCompilerInterface, givenOptionsWhenCallDisableZebinThenProperOptionsAreSet) {
-    DebugManagerStateRestore dbgRestore;
-    debugManager.flags.EnableDebugBreak.set(0);
-    debugManager.flags.PrintDebugMessages.set(0);
-
-    auto dummyValid = new MockCIFMain();
-    auto mockCompilerInterface = std::make_unique<MockCompilerInterface>();
-
-    mockCompilerInterface->defaultIgc.entryPoint.reset(dummyValid);
-
-    std::string options = "";
-    std::string internalOptions = "";
-    EXPECT_TRUE(mockCompilerInterface->disableZebin(options, internalOptions));
-    EXPECT_TRUE(CompilerOptions::contains(internalOptions, NEO::CompilerOptions::disableZebin.str()));
-}
-
 TEST(TranslationOutput, givenNonEmptyPointerAndSizeWhenMakingCopyThenCloneInputData) {
     MockCIFBuffer src;
     src.data.assign({2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37});
@@ -1588,7 +1572,7 @@ TEST(getOclCExtensionVersion, whenQueryingVersionOfIntegerDotProductExtensionThe
 TEST(getOclCExtensionVersion, whenQueryingVersionOfUnifiedSharedMemoryExtensionThenReturns110) {
     cl_version defaultVer = CL_MAKE_VERSION(7, 2, 5);
     cl_version ver = NEO::getOclCExtensionVersion("cl_intel_unified_shared_memory", defaultVer);
-    cl_version expectedVer = CL_MAKE_VERSION(1, 1, 0);
+    cl_version expectedVer = CL_MAKE_VERSION(1, 2, 0);
     EXPECT_EQ(expectedVer, ver);
 }
 

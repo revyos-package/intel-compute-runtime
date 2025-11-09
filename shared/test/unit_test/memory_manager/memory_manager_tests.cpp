@@ -21,6 +21,7 @@
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
 #include "shared/test/common/helpers/raii_gfx_core_helper.h"
+#include "shared/test/common/mocks/mock_align_malloc_memory_manager.h"
 #include "shared/test/common/mocks/mock_allocation_properties.h"
 #include "shared/test/common/mocks/mock_aub_center.h"
 #include "shared/test/common/mocks/mock_aub_manager.h"
@@ -62,6 +63,13 @@ TEST(MemoryManagerTest, WhenCallingSetSharedSystemAtomicAccessThenReturnTrue) {
     OsAgnosticMemoryManager memoryManager(executionEnvironment);
     auto subDeviceId = SubDeviceIdsVec{0};
     EXPECT_TRUE(memoryManager.setSharedSystemAtomicAccess(nullptr, 0u, AtomicAccessMode::none, subDeviceId, 0u));
+}
+
+TEST(MemoryManagerTest, WhenCallingGetSharedSystemAtomicAccessThenReturnTrue) {
+    MockExecutionEnvironment executionEnvironment(defaultHwInfo.get());
+    OsAgnosticMemoryManager memoryManager(executionEnvironment);
+    auto subDeviceId = SubDeviceIdsVec{0};
+    EXPECT_EQ(AtomicAccessMode::none, memoryManager.getSharedSystemAtomicAccess(nullptr, 0u, subDeviceId, 0u));
 }
 
 TEST(MemoryManagerTest, WhenCallingHasPageFaultsEnabledThenReturnFalse) {
@@ -1444,11 +1452,11 @@ TEST(OsAgnosticMemoryManager, givenDefaultMemoryManagerWhenGraphicsAllocationCon
 
     graphicsAllocation->setAllocationOffset(4);
 
-    auto offsetedGraphicsAddress = graphicsAllocation->getGpuAddress();
-    auto offsetedGraphicsAddressToPatch = graphicsAllocation->getGpuAddressToPatch();
+    auto offsetGraphicsAddress = graphicsAllocation->getGpuAddress();
+    auto offsetGraphicsAddressToPatch = graphicsAllocation->getGpuAddressToPatch();
 
-    EXPECT_EQ(offsetedGraphicsAddress, graphicsAddress + graphicsAllocation->getAllocationOffset());
-    EXPECT_EQ(offsetedGraphicsAddressToPatch, graphicsAddressToPatch + graphicsAllocation->getAllocationOffset());
+    EXPECT_EQ(offsetGraphicsAddress, graphicsAddress + graphicsAllocation->getAllocationOffset());
+    EXPECT_EQ(offsetGraphicsAddressToPatch, graphicsAddressToPatch + graphicsAllocation->getAllocationOffset());
 
     memoryManager.freeGraphicsMemory(graphicsAllocation);
 }
@@ -2176,62 +2184,11 @@ TEST_F(MemoryManagerWithCsrTest, givenAllocationThatWasUsedAndIsNotCompletedWhen
     usedAllocationAndNotGpuCompleted->updateTaskCount(csr->peekLatestFlushedTaskCount(), csr->getOsContext().getContextId());
 }
 
-class MockAlignMallocMemoryManager : public MockMemoryManager {
-  public:
-    MockAlignMallocMemoryManager(ExecutionEnvironment &executionEnvironment) : MockMemoryManager(executionEnvironment) {
-        testMallocRestrictions.minAddress = 0;
-        alignMallocRestrictions = nullptr;
-        alignMallocCount = 0;
-        alignMallocMaxIter = 3;
-        returnNullBad = false;
-        returnNullGood = false;
-    }
-
-    AlignedMallocRestrictions testMallocRestrictions;
-    AlignedMallocRestrictions *alignMallocRestrictions;
-
-    static const uintptr_t alignMallocMinAddress = 0x100000;
-    static const uintptr_t alignMallocStep = 10;
-    int alignMallocMaxIter;
-    int alignMallocCount;
-    bool returnNullBad;
-    bool returnNullGood;
-
-    void *alignedMallocWrapper(size_t size, size_t align) override {
-        if (alignMallocCount < alignMallocMaxIter) {
-            alignMallocCount++;
-            if (!returnNullBad) {
-                return reinterpret_cast<void *>(alignMallocMinAddress - alignMallocStep);
-            } else {
-                return nullptr;
-            }
-        }
-        alignMallocCount = 0;
-        if (!returnNullGood) {
-            return reinterpret_cast<void *>(alignMallocMinAddress + alignMallocStep);
-        } else {
-            return nullptr;
-        }
-    };
-
-    void alignedFreeWrapper(void *) override {
-        alignMallocCount = 0;
-    }
-
-    AlignedMallocRestrictions *getAlignedMallocRestrictions() override {
-        return alignMallocRestrictions;
-    }
-};
-
-class MockAlignMallocMemoryManagerTest : public MemoryAllocatorTest {
-  public:
-    MockAlignMallocMemoryManager *alignedMemoryManager = nullptr;
-
+struct MockAlignMallocMemoryManagerTest : public MemoryAllocatorTest {
     void SetUp() override {
         MemoryAllocatorTest::SetUp();
 
-        MockExecutionEnvironment executionEnvironment(defaultHwInfo.get());
-        alignedMemoryManager = new (std::nothrow) MockAlignMallocMemoryManager(executionEnvironment);
+        alignedMemoryManager = new (std::nothrow) MockAlignMallocMemoryManager(*executionEnvironment);
         // assert we have memory manager
         ASSERT_NE(nullptr, memoryManager);
     }
@@ -2242,6 +2199,8 @@ class MockAlignMallocMemoryManagerTest : public MemoryAllocatorTest {
 
         MemoryAllocatorTest::TearDown();
     }
+
+    MockAlignMallocMemoryManager *alignedMemoryManager = nullptr;
 };
 
 TEST_F(MockAlignMallocMemoryManagerTest, givenMemoryManagerWhenNullAlignRestrictionsThenNotUseRestrictions) {
@@ -2533,7 +2492,7 @@ TEST(MemoryManagerTest, givenAllocationTypesThatMayNeedL3FlushWhenCallingGetAllo
         AllocationType::buffer,
         AllocationType::bufferHostMemory, AllocationType::externalHostPtr,
         AllocationType::globalSurface, AllocationType::image,
-        AllocationType::pipe, AllocationType::sharedImage,
+        AllocationType::sharedImage,
         AllocationType::sharedBuffer, AllocationType::sharedResourceCopy,
         AllocationType::svmZeroCopy, AllocationType::svmGpu,
         AllocationType::svmCpu, AllocationType::writeCombined,
@@ -2769,14 +2728,14 @@ TEST(MemoryManagerTest, whenMemoryManagerReturnsNullptrThenAllocateGlobalsSurfac
     linkerInput.traits.exportsGlobalConstants = true;
     linkerInput.traits.exportsGlobalVariables = true;
     memoryManager->recentlyPassedDeviceBitfield = {};
-    GraphicsAllocation *allocation = allocateGlobalsSurface(nullptr, device, 1024, 0u, false, &linkerInput, nullptr);
-    EXPECT_EQ(nullptr, allocation);
+    std::unique_ptr<SharedPoolAllocation> globalSurface = std::unique_ptr<SharedPoolAllocation>(allocateGlobalsSurface(nullptr, device, 1024, 0u, false, &linkerInput, nullptr));
+    EXPECT_EQ(nullptr, globalSurface);
     EXPECT_EQ(deviceBitfield, memoryManager->recentlyPassedDeviceBitfield);
 
     auto svmAllocsManager = std::make_unique<SVMAllocsManager>(memoryManager);
     memoryManager->recentlyPassedDeviceBitfield = {};
-    allocation = allocateGlobalsSurface(svmAllocsManager.get(), device, 1024, 0u, false, &linkerInput, nullptr);
-    EXPECT_EQ(nullptr, allocation);
+    globalSurface.reset(allocateGlobalsSurface(svmAllocsManager.get(), device, 1024, 0u, false, &linkerInput, nullptr));
+    EXPECT_EQ(nullptr, globalSurface);
     EXPECT_EQ(deviceBitfield, memoryManager->recentlyPassedDeviceBitfield);
 }
 
@@ -2964,11 +2923,16 @@ HWTEST_F(PageTableManagerTest, givenPageTableManagerWhenMapAuxGpuVaThenForAllEng
     EXPECT_TRUE(result);
 
     EXPECT_EQ(1u, mockMngr->updateAuxTableCalled);
-    EXPECT_TRUE(memcmp(&expectedDdiUpdateAuxTable, &mockMngr->updateAuxTableParamsPassed[0].ddiUpdateAuxTable, sizeof(GMM_DDI_UPDATEAUXTABLE)) == 0);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.BaseGpuVA, mockMngr->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.BaseGpuVA);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.BaseResInfo, mockMngr->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.BaseResInfo);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.DoNotWait, mockMngr->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.DoNotWait);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.Map, mockMngr->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.Map);
 
     EXPECT_EQ(1u, mockMngr2->updateAuxTableCalled);
-
-    EXPECT_TRUE(memcmp(&expectedDdiUpdateAuxTable, &mockMngr2->updateAuxTableParamsPassed[0].ddiUpdateAuxTable, sizeof(GMM_DDI_UPDATEAUXTABLE)) == 0);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.BaseGpuVA, mockMngr2->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.BaseGpuVA);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.BaseResInfo, mockMngr2->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.BaseResInfo);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.DoNotWait, mockMngr2->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.DoNotWait);
+    EXPECT_EQ(expectedDdiUpdateAuxTable.Map, mockMngr2->updateAuxTableParamsPassed[0].ddiUpdateAuxTable.Map);
 }
 HWTEST_F(PageTableManagerTest, givenPageTableManagerWhenUpdateAuxTableGmmErrorThenMapAuxGpuVaReturnFalse) {
     MockExecutionEnvironment executionEnvironment{};
@@ -3171,7 +3135,7 @@ HWTEST_F(MemoryAllocatorTest, givenUseLocalPreferredForCacheableBuffersAndCompre
     }
 }
 
-HWTEST_F(MemoryAllocatorTest, givenNonDefaultLocalMemoryAllocationModeAndLocalPreferredForCacheableBuffersWhenGettingAllocDataForDeviceUsmThenLocalOnlyRequiredIsNotOverriden) {
+HWTEST_F(MemoryAllocatorTest, givenNonDefaultLocalMemoryAllocationModeAndLocalPreferredForCacheableBuffersWhenGettingAllocDataForDeviceUsmThenLocalOnlyRequiredIsNotOverridden) {
     DebugManagerStateRestore restorer;
     debugManager.flags.UseLocalPreferredForCacheableBuffers.set(1);
 
@@ -3407,4 +3371,24 @@ TEST(MemoryManagerTest, WhenAddingCustomHeapAllocatorConfigsThenCanRetrieveAndMa
 
     EXPECT_FALSE(memoryManager.getCustomHeapAllocatorConfig(AllocationType::linearStream, true).has_value());
     EXPECT_FALSE(memoryManager.getCustomHeapAllocatorConfig(AllocationType::linearStream, false).has_value());
+}
+
+TEST(MemoryManagerTest, givenGpuHangWhenAllocInUseCalledThenReturnFalse) {
+    MockExecutionEnvironment executionEnvironment(defaultHwInfo.get(), true, 2);
+    auto mockMemoryManager = new MockMemoryManager(false, false, executionEnvironment);
+    executionEnvironment.memoryManager.reset(mockMemoryManager);
+    auto csr = std::make_unique<MockCommandStreamReceiver>(executionEnvironment, 0, 1);
+    auto osContext = executionEnvironment.memoryManager->createAndRegisterOsContext(csr.get(), EngineDescriptorHelper::getDefaultDescriptor({aub_stream::EngineType::ENGINE_CCS, EngineUsage::regular}));
+
+    mockMemoryManager->callBaseAllocInUse = true;
+    constexpr uint8_t allocationSize = 10;
+    uint8_t allocationStorage[allocationSize] = {0};
+    MockGraphicsAllocation allocation{allocationStorage, allocationSize};
+    allocation.updateTaskCount(10, osContext->getContextId());
+    *csr->getTagAddress() = 0u;
+    EXPECT_TRUE(mockMemoryManager->allocInUse(allocation));
+
+    csr->isGpuHangDetectedReturnValue = true;
+    csr->gpuHangCheckPeriod = std::chrono::microseconds::zero();
+    EXPECT_FALSE(mockMemoryManager->allocInUse(allocation));
 }

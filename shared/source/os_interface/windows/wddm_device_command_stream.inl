@@ -5,7 +5,7 @@
  *
  */
 
-// Need to suppress warining 4005 caused by hw_cmds.h and wddm.h order.
+// Need to suppress warning 4005 caused by hw_cmds.h and wddm.h order.
 // Current order must be preserved due to two versions of igfxfmid.h
 #pragma warning(push)
 #pragma warning(disable : 4005)
@@ -14,10 +14,11 @@
 #include "shared/source/direct_submission/dispatchers/blitter_dispatcher.h"
 #include "shared/source/direct_submission/dispatchers/render_dispatcher.h"
 #include "shared/source/direct_submission/windows/wddm_direct_submission.h"
+#include "shared/source/gmm_helper/gmm_callbacks.h"
 #include "shared/source/gmm_helper/page_table_mngr.h"
 #include "shared/source/helpers/flush_stamp.h"
+#include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/ptr_math.h"
-#include "shared/source/helpers/windows/gmm_callbacks.h"
 #include "shared/source/os_interface/windows/wddm/wddm.h"
 #include "shared/source/os_interface/windows/wddm/wddm_residency_logger.h"
 #include "shared/source/os_interface/windows/wddm_device_command_stream.h"
@@ -40,7 +41,6 @@ WddmCommandStreamReceiver<GfxFamily>::WddmCommandStreamReceiver(ExecutionEnviron
                                                                 const DeviceBitfield deviceBitfield)
     : BaseClass(executionEnvironment, rootDeviceIndex, deviceBitfield) {
 
-    notifyAubCaptureImpl = DeviceCallbacks<GfxFamily>::notifyAubCapture;
     this->wddm = executionEnvironment.rootDeviceEnvironments[rootDeviceIndex]->osInterface->getDriverModel()->as<Wddm>();
 
     PreemptionMode preemptionMode = PreemptionHelper::getDefaultPreemptionMode(this->peekHwInfo());
@@ -129,10 +129,6 @@ SubmissionStatus WddmCommandStreamReceiver<GfxFamily>::flush(BatchBuffer &batchB
         break;
     }
 
-    if (wddm->isKmDafEnabled()) {
-        this->kmDafLockAllocations(allocationsForResidency);
-    }
-
     auto osContextWin = static_cast<OsContextWin *>(this->osContext);
     WddmSubmitArguments submitArgs = {};
     submitArgs.contextHandle = osContextWin->getWddmContextHandle();
@@ -175,12 +171,15 @@ bool WddmCommandStreamReceiver<GfxFamily>::isTlbFlushRequiredForStateCacheFlush(
 template <typename GfxFamily>
 GmmPageTableMngr *WddmCommandStreamReceiver<GfxFamily>::createPageTableManager() {
     GMM_TRANSLATIONTABLE_CALLBACKS ttCallbacks = {};
-    ttCallbacks.pfWriteL3Adr = TTCallbacks<GfxFamily>::writeL3Address;
-
     auto rootDeviceEnvironment = this->executionEnvironment.rootDeviceEnvironments[this->rootDeviceIndex].get();
+    auto hwInfo = rootDeviceEnvironment->getHardwareInfo();
+
+    ttCallbacks.pfWriteL3Adr = writeL3AddressFuncFactory[hwInfo->platform.eRenderCoreFamily];
 
     GmmPageTableMngr *gmmPageTableMngr = GmmPageTableMngr::create(rootDeviceEnvironment->getGmmClientContext(), TT_TYPE::AUXTT, &ttCallbacks);
-    gmmPageTableMngr->setCsrHandle(this);
+    if (this->wddm->needsNotifyAubCaptureCallback()) {
+        gmmPageTableMngr->setCsrHandle(this);
+    }
     this->pageTableManager.reset(gmmPageTableMngr);
     return gmmPageTableMngr;
 }
@@ -191,16 +190,6 @@ void WddmCommandStreamReceiver<GfxFamily>::flushMonitorFence(bool notifyKmd) {
         this->directSubmission->flushMonitorFence(notifyKmd);
     } else if (this->blitterDirectSubmission.get()) {
         this->blitterDirectSubmission->flushMonitorFence(notifyKmd);
-    }
-}
-template <typename GfxFamily>
-void WddmCommandStreamReceiver<GfxFamily>::kmDafLockAllocations(ResidencyContainer &allocationsForResidency) {
-    for (auto &graphicsAllocation : allocationsForResidency) {
-        if ((AllocationType::linearStream == graphicsAllocation->getAllocationType()) ||
-            (AllocationType::fillPattern == graphicsAllocation->getAllocationType()) ||
-            (AllocationType::commandBuffer == graphicsAllocation->getAllocationType())) {
-            wddm->kmDafLock(static_cast<WddmAllocation *>(graphicsAllocation)->getDefaultHandle());
-        }
     }
 }
 

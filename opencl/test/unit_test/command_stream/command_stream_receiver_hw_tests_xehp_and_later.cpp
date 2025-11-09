@@ -152,13 +152,12 @@ HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverHwTestXeHPAndLaterWi
 HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverHwTestXeHPAndLater, WhenOsContextSupportsMultipleDevicesThenScratchSpaceAllocationIsPlacedOnEachSupportedDevice) {
     DebugManagerStateRestore restorer;
     debugManager.flags.CreateMultipleSubDevices.set(2u);
-    ExecutionEnvironment *executionEnvironment = platform()->peekExecutionEnvironment();
+    auto executionEnvironment = std::unique_ptr<ExecutionEnvironment>(MockDevice::prepareExecutionEnvironment(defaultHwInfo.get(), 0));
     executionEnvironment->memoryManager.reset(new MockMemoryManager(false, true, *executionEnvironment));
     uint32_t tileMask = 0b11;
     uint32_t rootDeviceIndex = 0;
     std::unique_ptr<OsContext> osContext(OsContext::create(nullptr, rootDeviceIndex, 0u, EngineDescriptorHelper::getDefaultDescriptor({aub_stream::ENGINE_CCS, EngineUsage::regular}, PreemptionMode::MidThread, tileMask)));
     auto commandStreamReceiver = std::make_unique<MockCsrHw<FamilyType>>(*executionEnvironment, rootDeviceIndex, tileMask);
-    initPlatform();
 
     void *ssh = alignedMalloc(512, 4096);
 
@@ -186,7 +185,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandStreamReceiverHwTestXeHPAndLater, whenProgra
     EXPECT_EQ(MI_SEMAPHORE_WAIT::REGISTER_POLL_MODE::REGISTER_POLL_MODE_MEMORY_POLL, miSemaphoreWait.getRegisterPollMode());
 }
 
-HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverHwTestXeHPAndLaterWithMockCsrHw, givenScratchSpaceSurfaceStateEnabledWhenSratchAllocationRequestedThenProgramCfeStateWithScratchAllocation) {
+HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, CommandStreamReceiverHwTestXeHPAndLaterWithMockCsrHw, givenScratchSpaceSurfaceStateEnabledWhenScratchAllocationRequestedThenProgramCfeStateWithScratchAllocation) {
     if constexpr (FamilyType::isHeaplessRequired()) {
         GTEST_SKIP();
     } else {

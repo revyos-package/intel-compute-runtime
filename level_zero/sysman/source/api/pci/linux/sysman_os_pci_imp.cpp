@@ -33,7 +33,7 @@ ze_result_t LinuxPciImp::getProperties(zes_pci_properties_t *pProperties) {
 
     void *pNext = pProperties->pNext;
     while (pNext) {
-        auto pExtProps = reinterpret_cast<zet_base_properties_t *>(pNext);
+        auto pExtProps = reinterpret_cast<zes_base_properties_t *>(pNext);
         if (pExtProps->stype == ZES_INTEL_PCI_LINK_SPEED_DOWNGRADE_EXP_PROPERTIES) {
             auto pDowngradeExtProps = reinterpret_cast<zes_intel_pci_link_speed_downgrade_exp_properties_t *>(pExtProps);
             auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
@@ -54,7 +54,7 @@ ze_result_t LinuxPciImp::getPciBdf(zes_pci_properties_t &pciProperties) {
     std::string bdfDir;
     ze_result_t result = pSysfsAccess->readSymLink(deviceDir, bdfDir);
     if (ZE_RESULT_SUCCESS != result) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): readSymLink() failed to retrive BDF from %s and returning error:0x%x \n", __FUNCTION__, deviceDir.c_str(), result);
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): readSymLink() failed to retrieve BDF from %s and returning error:0x%x \n", __FUNCTION__, deviceDir.c_str(), result);
         return result;
     }
     const auto loc = bdfDir.find_last_of('/');
@@ -89,7 +89,7 @@ void LinuxPciImp::getMaxLinkCaps(double &maxLinkSpeed, int32_t &maxLinkWidth) {
     }
 
     std::vector<uint8_t> configMemory(PCI_CFG_SPACE_SIZE);
-    if (!getPciConfigMemory(pciConfigNode, configMemory)) {
+    if (!getPciConfigMemory(std::move(pciConfigNode), configMemory)) {
         return;
     }
 
@@ -230,7 +230,7 @@ bool LinuxPciImp::resizableBarSupported() {
     std::string pciConfigNode = {};
     pSysfsAccess->getRealPath("device/config", pciConfigNode);
     std::vector<uint8_t> configMemory(PCI_CFG_SPACE_EXP_SIZE);
-    if (!getPciConfigMemory(pciConfigNode, configMemory)) {
+    if (!getPciConfigMemory(std::move(pciConfigNode), configMemory)) {
         NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Unable to get pci config space \n", __FUNCTION__);
         return false;
     }
@@ -245,7 +245,7 @@ bool LinuxPciImp::resizableBarEnabled(uint32_t barIndex) {
     std::string pciConfigNode = {};
     pSysfsAccess->getRealPath("device/config", pciConfigNode);
     std::vector<uint8_t> configMemory(PCI_CFG_SPACE_EXP_SIZE);
-    if (!getPciConfigMemory(pciConfigNode, configMemory)) {
+    if (!getPciConfigMemory(std::move(pciConfigNode), configMemory)) {
         NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Unable to get pci config space \n", __FUNCTION__);
         return false;
     }
@@ -298,7 +298,7 @@ bool LinuxPciImp::resizableBarEnabled(uint32_t barIndex) {
     // position of possibleBarSizes is from 0 to n, then this indicates BAR size from 2^0 MB to 2^n MB
     auto possibleBarSizes = (capabilityRegister & PCI_REBAR_CAP_SIZES) >> 4; // First 4 bits are reserved
     uint32_t largestPossibleBarSize = 0;
-    while (possibleBarSizes >>= 1) { // most significant set bit position of possibleBarSizes would tell larget possible bar size
+    while (possibleBarSizes >>= 1) { // most significant set bit position of possibleBarSizes would tell largest possible bar size
         largestPossibleBarSize++;
     }
 
@@ -306,7 +306,7 @@ bool LinuxPciImp::resizableBarEnabled(uint32_t barIndex) {
     // Example, real value of current size could be 2^currentSize MB
     auto currentSize = bits(controlRegister, 8, 6);
 
-    // If current size is equal to larget possible BAR size, it indicates resizable BAR is enabled.
+    // If current size is equal to largest possible BAR size, it indicates resizable BAR is enabled.
     return (currentSize == largestPossibleBarSize);
 }
 
@@ -323,7 +323,7 @@ ze_result_t LinuxPciImp::getState(zes_pci_state_t *state) {
     const void *pNext = state->pNext;
     while (pNext) {
         result = ZE_RESULT_ERROR_INVALID_ARGUMENT;
-        auto pExtProps = reinterpret_cast<zet_base_properties_t *>(const_cast<void *>(pNext));
+        auto pExtProps = reinterpret_cast<zes_base_properties_t *>(const_cast<void *>(pNext));
         if (pExtProps->stype == ZES_INTEL_PCI_LINK_SPEED_DOWNGRADE_EXP_STATE) {
             auto pDowngradeExpState = reinterpret_cast<zes_intel_pci_link_speed_downgrade_exp_state_t *>(pExtProps);
             auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
@@ -354,12 +354,21 @@ ze_result_t LinuxPciImp::pciLinkSpeedUpdateExp(ze_bool_t downgradeUpgrade, zes_d
     if (downgradeUpgrade) {
         requestedState = 0x1;
     }
-    uint8_t pendingState = requestedState;
-    ze_result_t result = pFwInterface->fwSetDowngradeConfig(requestedState, &pendingState);
+
+    std::vector<uint8_t> outBuf(maxGfspHeciOutBuffer, 0);
+    ze_result_t result = pFwInterface->fwGetGfspConfig(GfspHeciConstants::Cmd::getConfigurationCmd16, outBuf);
+    if (result != ZE_RESULT_SUCCESS) {
+        return result;
+    }
+    std::vector<uint8_t> inBuf(outBuf.begin() + GfspHeciConstants::GetCmd16BytePostition::pendingStateBytePosition, outBuf.begin() + GfspHeciConstants::GetCmd16BytePostition::pendingStateBytePosition + 4);
+    inBuf[GfspHeciConstants::SetCmd15BytePostition::request] &= ~(1 << 1);
+    inBuf[GfspHeciConstants::SetCmd15BytePostition::request] |= (requestedState << 1);
+    result = pFwInterface->fwSetGfspConfig(GfspHeciConstants::Cmd::setConfigurationCmd15, inBuf, outBuf);
     if (result != ZE_RESULT_SUCCESS) {
         return result;
     }
 
+    uint8_t pendingState = (outBuf[GfspHeciConstants::SetCmd15BytePostition::response] >> 1) & 0x1;
     *pendingAction = ZES_DEVICE_ACTION_NONE;
     uint32_t currentState = 0x0;
 

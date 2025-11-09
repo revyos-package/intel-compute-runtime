@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -82,7 +82,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, GENERATEONLY_givenCompress
     retVal = pCmdQ->enqueueKernel(kernel, 1, nullptr, globalWorkSize, nullptr, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    pCmdQ->finish();
+    pCmdQ->finish(false);
 
     expectNotEqualMemory<FamilyType>(AUBFixture::getGpuPointer(compressedAllocation1), writePattern, bufferSize);
 
@@ -91,7 +91,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, GENERATEONLY_givenCompress
     retVal = pCmdQ->enqueueCopyBuffer(compressedBuffer2.get(), unCompressedBuffer.get(), 0, 0, bufferSize, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    pCmdQ->finish();
+    pCmdQ->finish(false);
 
     expectMemory<FamilyType>(AUBFixture::getGpuPointer(unCompressedAllocation), writePattern, bufferSize);
 }
@@ -103,7 +103,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, GENERATEONLY_givenCompress
 
     device->getGpgpuCommandStreamReceiver().overrideDispatchPolicy(DispatchMode::batchedDispatch);
 
-    auto compressedDeviceMemAllocPtr1 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAllocPtr1 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     EXPECT_NE(nullptr, compressedDeviceMemAllocPtr1);
     auto compressedDeviceMemAlloc1 = context->getSVMAllocsManager()->getSVMAllocs()->get(compressedDeviceMemAllocPtr1)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
@@ -112,7 +112,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, GENERATEONLY_givenCompress
     EXPECT_EQ(MemoryPool::localMemory, compressedDeviceMemAlloc1->getMemoryPool());
     EXPECT_TRUE(compressedDeviceMemAlloc1->getDefaultGmm()->isCompressionEnabled());
 
-    auto compressedDeviceMemAllocPtr2 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAllocPtr2 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     EXPECT_NE(nullptr, compressedDeviceMemAllocPtr2);
     auto compressedDeviceMemAlloc2 = context->getSVMAllocsManager()->getSVMAllocs()->get(compressedDeviceMemAllocPtr2)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
@@ -184,7 +184,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, givenUncompressibleBufferI
     size_t globalWorkSize[3] = {bufferSize, 1, 1};
     retVal = pCmdQ->enqueueKernel(kernel, 1, nullptr, globalWorkSize, nullptr, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
-    pCmdQ->finish();
+    pCmdQ->finish(false);
 
     expectNotEqualMemory<FamilyType>(AUBFixture::getGpuPointer(compressedAllocation), writePattern, bufferSize);
 
@@ -193,7 +193,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, givenUncompressibleBufferI
     retVal = pCmdQ->enqueueCopyBuffer(uncompressibleBufferInHostMemory.get(), unCompressedBuffer.get(), 0, 0, bufferSize, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    pCmdQ->finish();
+    pCmdQ->finish(false);
 
     expectMemory<FamilyType>(AUBFixture::getGpuPointer(unCompressedAllocation), writePattern, bufferSize);
 }
@@ -205,7 +205,7 @@ XE_HPG_CORETEST_P(XeHpgCoreStatelessCompressionInSBA, givenUncompressibleHostMem
 
     device->getGpgpuCommandStreamReceiver().overrideDispatchPolicy(DispatchMode::batchedDispatch);
 
-    auto compressedDeviceMemAllocPtr = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAllocPtr = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     EXPECT_NE(nullptr, compressedDeviceMemAllocPtr);
     auto compressedDeviceMemAlloc = context->getSVMAllocsManager()->getSVMAllocs()->get(compressedDeviceMemAllocPtr)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
@@ -286,11 +286,11 @@ XE_HPG_CORETEST_P(XeHpgCoreUmStatelessCompressionInSBA, GENERATEONLY_givenStatel
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, uncompressibleHostMemAlloc);
 
-    auto compressedDeviceMemAlloc1 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc1 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc1);
 
-    auto compressedDeviceMemAlloc2 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc2 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc2);
 
@@ -341,11 +341,11 @@ XE_HPG_CORETEST_P(XeHpgCoreUmStatelessCompressionInSBA, GENERATEONLY_givenKernel
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, uncompressibleHostMemAlloc);
 
-    auto compressedDeviceMemAlloc1 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc1 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc1);
 
-    auto compressedDeviceMemAlloc2 = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc2 = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc2);
 
@@ -393,7 +393,7 @@ XE_HPG_CORETEST_P(XeHpgCoreUmStatelessCompressionInSBA, givenStatelessKernelWhen
     const size_t bufferSize = MemoryConstants::kiloByte;
     uint8_t bufferData[bufferSize] = {};
 
-    auto compressedDeviceMemAlloc = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc);
 
@@ -436,7 +436,7 @@ XE_HPG_CORETEST_P(XeHpgCoreUmStatelessCompressionInSBA, givenKernelExecInfoWhenI
     const size_t bufferSize = MemoryConstants::kiloByte;
     uint8_t bufferData[bufferSize] = {};
 
-    auto compressedDeviceMemAlloc = clDeviceMemAllocINTEL(context, device.get(), nullptr, bufferSize, 0, &retVal);
+    auto compressedDeviceMemAlloc = clDeviceMemAllocINTEL(context, device, nullptr, bufferSize, 0, &retVal);
     EXPECT_EQ(CL_SUCCESS, retVal);
     ASSERT_NE(nullptr, compressedDeviceMemAlloc);
 
@@ -532,7 +532,7 @@ XE_HPG_CORETEST_F(XeHpgCoreStatelessCompressionInSBAWithBCS, GENERATEONLY_givenC
     retVal = commandQueues[0][0]->enqueueKernel(kernel, 1, nullptr, globalWorkSize, nullptr, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    commandQueues[0][0]->finish();
+    commandQueues[0][0]->finish(false);
 
     expectMemoryNotEqual<FamilyType>(AUBFixture::getGpuPointer(compressedAllocation, compressedBuffer->getOffset()), writePattern, bufferSize, 0, 0);
 
@@ -568,7 +568,7 @@ XE_HPG_CORETEST_F(XeHpgCoreStatelessCompressionInSBAWithBCS, givenUncompressible
     retVal = commandQueues[0][0]->enqueueKernel(kernel, 1, nullptr, globalWorkSize, nullptr, 0, nullptr, nullptr);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    commandQueues[0][0]->finish();
+    commandQueues[0][0]->finish(false);
 
     expectMemoryNotEqual<FamilyType>(AUBFixture::getGpuPointer(compressedAllocation, compressedBuffer->getOffset()), writePattern, bufferSize, 0, 0);
 

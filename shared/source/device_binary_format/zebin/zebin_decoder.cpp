@@ -55,6 +55,9 @@ bool isTargetProductConfigCompatibleWithProductConfig(const AOT::PRODUCT_CONFIG 
 }
 
 bool validateTargetDevice(const TargetDevice &targetDevice, Elf::ElfIdentifierClass numBits, PRODUCT_FAMILY productFamily, GFXCORE_FAMILY gfxCore, AOT::PRODUCT_CONFIG productConfig, Elf::ZebinTargetFlags targetMetadata) {
+    if (debugManager.flags.ForceCompatibilityMode.get()) {
+        return true;
+    }
     if (targetDevice.maxPointerSizeInBytes == 4 && static_cast<uint32_t>(numBits == Elf::EI_CLASS_64)) {
         return false;
     }
@@ -92,10 +95,10 @@ bool validateTargetDevice(const TargetDevice &targetDevice, Elf::ElfIdentifierCl
     return true;
 }
 
-template bool validateTargetDevice<Elf::EI_CLASS_32>(const Elf::Elf<Elf::EI_CLASS_32> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, SingleDeviceBinary &singleDeviceBinary);
-template bool validateTargetDevice<Elf::EI_CLASS_64>(const Elf::Elf<Elf::EI_CLASS_64> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, SingleDeviceBinary &singleDeviceBinary);
+template bool validateTargetDevice<Elf::EI_CLASS_32>(const Elf::Elf<Elf::EI_CLASS_32> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, GeneratorFeatureVersions &generatorFeatures, GeneratorType &generator);
+template bool validateTargetDevice<Elf::EI_CLASS_64>(const Elf::Elf<Elf::EI_CLASS_64> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, GeneratorFeatureVersions &generatorFeatures, GeneratorType &generator);
 template <Elf::ElfIdentifierClass numBits>
-bool validateTargetDevice(const Elf::Elf<numBits> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, SingleDeviceBinary &singleDeviceBinary) {
+bool validateTargetDevice(const Elf::Elf<numBits> &elf, const TargetDevice &targetDevice, std::string &outErrReason, std::string &outWarning, GeneratorFeatureVersions &generatorFeatures, GeneratorType &generator) {
     GFXCORE_FAMILY gfxCore = IGFX_UNKNOWN_CORE;
     PRODUCT_FAMILY productFamily = IGFX_UNKNOWN;
     AOT::PRODUCT_CONFIG productConfig = AOT::UNKNOWN_ISA;
@@ -123,7 +126,7 @@ bool validateTargetDevice(const Elf::Elf<numBits> &elf, const TargetDevice &targ
             DEBUG_BREAK_IF(sizeof(uint32_t) != intelGTNote.data.size());
             auto targetMetadataPacked = reinterpret_cast<const uint32_t *>(intelGTNote.data.begin());
             targetMetadata.packed = static_cast<uint32_t>(*targetMetadataPacked);
-            singleDeviceBinary.generator = static_cast<GeneratorType>(targetMetadata.generatorId);
+            generator = static_cast<GeneratorType>(targetMetadata.generatorId);
             break;
         }
         case Elf::IntelGTSectionType::zebinVersion: {
@@ -155,13 +158,13 @@ bool validateTargetDevice(const Elf::Elf<numBits> &elf, const TargetDevice &targ
         case Elf::IntelGTSectionType::indirectAccessDetectionVersion: {
             DEBUG_BREAK_IF(sizeof(uint32_t) != intelGTNote.data.size());
             auto indirectDetectionVersion = reinterpret_cast<const uint32_t *>(intelGTNote.data.begin());
-            singleDeviceBinary.generatorFeatureVersions.indirectMemoryAccessDetection = static_cast<uint32_t>(*indirectDetectionVersion);
+            generatorFeatures.indirectMemoryAccessDetection = static_cast<uint32_t>(*indirectDetectionVersion);
             break;
         }
         case Elf::IntelGTSectionType::indirectAccessBufferMajorVersion: {
             DEBUG_BREAK_IF(sizeof(uint32_t) != intelGTNote.data.size());
             auto indirectDetectionVersion = reinterpret_cast<const uint32_t *>(intelGTNote.data.begin());
-            singleDeviceBinary.generatorFeatureVersions.indirectAccessBuffer = static_cast<uint32_t>(*indirectDetectionVersion);
+            generatorFeatures.indirectAccessBuffer = static_cast<uint32_t>(*indirectDetectionVersion);
             break;
         }
         default:
@@ -249,7 +252,9 @@ DecodeError extractZebinSections(NEO::Elf::Elf<numBits> &elf, ZebinSections<numB
             if (sectionName.startsWith(Elf::SectionNames::textPrefix.data())) {
                 out.textKernelSections.push_back(&elfSectionHeader);
             } else if (sectionName == Elf::SectionNames::text) {
-                out.textSections.push_back(&elfSectionHeader);
+                if (false == elfSectionHeader.data.empty()) {
+                    out.textSections.push_back(&elfSectionHeader);
+                }
             } else if (sectionName == Elf::SectionNames::dataConst) {
                 out.constDataSections.push_back(&elfSectionHeader);
             } else if (sectionName == Elf::SectionNames::dataGlobalConst) {
@@ -504,8 +509,8 @@ ArrayRef<const uint8_t> getKernelGtpinInfo(ConstStringRef &kernelName, Elf::Elf<
     ConstStringRef sectionHeaderNamesString(reinterpret_cast<const char *>(sectionHeaderNamesData.begin()), sectionHeaderNamesData.size());
     for (auto *gtpinInfoSection : zebinSections.gtpinInfoSections) {
         ConstStringRef sectionName = ConstStringRef(sectionHeaderNamesString.begin() + gtpinInfoSection->header->name);
-        auto sufix = sectionName.substr(static_cast<int>(Elf::SectionNames::gtpinInfo.length()));
-        if (sufix == kernelName) {
+        auto suffix = sectionName.substr(static_cast<int>(Elf::SectionNames::gtpinInfo.length()));
+        if (suffix == kernelName) {
             return gtpinInfoSection->data;
         }
     }

@@ -23,6 +23,7 @@
 #include "opencl/source/helpers/properties_helper.h"
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <span>
 
@@ -221,9 +222,11 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     virtual cl_int enqueueResourceBarrier(BarrierCommand *resourceBarrier, cl_uint numEventsInWaitList,
                                           const cl_event *eventWaitList, cl_event *event) = 0;
 
-    virtual cl_int finish() = 0;
+    virtual cl_int finish(bool resolvePendingL3Flushes) = 0;
 
     virtual cl_int flush() = 0;
+
+    virtual void programPendingL3Flushes(CommandStreamReceiver &csr, bool &waitForTaskCountRequired, bool resolvePendingL3Flushes) = 0;
 
     void updateFromCompletionStamp(const CompletionStamp &completionStamp, Event *outEvent);
 
@@ -237,7 +240,7 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
 
     volatile TagAddressType *getHwTagAddress() const;
 
-    MOCKABLE_VIRTUAL bool isCompleted(TaskCountType gpgpuTaskCount, const std::span<CopyEngineState> &bcsStates);
+    MOCKABLE_VIRTUAL bool isCompleted(TaskCountType gpgpuTaskCount, std::span<const CopyEngineState> bcsStates);
 
     bool isWaitForTimestampsEnabled() const;
     virtual bool waitForTimestamps(std::span<CopyEngineState> copyEnginesToWait, WaitStatus &status, TimestampPacketContainer *mainContainer, TimestampPacketContainer *deferredContainer) = 0;
@@ -351,10 +354,6 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     cl_uint getQueueIndexWithinFamily() const { return queueIndexWithinFamily; }
     bool isQueueFamilySelected() const { return queueFamilySelected; }
 
-    bool getRequiresCacheFlushAfterWalker() const {
-        return requiresCacheFlushAfterWalker;
-    }
-
     template <typename PtrType>
     static PtrType convertAddressWithOffsetToGpuVa(PtrType ptr, InternalMemoryType memoryType, GraphicsAllocation &allocation);
 
@@ -433,6 +432,16 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
         return retVal;
     }
 
+    bool waitOnDestructionNeeded() const;
+
+    bool getPendingL3FlushForHostVisibleResources() const {
+        return pendingL3FlushForHostVisibleResources;
+    }
+
+    void setPendingL3FlushForHostVisibleResources(bool newValue) {
+        pendingL3FlushForHostVisibleResources = newValue;
+    }
+
   protected:
     void *enqueueReadMemObjForMap(TransferProperties &transferProperties, EventsRequest &eventsRequest, cl_int &errcodeRet);
     cl_int enqueueWriteMemObjForUnmap(MemObj *memObj, void *mappedPtr, EventsRequest &eventsRequest);
@@ -442,6 +451,8 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
 
     virtual void obtainTaskLevelAndBlockedStatus(TaskCountType &taskLevel, cl_uint &numEventsInWaitList, const cl_event *&eventWaitList, bool &blockQueueStatus, unsigned int commandType){};
     bool isBlockedCommandStreamRequired(uint32_t commandType, const EventsRequest &eventsRequest, bool blockedQueue, bool isMarkerWithProfiling) const;
+
+    bool isDependenciesFlushForMarkerRequired(const EventsRequest &eventsRequest) const;
 
     MOCKABLE_VIRTUAL void obtainNewTimestampPacketNodes(size_t numberOfNodes, TimestampPacketContainer &previousNodes, bool clearAllDependencies, CommandStreamReceiver &csr);
     void storeProperties(const cl_queue_properties *properties);
@@ -495,6 +506,7 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     mutable EngineControl *gpgpuEngine = nullptr;
     std::array<EngineControl *, bcsInfoMaskSize> bcsEngines = {};
     std::optional<aub_stream::EngineType> bcsQueueEngineType{};
+    std::mutex bcsInitMutex;
     size_t bcsEngineCount = bcsInfoMaskSize;
 
     cl_command_queue_properties commandQueueProperties = 0;
@@ -503,7 +515,6 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     cl_command_queue_capabilities_intel queueCapabilities = CL_QUEUE_DEFAULT_CAPABILITIES_INTEL;
     cl_uint queueFamilyIndex = 0;
     cl_uint queueIndexWithinFamily = 0;
-    bool queueFamilySelected = false;
 
     QueuePriority priority = QueuePriority::medium;
     QueueThrottle throttle = QueueThrottle::MEDIUM;
@@ -511,22 +522,12 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     uint64_t sliceCount = QueueSliceCount::defaultSliceCount;
     std::array<CopyEngineState, bcsInfoMaskSize> bcsStates = {};
 
-    bool perfCountersEnabled = false;
-    bool isInternalUsage = false;
-    bool isCopyOnly = false;
-    bool bcsAllowed = false;
-    bool bcsInitialized = false;
-
-    bool bcsSplitInitialized = false;
     BcsInfoMask splitEngines = EngineHelpers::oddLinkedCopyEnginesMask;
     BcsInfoMask h2dEngines = NEO::EngineHelpers::h2dCopyEngineMask;
     BcsInfoMask d2hEngines = NEO::EngineHelpers::d2hCopyEngineMask;
     size_t minimalSizeForBcsSplit = 16 * MemoryConstants::megaByte;
 
     LinearStream *commandStream = nullptr;
-
-    bool isSpecialCommandQueue = false;
-    bool requiresCacheFlushAfterWalker = false;
 
     std::unique_ptr<TimestampPacketContainer> deferredTimestampPackets;
     std::unique_ptr<TimestampPacketContainer> deferredMultiRootSyncNodes;
@@ -537,6 +538,15 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
         TimestampPacketContainer lastSignalledPacket;
     };
     std::array<BcsTimestampPacketContainers, bcsInfoMaskSize> bcsTimestampPacketContainers;
+
+    bool perfCountersEnabled = false;
+    bool isInternalUsage = false;
+    bool isCopyOnly = false;
+    bool bcsAllowed = false;
+    bool bcsInitialized = false;
+    bool isSpecialCommandQueue = false;
+    bool bcsSplitInitialized = false;
+    bool queueFamilySelected = false;
     bool stallingCommandsOnNextFlushRequired = false;
     bool dcFlushRequiredOnStallingCommandsOnNextFlush = false;
     bool isCacheFlushOnNextBcsWriteRequired = false;
@@ -545,10 +555,10 @@ class CommandQueue : public BaseObject<_cl_command_queue> {
     bool heaplessModeEnabled = false;
     bool heaplessStateInitEnabled = false;
     bool isForceStateless = false;
-    bool l3FlushedAfterCpuRead = true;
     bool l3FlushAfterPostSyncEnabled = false;
     bool isWalkerWithProfilingEnqueued = false;
     bool shouldRegisterEnqueuedWalkerWithProfiling = false;
+    bool pendingL3FlushForHostVisibleResources = false;
 };
 
 static_assert(NEO::NonCopyableAndNonMovable<CommandQueue>);

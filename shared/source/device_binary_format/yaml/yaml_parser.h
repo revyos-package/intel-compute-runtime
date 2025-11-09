@@ -254,6 +254,14 @@ constexpr bool isVectorDataType(const Token &token) {
     return false;
 }
 
+constexpr bool allowEmptyVectorDataType(const Token &token) {
+    auto tokenString = ConstStringRef(token.pos, token.len);
+    if (equals(tokenString, "kernels")) {
+        return true;
+    }
+    return false;
+}
+
 struct Line {
     enum class LineType : uint8_t { empty,
                                     comment,
@@ -651,7 +659,7 @@ inline bool YamlParser::readValueChecked<bool>(const Node &node, bool &outValue)
         return false;
     }
 
-    // valid values : y/n yes/no true/false on/off (case insesitive)
+    // valid values : y/n yes/no true/false on/off (case insensitive)
     if (token.len > 5) {
         return false;
     }

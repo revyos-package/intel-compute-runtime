@@ -20,7 +20,8 @@
 
 namespace aub_stream {
 enum class ProductFamily : uint32_t;
-}
+class AubManager;
+} // namespace aub_stream
 
 namespace NEO {
 struct KmdNotifyProperties;
@@ -45,6 +46,7 @@ class MemoryManager;
 struct RootDeviceEnvironment;
 class OSInterface;
 class DriverModel;
+class DeviceCapsReader;
 enum class DriverModelType;
 enum class EngineGroupType : uint32_t;
 enum class GfxMemoryAllocationMethod : uint32_t;
@@ -79,6 +81,9 @@ class ProductHelper {
     static constexpr uint32_t luidSize = 8u;
     MOCKABLE_VIRTUAL int configureHwInfoWddm(const HardwareInfo *inHwInfo, HardwareInfo *outHwInfo, const RootDeviceEnvironment &rootDeviceEnvironment);
     int configureHwInfoDrm(const HardwareInfo *inHwInfo, HardwareInfo *outHwInfo, const RootDeviceEnvironment &rootDeviceEnvironment);
+    virtual std::unique_ptr<DeviceCapsReader> getDeviceCapsReader(const DriverModel &driverModel) const = 0;
+    virtual std::unique_ptr<DeviceCapsReader> getDeviceCapsReader(aub_stream::AubManager &aubManager) const = 0;
+    virtual bool setupHardwareInfo(HardwareInfo &hwInfo, const DeviceCapsReader &capsReader) const = 0;
     virtual int configureHardwareCustom(HardwareInfo *hwInfo, OSInterface *osIface) const = 0;
     virtual void adjustPlatformForProductFamily(HardwareInfo *hwInfo) = 0;
     virtual void adjustSamplerState(void *sampler, const HardwareInfo &hwInfo) const = 0;
@@ -116,6 +121,7 @@ class ProductHelper {
     virtual std::pair<bool, bool> isPipeControlPriorToNonPipelinedStateCommandsWARequired(const HardwareInfo &hwInfo, bool isRcs, const ReleaseHelper *releaseHelper) const = 0;
     virtual bool heapInLocalMem(const HardwareInfo &hwInfo) const = 0;
     virtual void setCapabilityCoherencyFlag(const HardwareInfo &hwInfo, bool &coherencyFlag) const = 0;
+    virtual bool canShareMemoryWithoutNTHandle() const = 0;
     virtual bool isAdditionalMediaSamplerProgrammingRequired() const = 0;
     virtual bool isInitialFlagsProgrammingRequired() const = 0;
     virtual bool isReturnedCmdSizeForMediaSamplerAdjustmentRequired() const = 0;
@@ -245,7 +251,7 @@ class ProductHelper {
     virtual bool localDispatchSizeQuerySupported() const = 0;
     virtual bool supportReadOnlyAllocations() const = 0;
     virtual bool isDeviceToHostCopySignalingFenceRequired() const = 0;
-    virtual size_t getMaxFillPaternSizeForCopyEngine() const = 0;
+    virtual size_t getMaxFillPatternSizeForCopyEngine() const = 0;
     virtual bool isAvailableExtendedScratch() const = 0;
     virtual std::optional<bool> isCoherentAllocation(uint64_t patIndex) const = 0;
     virtual bool isStagingBuffersEnabled() const = 0;
@@ -255,9 +261,10 @@ class ProductHelper {
     virtual uint32_t getNumCacheRegions() const = 0;
     virtual uint32_t adjustMaxThreadsPerThreadGroup(uint32_t maxThreadsPerThreadGroup, uint32_t simt, uint32_t grfCount, bool isHeaplessModeEnabled) const = 0;
     virtual uint64_t getPatIndex(CacheRegion cacheRegion, CachePolicy cachePolicy) const = 0;
+    virtual uint64_t getSharedSystemPatIndex() const = 0;
     virtual uint32_t getGmmResourceUsageOverride(uint32_t usageType) const = 0;
     virtual bool isSharingWith3dOrMediaAllowed() const = 0;
-    virtual bool isL3FlushAfterPostSyncRequired(bool heaplessEnabled) const = 0;
+    virtual bool isL3FlushAfterPostSyncSupported(bool heaplessEnabled) const = 0;
     virtual void overrideDirectSubmissionTimeouts(uint64_t &timeoutUs, uint64_t &maxTimeoutUs) const = 0;
     virtual bool isMisalignedUserPtr2WayCoherent() const = 0;
     virtual bool isSvmHeapReservationSupported() const = 0;
@@ -270,6 +277,8 @@ class ProductHelper {
     virtual bool isPidFdOrSocketForIpcSupported() const = 0;
     virtual bool checkBcsForDirectSubmissionStop() const = 0;
     virtual bool shouldRegisterEnqueuedWalkerWithProfiling() const = 0;
+    virtual bool isInterruptSupported() const = 0;
+    virtual bool isCompressionFormatFromGmmRequired() const = 0;
 
     virtual bool getStorageInfoLocalOnlyFlag(LocalMemAllocationMode usmDeviceAllocationMode, bool defaultValue) const = 0;
     virtual ~ProductHelper() = default;

@@ -19,6 +19,7 @@
 #include <limits.h>
 #include <map>
 #include <optional>
+#include <queue>
 #include <vector>
 
 using namespace NEO;
@@ -41,6 +42,7 @@ class DrmMock : public Drm {
     using Drm::generateElfUUID;
     using Drm::generateUUID;
     using Drm::getQueueSliceCount;
+    using Drm::getSharedSystemAllocAddressRange;
     using Drm::ioctlHelper;
     using Drm::isSharedSystemAllocEnabled;
     using Drm::memoryInfo;
@@ -373,7 +375,10 @@ class DrmMockEngine : public DrmMock {
     int handleRemainingRequests(DrmIoctl request, void *arg) override;
 
     void handleQueryItem(QueryItem *queryItem);
+    void adjustL3BankGroupsInfo(QueryItem *queryItem);
     bool failQueryDeviceBlob = false;
+    bool dontQueryL3BankGroups = false;
+    bool dontQueryL3BanksPerGroup = false;
 };
 
 class DrmMockResources : public DrmMock {

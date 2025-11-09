@@ -37,8 +37,8 @@ BMGTEST_F(BmgProductHelper, givenProductHelperWhenGettingEvictIfNecessaryFlagSup
     EXPECT_TRUE(productHelper->isEvictionIfNecessaryFlagSupported());
 }
 
-BMGTEST_F(BmgProductHelper, givenBmgProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnTrue) {
-    EXPECT_TRUE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
+BMGTEST_F(BmgProductHelper, givenBmgProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnFalse) {
+    EXPECT_FALSE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
 }
 
 BMGTEST_F(BmgProductHelper, givenProductHelperWhenCheckIsCopyBufferRectSplitSupportedThenReturnsTrue) {
@@ -144,7 +144,7 @@ BMGTEST_F(BmgProductHelper, givenProductHelperWhenCheckingIsHostDeviceUsmPoolAll
     }
     {
         VariableBackup<ApiSpecificConfig::ApiType> backup(&apiTypeForUlts, ApiSpecificConfig::L0);
-        EXPECT_FALSE(productHelper->isHostUsmPoolAllocatorSupported());
-        EXPECT_FALSE(productHelper->isDeviceUsmPoolAllocatorSupported());
+        EXPECT_TRUE(productHelper->isHostUsmPoolAllocatorSupported());
+        EXPECT_TRUE(productHelper->isDeviceUsmPoolAllocatorSupported());
     }
 }

@@ -9,6 +9,7 @@
 
 #include "shared/source/execution_environment/execution_environment.h"
 #include "shared/source/execution_environment/root_device_environment.h"
+#include "shared/source/gmm_helper/gmm.h"
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/os_interface/windows/gdi_interface.h"
 #include "shared/source/os_interface/windows/os_environment_win.h"
@@ -103,6 +104,7 @@ bool WddmMock::mapGpuVirtualAddress(Gmm *gmm, D3DKMT_HANDLE handle, D3DGPU_VIRTU
     mapGpuVirtualAddressResult.called++;
     mapGpuVirtualAddressResult.cpuPtrPassed = reinterpret_cast<void *>(preferredAddress);
     mapGpuVirtualAddressResult.uint64ParamPassed = preferredAddress;
+    mapGpuVirtualAddressResult.alignment = gmm->resourceParams.BaseAlignment;
     if (callBaseMapGpuVa) {
         return mapGpuVirtualAddressResult.success = Wddm::mapGpuVirtualAddress(gmm, handle, minimumAddress, maximumAddress, preferredAddress, gpuPtr, type);
     } else {
@@ -134,6 +136,30 @@ NTSTATUS WddmMock::createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D
     } else {
         createAllocationResult.success = true;
         outHandle = ALLOCATION_HANDLE;
+        return createAllocationStatus;
+    }
+    return createAllocationStatus;
+}
+
+NTSTATUS WddmMock::createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle, bool createNTHandle) {
+    createAllocationResult.called++;
+    if (failCreateAllocation) {
+        return STATUS_NO_MEMORY;
+    }
+    if (callBaseDestroyAllocations) {
+        createAllocationStatus = Wddm::createAllocation(alignedCpuPtr, gmm, outHandle, outResourceHandle, outSharedHandle, createNTHandle);
+        createAllocationResult.success = createAllocationStatus == STATUS_SUCCESS;
+        if (createAllocationStatus != STATUS_SUCCESS) {
+            destroyAllocationResult.called++;
+        }
+    } else {
+        createAllocationResult.success = true;
+        outHandle = ALLOCATION_HANDLE;
+        outResourceHandle = ALLOCATION_HANDLE;
+        if (outSharedHandle && !createNTHandle) {
+            // For shared allocations without NT handle, set a special value
+            *outSharedHandle = 1u;
+        }
         return createAllocationStatus;
     }
     return createAllocationStatus;
@@ -230,21 +256,6 @@ void WddmMock::unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResiden
     unlockResult.called++;
     unlockResult.success = true;
     Wddm::unlockResource(handle, applyMakeResidentPriorToLock);
-}
-
-void WddmMock::kmDafLock(D3DKMT_HANDLE handle) {
-    kmDafLockResult.called++;
-    kmDafLockResult.success = true;
-    kmDafLockResult.lockedAllocations.push_back(handle);
-    Wddm::kmDafLock(handle);
-}
-
-bool WddmMock::isKmDafEnabled() const {
-    return kmDafEnabled;
-}
-
-void WddmMock::setKmDafEnabled(bool state) {
-    kmDafEnabled = state;
 }
 
 void WddmMock::setHwContextId(unsigned long hwContextId) {

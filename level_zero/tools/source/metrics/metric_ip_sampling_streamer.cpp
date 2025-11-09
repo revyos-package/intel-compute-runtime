@@ -56,6 +56,12 @@ ze_result_t IpSamplingMetricGroupImp::streamerOpen(
     }
 
     *phMetricStreamer = pStreamerImp->toHandle();
+
+    auto hwBufferSizeDesc = MetricSource::getHwBufferSizeDesc(static_cast<zet_base_desc_t *>(const_cast<void *>(desc->pNext)));
+    if (hwBufferSizeDesc.has_value()) {
+        // EUSS uses fixed max hw buffer size
+        hwBufferSizeDesc.value()->sizeInBytes = source.getMetricOsInterface()->getRequiredBufferSize(UINT32_MAX);
+    }
     return ZE_RESULT_SUCCESS;
 }
 
@@ -99,45 +105,55 @@ uint32_t IpSamplingMetricStreamerImp::getMaxSupportedReportCount() {
     return ipSamplingSource.getMetricOsInterface()->getRequiredBufferSize(UINT32_MAX) / unitReportSize;
 }
 
-ze_result_t IpSamplingMetricCalcOpImp::create(IpSamplingMetricSourceImp &metricSource,
-                                              zet_intel_metric_calculate_exp_desc_t *pCalculateDesc,
-                                              bool isMultiDevice,
-                                              zet_intel_metric_calculate_operation_exp_handle_t *phCalculateOperation) {
+ze_result_t IpSamplingMetricCalcOpImp::create(bool isMultiDevice,
+                                              const std::vector<MetricScopeImp *> &metricScopes,
+                                              IpSamplingMetricSourceImp &metricSource,
+                                              zet_intel_metric_calculation_exp_desc_t *pCalculationDesc,
+                                              zet_intel_metric_calculation_operation_exp_handle_t *phCalculationOperation) {
 
     // There is only one valid metric group in IP sampling and time filtering is not supported
     // So only metrics handles are used to filter the metrics
 
     // avoid duplicates
-    std::set<zet_metric_handle_t> uniqueMetricHandles(pCalculateDesc->phMetrics, pCalculateDesc->phMetrics + pCalculateDesc->metricCount);
+    std::set<zet_metric_handle_t> uniqueMetricHandles(pCalculationDesc->phMetrics, pCalculationDesc->phMetrics + pCalculationDesc->metricCount);
 
     // The order of metrics in the report should be the same as the one in the HW report to optimize calculation
     uint32_t metricGroupCount = 1;
     zet_metric_group_handle_t hMetricGroup = {};
-    metricSource.metricGroupGet(&metricGroupCount, &hMetricGroup);
+    if (auto ret = metricSource.metricGroupGet(&metricGroupCount, &hMetricGroup); ret != ZE_RESULT_SUCCESS) {
+        return ret;
+    }
     uint32_t metricCount = 0;
     MetricGroup::fromHandle(hMetricGroup)->metricGet(&metricCount, nullptr);
     std::vector<zet_metric_handle_t> hMetrics(metricCount);
     MetricGroup::fromHandle(hMetricGroup)->metricGet(&metricCount, hMetrics.data());
-    std::vector<MetricImp *> inputMetricsInReport = {};
+    std::vector<MetricImp *> metricsInReport = {};
     std::vector<uint32_t> includedMetricIndexes = {};
 
     for (uint32_t i = 0; i < metricCount; i++) {
         auto metric = static_cast<MetricImp *>(Metric::fromHandle(hMetrics[i]));
-        if (pCalculateDesc->metricGroupCount > 0) {
-            inputMetricsInReport.push_back(metric);
+        if (pCalculationDesc->metricGroupCount > 0) {
+            metricsInReport.push_back(metric);
             includedMetricIndexes.push_back(i);
         } else {
             if (uniqueMetricHandles.find(hMetrics[i]) != uniqueMetricHandles.end()) {
-                inputMetricsInReport.push_back(metric);
+                metricsInReport.push_back(metric);
                 includedMetricIndexes.push_back(i);
             }
         }
     }
 
-    auto calcOp = new IpSamplingMetricCalcOpImp(static_cast<uint32_t>(hMetrics.size()),
-                                                inputMetricsInReport, includedMetricIndexes, isMultiDevice);
-    *phCalculateOperation = calcOp->toHandle();
-    return ZE_RESULT_SUCCESS;
+    auto calcOp = new IpSamplingMetricCalcOpImp(isMultiDevice, metricScopes, static_cast<uint32_t>(hMetrics.size()),
+                                                metricsInReport, includedMetricIndexes);
+    *phCalculationOperation = calcOp->toHandle();
+    ze_result_t status = ZE_RESULT_SUCCESS;
+    if ((pCalculationDesc->timeWindowsCount > 0) || (pCalculationDesc->timeAggregationWindow != 0)) {
+        // Time filtering is not supported in IP sampling
+        status = ZE_INTEL_RESULT_WARNING_TIME_PARAMS_IGNORED_EXP;
+        METRICS_LOG_INFO("%s", "Time filtering is not supported in IP sampling, ignoring time windows and aggregation window");
+    }
+
+    return status;
 }
 
 ze_result_t IpSamplingMetricCalcOpImp::destroy() {
@@ -145,62 +161,40 @@ ze_result_t IpSamplingMetricCalcOpImp::destroy() {
     return ZE_RESULT_SUCCESS;
 }
 
-ze_result_t IpSamplingMetricCalcOpImp::getReportFormat(uint32_t *pCount, zet_metric_handle_t *phMetrics) {
-
-    if (*pCount == 0) {
-        *pCount = metricsInReportCount;
-        return ZE_RESULT_SUCCESS;
-    } else if (*pCount < metricsInReportCount) {
-        METRICS_LOG_ERR("%s", "Metric can't be smaller than report size");
-        *pCount = 0;
-        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-
-    *pCount = metricsInReportCount;
-    for (uint32_t index = 0; index < metricsInReportCount; index++) {
-        phMetrics[index] = metricsInReport[index]->toHandle();
-    }
-
-    return ZE_RESULT_SUCCESS;
-}
-
 void IpSamplingMetricCalcOpImp::fillStallDataMap(const size_t rawDataSize, const uint8_t *pRawData, size_t *processedSize,
                                                  L0::L0GfxCoreHelper &l0GfxCoreHelper,
                                                  std::map<uint64_t, void *> &stallReportDataMap,
-                                                 bool *dataOVerflow,
-                                                 bool allowInterrupt,
-                                                 uint32_t requestedReportCount) {
+                                                 bool *dataOverflow) {
 
     const uint32_t rawReportSize = IpSamplingMetricGroupBase::rawReportSize;
     *processedSize = 0;
 
-    uint32_t processedReportCount = 0;
     const uint8_t *dataToProcess = pRawData;
     do {
 
-        *dataOVerflow |= l0GfxCoreHelper.stallIpDataMapUpdate(stallReportDataMap, dataToProcess);
+        *dataOverflow |= l0GfxCoreHelper.stallIpDataMapUpdate(stallReportDataMap, dataToProcess);
         *processedSize += rawReportSize;
         dataToProcess += rawReportSize;
-        // Number of reports is defined by the number of IPs in the raw data.
-        processedReportCount = static_cast<uint32_t>(stallReportDataMap.size());
-    } while ((*processedSize < rawDataSize) &&
-             (!allowInterrupt || (processedReportCount < requestedReportCount)));
+    } while (*processedSize < rawDataSize);
 
     return;
 }
 
-ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValuesSingle(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValuesSingle(const size_t rawDataSize, const uint8_t *pRawData,
                                                                    uint32_t *pTotalMetricReportCount,
                                                                    L0::L0GfxCoreHelper &l0GfxCoreHelper,
                                                                    IpSamplingMetricGroupBase *metricGroupBase,
                                                                    bool getSize,
+                                                                   size_t *usedSize,
                                                                    bool &dataOverflow,
                                                                    std::map<uint64_t, void *> &stallReportDataMap) {
     ze_result_t status = ZE_RESULT_ERROR_UNKNOWN;
     uint32_t resultCount = 0;
-    *pOffset = 0;
+    *usedSize = 0;
 
-    status = static_cast<IpSamplingMetricGroupImp *>(metricGroupBase)->getCalculatedMetricCount(pRawData, rawDataSize, resultCount);
+    auto calcUtils = metricGroupBase->getMetricSource().ipSamplingCalculation.get();
+
+    status = calcUtils->getMetricCount(pRawData, rawDataSize, resultCount);
     if (status != ZE_RESULT_SUCCESS) {
         *pTotalMetricReportCount = 0;
         return status;
@@ -213,33 +207,33 @@ ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValuesSingle(const size_t 
         return ZE_RESULT_SUCCESS;
     }
 
-    // Only allow interrupting when requesting less reports than available since it affects the bytes
-    // processed: report count can be reached before processing all data.
-    bool allowInterrupt = false;
     if (*pTotalMetricReportCount < rawDataReportCount) {
-        allowInterrupt = true;
+        METRICS_LOG_ERR("%s", "EU Stall does not allow calculating fewer results than available in raw data");
+        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
     }
 
-    fillStallDataMap(rawDataSize, pRawData, pOffset, l0GfxCoreHelper, stallReportDataMap,
-                     &dataOverflow, allowInterrupt, *pTotalMetricReportCount);
+    fillStallDataMap(rawDataSize, pRawData, usedSize, l0GfxCoreHelper, stallReportDataMap,
+                     &dataOverflow);
 
     *pTotalMetricReportCount = static_cast<uint32_t>(stallReportDataMap.size());
     return status;
 }
 
-ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValuesMulti(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValuesMulti(const size_t rawDataSize, const uint8_t *pRawData,
                                                                   uint32_t *pTotalMetricReportCount,
                                                                   L0::L0GfxCoreHelper &l0GfxCoreHelper,
                                                                   IpSamplingMetricGroupBase *metricGroupBase,
                                                                   bool getSize,
                                                                   uint32_t numSubDevices,
+                                                                  size_t *usedSize,
                                                                   bool &dataOverflow,
                                                                   std::map<uint64_t, void *> &stallReportDataMap) {
     ze_result_t status = ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
     return status;
 }
 
-ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValues(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValues(const size_t rawDataSize, const uint8_t *pRawData,
+                                                             bool final, size_t *usedSize,
                                                              uint32_t *pTotalMetricReportCount,
                                                              zet_intel_metric_result_exp_t *pMetricResults) {
     ze_result_t status = ZE_RESULT_ERROR_UNKNOWN;
@@ -253,28 +247,26 @@ ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValues(const size_t rawDat
     DeviceImp *deviceImp = static_cast<DeviceImp *>(&metricGroupBase->getMetricSource().getMetricDeviceContext().getDevice());
     L0::L0GfxCoreHelper &l0GfxCoreHelper = deviceImp->getNEODevice()->getRootDeviceEnvironment().getHelper<L0GfxCoreHelper>();
 
-    pRawData += *pOffset; // Input Offset
-
     bool getSize = (*pTotalMetricReportCount == 0);
     std::map<uint64_t, void *> stallReportDataMap;
 
     if (!isMultiDevice) {
         if (isMultiDeviceData) {
-            METRICS_LOG_ERR("%s", "Cannot use root device raw data in a sub-device calculate operation handle");
+            METRICS_LOG_ERR("%s", "Cannot use root device raw data in a sub-device calculation operation handle");
             return ZE_RESULT_ERROR_INVALID_ARGUMENT;
         }
 
-        status = metricCalculateValuesSingle(rawDataSize, pOffset, pRawData, pTotalMetricReportCount,
-                                             l0GfxCoreHelper, metricGroupBase, getSize, dataOverflow, stallReportDataMap);
+        status = metricCalculateValuesSingle(rawDataSize, pRawData, pTotalMetricReportCount,
+                                             l0GfxCoreHelper, metricGroupBase, getSize, usedSize, dataOverflow, stallReportDataMap);
     } else {
         if (!isMultiDeviceData) {
-            METRICS_LOG_ERR("%s", "Cannot use sub-device raw data in a root device calculate operation handle");
+            METRICS_LOG_ERR("%s", "Cannot use sub-device raw data in a root device calculation operation handle");
             return ZE_RESULT_ERROR_INVALID_ARGUMENT;
         }
 
-        status = metricCalculateValuesMulti(rawDataSize, pOffset, pRawData, pTotalMetricReportCount,
+        status = metricCalculateValuesMulti(rawDataSize, pRawData, pTotalMetricReportCount,
                                             l0GfxCoreHelper, metricGroupBase, getSize, deviceImp->numSubDevices,
-                                            dataOverflow, stallReportDataMap);
+                                            usedSize, dataOverflow, stallReportDataMap);
     }
 
     if ((status != ZE_RESULT_SUCCESS) || (getSize)) {
@@ -287,7 +279,7 @@ ze_result_t IpSamplingMetricCalcOpImp::metricCalculateValues(const size_t rawDat
         l0GfxCoreHelper.stallSumIpDataToTypedValues(it->first, it->second, ipDataValues);
         for (uint32_t j = 0; j < includedMetricIndexes.size(); j++) {
             (pMetricResults + i)->value = ipDataValues[includedMetricIndexes[j]].value;
-            (pMetricResults + i)->resultStatus = ZET_INTEL_METRIC_CALCULATE_EXP_RESULT_VALID;
+            (pMetricResults + i)->resultStatus = ZET_INTEL_METRIC_CALCULATION_EXP_RESULT_VALID;
             i++;
         }
         ipDataValues.clear();
@@ -308,7 +300,8 @@ ze_result_t MultiDeviceIpSamplingMetricGroupImp::streamerOpen(
     ze_result_t result = ZE_RESULT_SUCCESS;
 
     std::vector<IpSamplingMetricStreamerImp *> subDeviceStreamers = {};
-    subDeviceStreamers.reserve(subDeviceMetricGroup.size());
+    const auto numSubDevices = subDeviceMetricGroup.size();
+    subDeviceStreamers.reserve(numSubDevices);
 
     // Open SubDevice Streamers
     for (auto &metricGroup : subDeviceMetricGroup) {
@@ -327,6 +320,14 @@ ze_result_t MultiDeviceIpSamplingMetricGroupImp::streamerOpen(
 
     pStreamerImp->attachEvent(hNotificationEvent);
     *phMetricStreamer = pStreamerImp->toHandle();
+
+    auto hwBufferSizeDesc = MetricSource::getHwBufferSizeDesc(static_cast<zet_base_desc_t *>(const_cast<void *>(desc->pNext)));
+    if (hwBufferSizeDesc.has_value()) {
+        auto device = Device::fromHandle(hDevice);
+        IpSamplingMetricSourceImp &source = device->getMetricDeviceContext().getMetricSource<IpSamplingMetricSourceImp>();
+        // EUSS uses fixed max hw buffer size
+        hwBufferSizeDesc.value()->sizeInBytes = source.getMetricOsInterface()->getRequiredBufferSize(UINT32_MAX) * numSubDevices;
+    }
     return result;
 }
 

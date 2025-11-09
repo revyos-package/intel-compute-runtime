@@ -37,6 +37,7 @@ struct MetadataGeneration;
 struct KernelInfo;
 enum class DecodeError : uint8_t;
 struct ExternalFunctionInfo;
+class SharedPoolAlloction;
 
 template <>
 struct OpenCLObjectMapper<_cl_program> {
@@ -187,17 +188,13 @@ class Program : public BaseObject<_cl_program> {
         return isSpirV;
     }
 
-    GraphicsAllocation *getConstantSurface(uint32_t rootDeviceIndex) const {
-        return buildInfos[rootDeviceIndex].constantSurface;
-    }
+    void freeGlobalBufferAllocation(const std::unique_ptr<NEO::SharedPoolAllocation> &buffer);
 
-    GraphicsAllocation *getGlobalSurface(uint32_t rootDeviceIndex) const {
-        return buildInfos[rootDeviceIndex].globalSurface;
-    }
-
-    GraphicsAllocation *getExportedFunctionsSurface(uint32_t rootDeviceIndex) const {
-        return buildInfos[rootDeviceIndex].exportedFunctionsSurface;
-    }
+    NEO::SharedPoolAllocation *getConstantSurface(uint32_t rootDeviceIndex) const;
+    NEO::GraphicsAllocation *getConstantSurfaceGA(uint32_t rootDeviceIndex) const;
+    NEO::SharedPoolAllocation *getGlobalSurface(uint32_t rootDeviceIndex) const;
+    NEO::GraphicsAllocation *getGlobalSurfaceGA(uint32_t rootDeviceIndex) const;
+    NEO::GraphicsAllocation *getExportedFunctionsSurface(uint32_t rootDeviceIndex) const;
 
     void cleanCurrentKernelInfo(uint32_t rootDeviceIndex);
 
@@ -279,6 +276,7 @@ class Program : public BaseObject<_cl_program> {
     Zebin::Debug::Segments getZebinSegments(uint32_t rootDeviceIndex);
     MOCKABLE_VIRTUAL void callPopulateZebinExtendedArgsMetadataOnce(uint32_t rootDeviceIndex);
     MOCKABLE_VIRTUAL void callGenerateDefaultExtendedArgsMetadataOnce(uint32_t rootDeviceIndex);
+    MOCKABLE_VIRTUAL cl_int createFromILExt(Context *context, const void *il, size_t length);
 
   protected:
     MOCKABLE_VIRTUAL cl_int createProgramFromBinary(const void *pBinary, size_t binarySize, ClDevice &clDevice);
@@ -331,8 +329,8 @@ class Program : public BaseObject<_cl_program> {
 
     struct BuildInfo : public NonCopyableClass {
         std::vector<KernelInfo *> kernelInfoArray;
-        GraphicsAllocation *constantSurface = nullptr;
-        GraphicsAllocation *globalSurface = nullptr;
+        std::unique_ptr<NEO::SharedPoolAllocation> constantSurface;
+        std::unique_ptr<NEO::SharedPoolAllocation> globalSurface;
         GraphicsAllocation *exportedFunctionsSurface = nullptr;
         size_t globalVarTotalSize = 0U;
         std::unique_ptr<LinkerInput> linkerInput;
@@ -391,6 +389,7 @@ class Program : public BaseObject<_cl_program> {
         std::string decodeErrors;
         std::string decodeWarnings;
     } decodedSingleDeviceBinary;
+    IGC::CodeType::CodeType_t intermediateRepresentation = IGC::CodeType::invalid;
 };
 
 static_assert(NEO::NonCopyableAndNonMovable<Program>);

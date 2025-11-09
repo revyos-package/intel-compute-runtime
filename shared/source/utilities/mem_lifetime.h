@@ -16,6 +16,9 @@ template <typename T>
 void cloneExt(ExtUniquePtrT<T> &dst, const T &src);
 
 template <typename T>
+void allocateExt(ExtUniquePtrT<T> &dst);
+
+template <typename T>
 void destroyExt(T *dst);
 
 namespace Impl {
@@ -51,10 +54,14 @@ struct UniquePtrWrapperOps {
 
 } // namespace Impl
 
-template <typename T>
+template <typename T, bool allocateAtInit = false>
 struct Ext : Impl::UniquePtrWrapperOps<Ext<T>> {
     Ext(T *ptr) : ptr(ptr, destroyExt) {}
-    Ext() = default;
+    Ext() {
+        if constexpr (allocateAtInit) {
+            allocateExt(ptr);
+        }
+    }
     Ext(const Ext &rhs) {
         if (rhs.ptr.get()) {
             cloneExt(this->ptr, *rhs.ptr.get());
@@ -73,11 +80,15 @@ struct Ext : Impl::UniquePtrWrapperOps<Ext<T>> {
         return *this;
     }
 
+    ~Ext() = default;
+    Ext(Ext &&rhs) noexcept = default;
+    Ext &operator=(Ext &&rhs) noexcept = default;
+
     ExtUniquePtrT<T> ptr{nullptr, destroyExt};
 };
 
 template <typename T>
-struct Clonable : Impl::UniquePtrWrapperOps<Clonable<Ext<T>>> {
+struct Clonable : Impl::UniquePtrWrapperOps<Clonable<T>> {
     Clonable(T *ptr) : ptr(ptr) {}
     Clonable() = default;
     Clonable(const Clonable &rhs) {
@@ -98,6 +109,10 @@ struct Clonable : Impl::UniquePtrWrapperOps<Clonable<Ext<T>>> {
         this->ptr = std::make_unique<T>(*rhs.ptr);
         return *this;
     }
+
+    ~Clonable() = default;
+    Clonable(Clonable &&rhs) noexcept = default;
+    Clonable &operator=(Clonable &&rhs) noexcept = default;
 
     std::unique_ptr<T> ptr;
 };

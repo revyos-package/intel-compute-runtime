@@ -66,14 +66,15 @@ set(CLOC_LIB_SRCS_LIB
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_options_parser.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/compiler_options_parser.h
     ${NEO_SHARED_DIRECTORY}/helpers/cache_policy.h
-    ${NEO_SHARED_DIRECTORY}/helpers/cache_policy_tgllp_and_later.inl
-    ${NEO_SHARED_DIRECTORY}/helpers/cache_policy_dg2_and_later.inl
+    ${NEO_SHARED_DIRECTORY}/helpers/cache_policy_gen12lp.inl
+    ${NEO_SHARED_DIRECTORY}/helpers/cache_policy_from_xe_hpg_to_xe3.inl
     ${NEO_SHARED_DIRECTORY}/helpers/debug_helpers.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/hw_info.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/hw_info.h
     ${NEO_SHARED_DIRECTORY}/helpers/hw_info_helper.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/hw_info_helper.h
     ${NEO_SHARED_DIRECTORY}/helpers/path.h
+    ${NEO_SHARED_DIRECTORY}/helpers/${BRANCH_DIR_SUFFIX}product_config_helper_extra.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/product_config_helper.cpp
     ${NEO_SHARED_DIRECTORY}/helpers/product_config_helper.h
     ${NEO_SHARED_DIRECTORY}/kernel/${BRANCH_DIR_SUFFIX}kernel_descriptor_ext.cpp
@@ -199,36 +200,38 @@ foreach(OCLOC_SUPPORT_VAR ${OCLOC_SUPPORT_VARS})
 endforeach()
 
 macro(SET_FLAGS_FOR CORE_TYPE)
-  foreach(SKU_NAME ${ARGN})
-    if(SUPPORT_${SKU_NAME} OR NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
-      if(NOT SUPPORT_${CORE_TYPE})
-        message(STATUS "Auto-Enabling ${CORE_TYPE} support for ${SKU_NAME} in ocloc")
-        set(SUPPORT_${CORE_TYPE} TRUE)
+  if(NOT OCLOC_DISABLE_${CORE_TYPE})
+    foreach(SKU_NAME ${ARGN})
+      if(SUPPORT_${SKU_NAME} OR NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
+        if(NOT SUPPORT_${CORE_TYPE})
+          message(STATUS "Auto-Enabling ${CORE_TYPE} support for ${SKU_NAME} in ocloc")
+          set(SUPPORT_${CORE_TYPE} TRUE)
+        endif()
       endif()
-    endif()
-    string(TOLOWER ${CORE_TYPE} MAP_${SKU_NAME}_CORE_lower)
-    string(TOLOWER ${SKU_NAME} MAP_${SKU_NAME}_lower)
-    set(MAP_${SKU_NAME}_CORE_lower "${CORE_PREFIX}${MAP_${SKU_NAME}_CORE_lower}${CORE_SUFFIX}")
-    set(MAP_${SKU_NAME}_lower ${MAP_${SKU_NAME}_lower})
-  endforeach()
-
-  if(NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
-    set(SUPPORT_${CORE_TYPE} TRUE)
-  elseif(NOT SUPPORT_${CORE_TYPE})
-    set(SUPPORT_${CORE_TYPE} ${SUPPORT_GEN_DEFAULT})
-  endif()
-
-  if(SUPPORT_${CORE_TYPE} OR NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
-    list(APPEND ALL_SUPPORTED_CORE_FAMILIES ${CORE_TYPE})
-    list(REMOVE_DUPLICATES ALL_SUPPORTED_CORE_FAMILIES)
-
-    foreach(${CORE_TYPE}_PLATFORM ${ARGN})
-      if(NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
-        set(SUPPORT_${${CORE_TYPE}_PLATFORM} TRUE)
-      elseif(NOT SUPPORT_${${CORE_TYPE}_PLATFORM})
-        set(SUPPORT_${${CORE_TYPE}_PLATFORM} ${SUPPORT_PLATFORM_DEFAULT})
-      endif()
+      string(TOLOWER ${CORE_TYPE} MAP_${SKU_NAME}_CORE_lower)
+      string(TOLOWER ${SKU_NAME} MAP_${SKU_NAME}_lower)
+      set(MAP_${SKU_NAME}_CORE_lower "${CORE_PREFIX}${MAP_${SKU_NAME}_CORE_lower}${CORE_SUFFIX}")
+      set(MAP_${SKU_NAME}_lower ${MAP_${SKU_NAME}_lower})
     endforeach()
+
+    if(NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
+      set(SUPPORT_${CORE_TYPE} TRUE)
+    elseif(NOT SUPPORT_${CORE_TYPE})
+      set(SUPPORT_${CORE_TYPE} ${SUPPORT_GEN_DEFAULT})
+    endif()
+
+    if(SUPPORT_${CORE_TYPE} OR NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
+      list(APPEND ALL_SUPPORTED_CORE_FAMILIES ${CORE_TYPE})
+      list(REMOVE_DUPLICATES ALL_SUPPORTED_CORE_FAMILIES)
+
+      foreach(${CORE_TYPE}_PLATFORM ${ARGN})
+        if(NEO_FORCE_ENABLE_PLATFORMS_FOR_OCLOC)
+          set(SUPPORT_${${CORE_TYPE}_PLATFORM} TRUE)
+        elseif(NOT SUPPORT_${${CORE_TYPE}_PLATFORM})
+          set(SUPPORT_${${CORE_TYPE}_PLATFORM} ${SUPPORT_PLATFORM_DEFAULT})
+        endif()
+      endforeach()
+    endif()
   endif()
 endmacro()
 

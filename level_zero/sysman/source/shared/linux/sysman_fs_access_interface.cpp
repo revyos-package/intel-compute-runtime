@@ -321,7 +321,7 @@ std::string ProcFsAccessInterface::fullPath(const ::pid_t pid) {
 }
 
 std::string ProcFsAccessInterface::fdDirPath(const ::pid_t pid) {
-    // Returns the full path to file descritpor directory
+    // Returns the full path to file descriptor directory
     // for process pid
     return std::string(fullPath(pid) + fdDir);
 }
@@ -416,7 +416,7 @@ SysFsAccessInterface::SysFsAccessInterface(const std::string dev) {
     std::string fileName = FsAccessInterface::getBaseName(dev);
     std::string devicesDir = drmPath + fileName + std::string("/") + devicesPath;
 
-    FsAccessInterface::listDirectory(devicesDir, deviceNames);
+    FsAccessInterface::listDirectory(std::move(devicesDir), deviceNames);
     for (auto &&next : deviceNames) {
         if (!next.compare(0, primaryDevName.length(), primaryDevName)) {
             dirname = drmPath + next + std::string("/");

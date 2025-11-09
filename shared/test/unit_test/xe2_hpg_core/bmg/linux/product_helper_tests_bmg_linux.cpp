@@ -53,12 +53,20 @@ BMGTEST_F(BmgProductHelperLinux, givenProductHelperWhenAskedIfPatIndexProgrammin
     EXPECT_TRUE(productHelper->isVmBindPatIndexProgrammingSupported());
 }
 
+BMGTEST_F(BmgProductHelperLinux, givenProductHelperWhenAskedIfIsTlbFlushRequiredThenFalseIsReturned) {
+    EXPECT_FALSE(productHelper->isTlbFlushRequired());
+}
+
 BMGTEST_F(BmgProductHelperLinux, givenProductHelperWhenAskedIsPageFaultSupportedThenReturnFalse) {
     EXPECT_FALSE(productHelper->isPageFaultSupported());
 }
 
 BMGTEST_F(BmgProductHelperLinux, givenProductHelperWhenAskedIsKmdMigrationSupportedThenReturnFalse) {
     EXPECT_FALSE(productHelper->isKmdMigrationSupported());
+}
+
+BMGTEST_F(BmgProductHelperLinux, givenProductHelperWhenAskedGetSharedSystemPatIndexThenReturnCorrectValue) {
+    EXPECT_EQ(0ull, productHelper->getSharedSystemPatIndex());
 }
 
 BMGTEST_F(BmgProductHelperLinux, WhenGtIsSetupThenGtSystemInfoIsCorrect) {

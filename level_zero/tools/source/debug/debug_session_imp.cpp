@@ -11,6 +11,7 @@
 #include "shared/source/execution_environment/root_device_environment.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/helpers/basic_math.h"
+#include "shared/source/helpers/file_io.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/sleep.h"
@@ -38,7 +39,7 @@ void DebugSession::createEuThreads() {
         auto &hwInfo = connectedDevice->getHwInfo();
         const uint32_t numSubslicesPerSlice = std::max(hwInfo.gtSystemInfo.MaxSubSlicesSupported, hwInfo.gtSystemInfo.MaxDualSubSlicesSupported) / hwInfo.gtSystemInfo.MaxSlicesSupported;
         const uint32_t numEuPerSubslice = hwInfo.gtSystemInfo.MaxEuPerSubSlice;
-        const uint32_t numThreadsPerEu = (hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount);
+        const uint32_t numThreadsPerEu = hwInfo.gtSystemInfo.NumThreadsPerEu;
         uint32_t subDeviceCount = std::max(1u, connectedDevice->getNEODevice()->getNumSubDevices());
         UNRECOVERABLE_IF(isSubDevice && subDeviceCount > 1);
 
@@ -145,7 +146,7 @@ std::vector<EuThread::ThreadId> DebugSession::getSingleThreadsForDevice(uint32_t
 
     const uint32_t numSubslicesPerSlice = hwInfo.gtSystemInfo.MaxSubSlicesSupported / hwInfo.gtSystemInfo.MaxSlicesSupported;
     const uint32_t numEuPerSubslice = hwInfo.gtSystemInfo.MaxEuPerSubSlice;
-    const uint32_t numThreadsPerEu = (hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount);
+    const uint32_t numThreadsPerEu = hwInfo.gtSystemInfo.NumThreadsPerEu;
 
     UNRECOVERABLE_IF(numThreadsPerEu > 16);
 
@@ -282,7 +283,7 @@ size_t DebugSession::getPerThreadScratchOffset(size_t ptss, EuThread::ThreadId t
     auto &hwInfo = connectedDevice->getHwInfo();
     const uint32_t numSubslicesPerSlice = hwInfo.gtSystemInfo.MaxSubSlicesSupported / hwInfo.gtSystemInfo.MaxSlicesSupported;
     const uint32_t numEuPerSubslice = hwInfo.gtSystemInfo.MaxEuPerSubSlice;
-    const uint32_t numThreadsPerEu = (hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount);
+    const uint32_t numThreadsPerEu = hwInfo.gtSystemInfo.NumThreadsPerEu;
 
     const auto &productHelper = connectedDevice->getProductHelper();
     uint32_t threadEuRatio = productHelper.getThreadEuRatioForScratch(hwInfo);
@@ -365,6 +366,20 @@ ze_result_t DebugSessionImp::interrupt(ze_device_thread_t thread) {
     }
 
     return ZE_RESULT_SUCCESS;
+}
+
+uint32_t DebugSessionImp::readSipMemory(void *userArg, uint32_t offset, uint32_t size, void *destination) {
+    struct SipMemoryAccessArgs *args = reinterpret_cast<struct SipMemoryAccessArgs *>(userArg);
+    if (args->debugSession->readGpuMemory(args->contextHandle, static_cast<char *>(destination), size, offset + args->gpuVa) != ZE_RESULT_SUCCESS)
+        return 0;
+    return size;
+}
+
+uint32_t DebugSessionImp::writeSipMemory(void *userArg, uint32_t offset, uint32_t size, void *source) {
+    struct SipMemoryAccessArgs *args = reinterpret_cast<struct SipMemoryAccessArgs *>(userArg);
+    if (args->debugSession->writeGpuMemory(args->contextHandle, static_cast<const char *>(source), size, offset + args->gpuVa) != ZE_RESULT_SUCCESS)
+        return 0;
+    return size;
 }
 
 DebugSessionImp::Error DebugSessionImp::resumeThreadsWithinDevice(uint32_t deviceIndex, ze_device_thread_t apiThread) {
@@ -569,10 +584,8 @@ ze_result_t DebugSessionImp::resume(ze_device_thread_t thread) {
 
         if (connectedDevice->getNEODevice()->isSubDevice()) {
             deviceIndex = Math::log2(static_cast<uint32_t>(connectedDevice->getNEODevice()->getDeviceBitfield().to_ulong()));
-        } else {
-            if (thread.slice != UINT32_MAX) {
-                deviceIndex = getDeviceIndexFromApiThread(thread);
-            }
+        } else if (thread.slice != UINT32_MAX) {
+            deviceIndex = getDeviceIndexFromApiThread(thread);
         }
 
         auto result = resumeThreadsWithinDevice(deviceIndex, thread);
@@ -985,7 +998,23 @@ ze_result_t DebugSessionImp::readEvent(uint64_t timeout, zet_debug_event_t *outp
     return ZE_RESULT_NOT_READY;
 }
 
+void DebugSessionImp::dumpDebugSurfaceToFile(uint64_t vmHandle, uint64_t gpuVa, const std::string &path) {
+    auto stateSaveAreaSize = getContextStateSaveAreaSize(vmHandle);
+    std::vector<char> data(stateSaveAreaSize);
+    auto retVal = readGpuMemory(vmHandle, data.data(), data.size(), gpuVa);
+    if (retVal != ZE_RESULT_SUCCESS) {
+        PRINT_DEBUGGER_ERROR_LOG("Reading context state save area failed, error = %d\n", retVal);
+        return;
+    }
+    writeDataToFile(path.c_str(), std::string_view(data.data(), data.size()));
+}
+
 void DebugSessionImp::validateAndSetStateSaveAreaHeader(uint64_t vmHandle, uint64_t gpuVa) {
+    const std::string dumpDebugSurfacePath = NEO::debugManager.flags.DumpDebugSurfaceFile.get();
+    if (dumpDebugSurfacePath != "unk") {
+        dumpDebugSurfaceToFile(vmHandle, gpuVa, dumpDebugSurfacePath);
+    }
+
     auto headerSize = sizeof(NEO::StateSaveAreaHeader);
     std::vector<char> data(headerSize);
     auto retVal = readGpuMemory(vmHandle, data.data(), sizeof(SIP::StateSaveArea), gpuVa);

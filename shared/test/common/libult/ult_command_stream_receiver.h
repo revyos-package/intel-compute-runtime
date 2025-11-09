@@ -12,6 +12,7 @@
 #include "shared/source/command_stream/wait_status.h"
 #include "shared/source/direct_submission/direct_submission_hw.h"
 #include "shared/source/helpers/blit_properties.h"
+#include "shared/source/helpers/flush_stamp.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
 #include "shared/source/memory_manager/surface.h"
 #include "shared/source/os_interface/os_context.h"
@@ -209,12 +210,19 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
         return nullptr;
     }
 
+    uint64_t peekTotalMemoryUsed() {
+        return this->totalMemoryUsed;
+    }
+
     void makeSurfacePackNonResident(ResidencyContainer &allocationsForResidency, bool clearAllocations) override {
         makeSurfacePackNonResidentCalled++;
         BaseClass::makeSurfacePackNonResident(allocationsForResidency, clearAllocations);
     }
 
     NEO::SubmissionStatus flush(BatchBuffer &batchBuffer, ResidencyContainer &allocationsForResidency) override {
+        if (incrementFlushStampOnFlush) {
+            this->flushStamp->setStamp(this->obtainCurrentFlushStamp() + 1);
+        }
         if (flushReturnValue) {
             return *flushReturnValue;
         }
@@ -394,7 +402,7 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
         addAubCommentCalled = true;
     }
     bool flushBatchedSubmissions() override {
-        auto commandStreamReceieverOwnership = this->obtainUniqueOwnership();
+        auto commandStreamReceiverOwnership = this->obtainUniqueOwnership();
         flushBatchedSubmissionsCalled = true;
 
         if (shouldFailFlushBatchedSubmissions) {
@@ -435,6 +443,13 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
         } else {
             return flushBcsTaskReturnValue;
         }
+    }
+
+    bool getAndClearIsWalkerWithProfilingEnqueued() override {
+        if (this->isWalkerWithProfilingEnqueued) {
+            ++this->walkerWithProfilingEnqueuedTimes;
+        }
+        return CommandStreamReceiverHw<GfxFamily>::getAndClearIsWalkerWithProfilingEnqueued();
     }
 
     bool createPerDssBackedBuffer(Device &device) override {
@@ -583,6 +598,13 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
         }
         return isAnyDirectSubmissionEnabledResult;
     }
+
+    bool testTaskCountReady(volatile TagAddressType *pollAddress, TaskCountType taskCountToWait) override {
+        if (testTaskCountReadyReturnValue.has_value()) {
+            return *testTaskCountReadyReturnValue;
+        }
+        return BaseClass::testTaskCountReady(pollAddress, taskCountToWait);
+    }
     std::vector<std::string> aubCommentMessages;
 
     BatchBuffer latestFlushedBatchBuffer = {};
@@ -626,6 +648,7 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
     uint32_t drainPagingFenceQueueCalled = 0;
     uint32_t flushHandlerCalled = 0;
     uint32_t obtainUniqueOwnershipCalledTimes = 0;
+    uint32_t walkerWithProfilingEnqueuedTimes = 0;
     mutable uint32_t checkGpuHangDetectedCalled = 0;
     int ensureCommandBufferAllocationCalled = 0;
     DispatchFlags recordedDispatchFlags;
@@ -637,6 +660,7 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
     std::optional<WaitStatus> waitForTaskCountWithKmdNotifyFallbackReturnValue{};
     std::optional<WaitStatus> waitForTaskCountReturnValue{};
     std::optional<SubmissionStatus> flushReturnValue{};
+    std::optional<bool> testTaskCountReadyReturnValue{};
     CommandStreamReceiverType commandStreamReceiverType = CommandStreamReceiverType::hardware;
     std::atomic<uint32_t> downloadAllocationsCalledCount = 0;
     std::atomic<bool> latestDownloadAllocationsBlocking = false;
@@ -676,6 +700,7 @@ class UltCommandStreamReceiver : public CommandStreamReceiverHw<GfxFamily> {
     bool isAnyDirectSubmissionEnabledCallBase = true;
     bool isAnyDirectSubmissionEnabledResult = true;
     std::atomic_bool captureWaitForTaskCountWithKmdNotifyInputParams = false;
+    bool incrementFlushStampOnFlush = false;
 };
 
 } // namespace NEO

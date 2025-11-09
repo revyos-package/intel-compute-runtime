@@ -206,7 +206,7 @@ TEST(RootDeviceEnvironment, givenUseAubStreamFalseWhenGetAubManagerIsCalledThenR
     auto aubManager = rootDeviceEnvironment->aubCenter->getAubManager();
     EXPECT_EQ(nullptr, aubManager);
 }
-TEST(RootDeviceEnvironment, givenExecutionEnvironmentWhenInitializeAubCenterIsCalledThenItIsInitalizedOnce) {
+TEST(RootDeviceEnvironment, givenExecutionEnvironmentWhenInitializeAubCenterIsCalledThenItIsInitializedOnce) {
     MockExecutionEnvironment executionEnvironment{defaultHwInfo.get(), false, 1u};
     auto rootDeviceEnvironment = executionEnvironment.rootDeviceEnvironments[0].get();
     rootDeviceEnvironment->initAubCenter(false, "", CommandStreamReceiverType::aub);
@@ -215,7 +215,7 @@ TEST(RootDeviceEnvironment, givenExecutionEnvironmentWhenInitializeAubCenterIsCa
     rootDeviceEnvironment->initAubCenter(false, "", CommandStreamReceiverType::aub);
     EXPECT_EQ(currentAubCenter, rootDeviceEnvironment->aubCenter.get());
 }
-TEST(RootDeviceEnvironment, givenRootExecutionEnvironmentWhenGetAssertHandlerIsCalledThenItIsInitalizedOnce) {
+TEST(RootDeviceEnvironment, givenRootExecutionEnvironmentWhenGetAssertHandlerIsCalledThenItIsInitializedOnce) {
     const HardwareInfo *hwInfo = defaultHwInfo.get();
     auto device = std::unique_ptr<Device>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(hwInfo));
     auto executionEnvironment = device->getExecutionEnvironment();
@@ -366,7 +366,11 @@ TEST(ExecutionEnvironment, givenNeoCalEnabledWhenCreateExecutionEnvironmentThenS
 #define DECLARE_DEBUG_SCOPED_V(dataType, variableName, defaultValue, description, ...) \
     DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
 #include "debug_variables.inl"
+#define DECLARE_RELEASE_VARIABLE(dataType, variableName, defaultValue, description) DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
+#define DECLARE_RELEASE_VARIABLE_OPT(enabled, dataType, variableName, defaultValue, description) DECLARE_RELEASE_VARIABLE(dataType, variableName, defaultValue, description)
 #include "release_variables.inl"
+#undef DECLARE_RELEASE_VARIABLE_OPT
+#undef DECLARE_RELEASE_VARIABLE
 #undef DECLARE_DEBUG_SCOPED_V
 #undef DECLARE_DEBUG_VARIABLE
 
@@ -400,7 +404,11 @@ TEST(ExecutionEnvironment, givenNeoCalEnabledWhenCreateExecutionEnvironmentThenS
     DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
 
 #include "debug_variables.inl"
+#define DECLARE_RELEASE_VARIABLE(dataType, variableName, defaultValue, description) DECLARE_DEBUG_VARIABLE(dataType, variableName, defaultValue, description)
+#define DECLARE_RELEASE_VARIABLE_OPT(enabled, dataType, variableName, defaultValue, description) DECLARE_RELEASE_VARIABLE(dataType, variableName, defaultValue, description)
 #include "release_variables.inl"
+#undef DECLARE_RELEASE_VARIABLE_OPT
+#undef DECLARE_RELEASE_VARIABLE
 #undef DECLARE_DEBUG_SCOPED_V
 #undef DECLARE_DEBUG_VARIABLE
 }
@@ -415,7 +423,7 @@ TEST(ExecutionEnvironment, givenEnvVarUsedInCalConfigAlsoSetByAppWhenCreateExecu
     EXPECT_EQ(debugManager.flags.ForceCommandBufferAlignment.get(), appCommandBufferAlignment);
 }
 
-TEST(ExecutionEnvironment, givenExecutionEnvironmentWhenInitializeMemoryManagerIsCalledThenItIsInitalized) {
+TEST(ExecutionEnvironment, givenExecutionEnvironmentWhenInitializeMemoryManagerIsCalledThenItIsInitialized) {
     MockExecutionEnvironment executionEnvironment{};
     executionEnvironment.initializeMemoryManager();
     ASSERT_NE(nullptr, executionEnvironment.memoryManager);
@@ -437,6 +445,7 @@ static_assert(sizeof(ExecutionEnvironment) == sizeof(std::unique_ptr<MemoryManag
                                                   sizeof(std::unordered_map<uint32_t, uint32_t>) +
                                                   sizeof(std::mutex) +
                                                   sizeof(std::vector<std::tuple<std::string, uint32_t>>) +
+                                                  sizeof(std::mutex) +
                                                   (is64bit ? 22 : 14),
               "New members detected in ExecutionEnvironment, please ensure that destruction sequence of objects is correct");
 

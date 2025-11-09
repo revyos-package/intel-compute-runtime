@@ -155,7 +155,7 @@ HWTEST2_F(SysmanRasFixture, GivenValidSysmanHandleWhenRetrievingRasHandlesIfRasE
     EXPECT_EQ(testcount, 0u);
 }
 
-HWTEST2_F(SysmanRasFixture, GivenValidSysmanHandleWhenRetrievingRasHandlesIfRasEventsAndHbmAreAbsentThenZeroHandlesAreCreated, IsNotPVC) {
+HWTEST2_F(SysmanRasFixture, GivenValidSysmanHandleWhenRetrievingRasHandlesIfRasEventsAndHbmAreAbsentThenZeroHandlesAreCreated, IsPVC) {
     pRasFwUtilInterface->mockMemorySuccess = true;
     pFsAccess->mockReadDirectoryWithoutRasEvents = true;
 

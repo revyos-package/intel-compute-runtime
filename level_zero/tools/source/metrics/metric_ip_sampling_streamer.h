@@ -48,58 +48,53 @@ struct MultiDeviceIpSamplingMetricStreamerImp : public IpSamplingMetricStreamerB
 };
 
 struct IpSamplingMetricCalcOpImp : public MetricCalcOpImp {
-    IpSamplingMetricCalcOpImp(uint32_t inputCachedMetricsCount, std::vector<MetricImp *> &inputMetricsInReport,
-                              std::vector<uint32_t> &inputIncludedMetricIndexes, bool multidevice)
-        : MetricCalcOpImp(multidevice),
-          cachedMetricsCount(inputCachedMetricsCount),
-          metricsInReportCount(static_cast<uint32_t>(inputMetricsInReport.size())),
-          metricsInReport(inputMetricsInReport),
-          includedMetricIndexes(inputIncludedMetricIndexes) {}
+    IpSamplingMetricCalcOpImp(bool multidevice,
+                              const std::vector<MetricScopeImp *> &metricScopes,
+                              uint32_t cachedMetricsCount,
+                              std::vector<MetricImp *> &metricsInReport,
+                              std::vector<uint32_t> &includedMetricIndexes)
+        : MetricCalcOpImp(multidevice, metricScopes, metricsInReport, std::vector<MetricImp *>()),
+          cachedMetricsCount(cachedMetricsCount),
+          includedMetricIndexes(includedMetricIndexes) {}
 
     ~IpSamplingMetricCalcOpImp() override{};
-    static ze_result_t create(IpSamplingMetricSourceImp &metricSource,
-                              zet_intel_metric_calculate_exp_desc_t *pCalculateDesc,
-                              bool isMultiDevice,
-                              zet_intel_metric_calculate_operation_exp_handle_t *phCalculateOperation);
+    static ze_result_t create(bool isMultiDevice,
+                              const std::vector<MetricScopeImp *> &metricScopes,
+                              IpSamplingMetricSourceImp &metricSource,
+                              zet_intel_metric_calculation_exp_desc_t *pCalculationDesc,
+                              zet_intel_metric_calculation_operation_exp_handle_t *phCalculationOperation);
     ze_result_t destroy() override;
-    ze_result_t getReportFormat(uint32_t *pCount, zet_metric_handle_t *phMetrics) override;
-    ze_result_t metricCalculateMultipleValues(const size_t rawDataSize, size_t *offset, const uint8_t *pRawData,
-                                              uint32_t *pSetCount, uint32_t *pMetricsReportCountPerSet,
-                                              uint32_t *pTotalMetricReportCount,
-                                              zet_intel_metric_result_exp_t *pMetricResults) override {
-        return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
-    }
-    ze_result_t metricCalculateValues(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+
+    ze_result_t metricCalculateValues(const size_t rawDataSize, const uint8_t *pRawData,
+                                      bool final, size_t *usedSize,
                                       uint32_t *pTotalMetricReportCount,
                                       zet_intel_metric_result_exp_t *pMetricResults) override;
 
     void fillStallDataMap(const size_t rawDataSize, const uint8_t *pRawData, size_t *processedSize,
                           L0GfxCoreHelper &l0GfxCoreHelper,
                           std::map<uint64_t, void *> &stallReportDataMap,
-                          bool *dataOVerflow,
-                          bool allowInterrupt,
-                          uint32_t requestedReportCount);
+                          bool *dataOverflow);
 
   protected:
-    ze_result_t metricCalculateValuesSingle(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+    ze_result_t metricCalculateValuesSingle(const size_t rawDataSize, const uint8_t *pRawData,
                                             uint32_t *pTotalMetricReportCount,
                                             L0::L0GfxCoreHelper &l0GfxCoreHelper,
                                             IpSamplingMetricGroupBase *metricGroupBase,
                                             bool getSize,
+                                            size_t *usedSize,
                                             bool &dataOverflow,
                                             std::map<uint64_t, void *> &stallReportDataMap);
-    ze_result_t metricCalculateValuesMulti(const size_t rawDataSize, size_t *pOffset, const uint8_t *pRawData,
+    ze_result_t metricCalculateValuesMulti(const size_t rawDataSize, const uint8_t *pRawData,
                                            uint32_t *pTotalMetricReportCount,
                                            L0::L0GfxCoreHelper &l0GfxCoreHelper,
                                            IpSamplingMetricGroupBase *metricGroupBase,
                                            bool getSize,
                                            uint32_t numSubDevices,
+                                           size_t *usedSize,
                                            bool &dataOverflow,
                                            std::map<uint64_t, void *> &stallReportDataMap);
 
     uint32_t cachedMetricsCount = 0;
-    uint32_t metricsInReportCount = 0;
-    std::vector<MetricImp *> metricsInReport{};
     std::vector<uint32_t> includedMetricIndexes{};
 };
 

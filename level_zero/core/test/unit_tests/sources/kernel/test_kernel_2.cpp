@@ -10,6 +10,7 @@
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/local_id_gen.h"
 #include "shared/source/helpers/simd_helper.h"
+#include "shared/source/utilities/mem_lifetime.h"
 #include "shared/test/common/helpers/raii_gfx_core_helper.h"
 #include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/mocks/mock_bindless_heaps_helper.h"
@@ -19,6 +20,7 @@
 #include "shared/test/common/test_macros/hw_test.h"
 #include "shared/test/common/test_macros/test.h"
 
+#include "level_zero/core/source/kernel/kernel_shared_state.h"
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/fixtures/kernel_max_cooperative_groups_count_fixture.h"
 #include "level_zero/core/test/unit_tests/fixtures/module_fixture.h"
@@ -38,105 +40,114 @@ using KernelImpTest = Test<DeviceFixture>;
 
 TEST_F(KernelImpTest, GivenKernelMutableStateWhenPerThreadDataForWholeGroupReservedThenReallocatedIfNeeded) {
 
-    KernelMutableState state{};
+    KernelMutableState privateState{};
     constexpr size_t perThreadDataSize1{5U};
-    state.reservePerThreadDataForWholeThreadGroup(perThreadDataSize1);
+    privateState.reservePerThreadDataForWholeThreadGroup(perThreadDataSize1);
 
-    auto alloc1{state.perThreadDataForWholeThreadGroup};
+    auto alloc1{privateState.perThreadDataForWholeThreadGroup};
     EXPECT_NE(alloc1, nullptr);
-    EXPECT_EQ(state.perThreadDataSizeForWholeThreadGroup, perThreadDataSize1);
-    EXPECT_EQ(state.perThreadDataSizeForWholeThreadGroupAllocated, perThreadDataSize1);
+    EXPECT_EQ(privateState.perThreadDataSizeForWholeThreadGroup, perThreadDataSize1);
+    EXPECT_EQ(privateState.perThreadDataSizeForWholeThreadGroupAllocated, perThreadDataSize1);
 
     constexpr size_t perThreadDataSize2{3U};
-    state.reservePerThreadDataForWholeThreadGroup(perThreadDataSize2);
-    auto alloc2{state.perThreadDataForWholeThreadGroup};
+    privateState.reservePerThreadDataForWholeThreadGroup(perThreadDataSize2);
+    auto alloc2{privateState.perThreadDataForWholeThreadGroup};
     EXPECT_EQ(alloc1, alloc2);
-    EXPECT_EQ(state.perThreadDataSizeForWholeThreadGroupAllocated, perThreadDataSize1);
-    EXPECT_EQ(state.perThreadDataSizeForWholeThreadGroup, perThreadDataSize2);
+    EXPECT_EQ(privateState.perThreadDataSizeForWholeThreadGroupAllocated, perThreadDataSize1);
+    EXPECT_EQ(privateState.perThreadDataSizeForWholeThreadGroup, perThreadDataSize2);
 }
 
 TEST_F(KernelImpTest, GivenKernelMutableStateWhenAssigningToItselfThenTheCurrentObjectReturned) {
     constexpr size_t mockSize{8U};
 
     KernelMutableState state1{};
-    state1.crossThreadData.reset(new uint8_t[mockSize]);
-    auto addressBeforeAssignment{state1.crossThreadData.get()};
+    state1.crossThreadData.clear();
+    state1.crossThreadData.resize(mockSize, 0x0);
+    auto addressBeforeAssignment{state1.crossThreadData.data()};
 
     auto &notReallyDifferentState{state1};
     state1 = notReallyDifferentState;
-    auto addressAfterAssignment{state1.crossThreadData.get()};
+    auto addressAfterAssignment{state1.crossThreadData.data()};
+
+    auto &&notReallyDifferentState2{std::move(state1)};
+    state1 = std::move(notReallyDifferentState2);
+    auto addressAfterAssignment2{state1.crossThreadData.data()};
 
     EXPECT_EQ(addressBeforeAssignment, addressAfterAssignment);
+    EXPECT_EQ(addressBeforeAssignment, addressAfterAssignment2);
 }
 
-TEST_F(KernelImpTest, GivenKernelMutableStateWhenAssignmentOperatorUsedThenProperDeepCopyMade) {
-    KernelMutableState state1{};
-    state1.unifiedMemoryControls = {true, true, true};
-    state1.pImplicitArgs.reset(new ImplicitArgs{});
-    state1.pImplicitArgs->v0 = ImplicitArgsV0{
+void fillKernelMutableStateWithMockData(KernelMutableState &state) {
+    state.unifiedMemoryControls = {true, true, true};
+    state.pImplicitArgs.ptr.reset(new ImplicitArgs{});
+    state.pImplicitArgs->v0 = ImplicitArgsV0{
         .numWorkDim = 2,
         .simdWidth = 4,
         .globalSizeX = 8,
         .rtGlobalBufferPtr = 0x987654321,
     };
-    state1.pExtension = std::make_unique<KernelExt>();
+    state.pExtension = std::make_unique<KernelExt>();
 
     constexpr size_t mockSize{8U};
-    state1.crossThreadData.reset(new uint8_t[mockSize]);
-    std::memcpy(state1.crossThreadData.get(), std::to_array<uint8_t>({11, 12, 13, 14, 15, 16, 17, 18}).data(), mockSize);
-    state1.crossThreadDataSize = mockSize;
+    state.crossThreadData.clear();
+    state.crossThreadData.reserve(mockSize);
+    std::ranges::copy(std::to_array<uint8_t, mockSize>({11, 12, 13, 14, 15, 16, 17, 18}), std::back_inserter(state.crossThreadData));
 
-    state1.surfaceStateHeapData.reset(new uint8_t[mockSize]);
-    std::memcpy(state1.surfaceStateHeapData.get(), std::to_array<uint8_t>({21, 22, 23, 24, 25, 26, 27, 28}).data(), mockSize);
-    state1.surfaceStateHeapDataSize = mockSize;
+    state.surfaceStateHeapData.clear();
+    state.surfaceStateHeapData.reserve(mockSize);
+    std::ranges::copy(std::to_array<uint8_t, mockSize>({21, 22, 23, 24, 25, 26, 27, 28}), std::back_inserter(state.surfaceStateHeapData));
 
-    state1.dynamicStateHeapData.reset(new uint8_t[mockSize]);
-    std::memcpy(state1.dynamicStateHeapData.get(), std::to_array<uint8_t>({31, 32, 33, 34, 35, 36, 37, 38}).data(), mockSize);
-    state1.dynamicStateHeapDataSize = mockSize;
+    state.dynamicStateHeapData.clear();
+    state.dynamicStateHeapData.reserve(mockSize);
+    std::ranges::copy(std::to_array<uint8_t>({31, 32, 33, 34, 35, 36, 37, 38}), std::back_inserter(state.dynamicStateHeapData));
 
-    state1.reservePerThreadDataForWholeThreadGroup(mockSize);
-    std::memcpy(state1.perThreadDataForWholeThreadGroup, std::to_array<uint8_t>({41, 42, 43, 44, 45, 46, 47, 48}).data(), mockSize);
+    state.reservePerThreadDataForWholeThreadGroup(mockSize);
+    std::memcpy(state.perThreadDataForWholeThreadGroup, std::to_array<uint8_t>({41, 42, 43, 44, 45, 46, 47, 48}).data(), mockSize);
 
     KernelMutableState::SuggestGroupSizeCacheEntry mockGroupSizeCacheEntry(Vec3<size_t>{52U, 54U, 58U}.values,
                                                                            std::numeric_limits<uint32_t>::max(),
                                                                            Vec3<size_t>{62U, 64U, 68U}.values);
-    state1.suggestGroupSizeCache.push_back(mockGroupSizeCacheEntry);
+    state.suggestGroupSizeCache.push_back(mockGroupSizeCacheEntry);
 
-    state1.kernelArgInfos.push_back({.value = reinterpret_cast<void *>(0x87654321ULL)});
-    state1.kernelArgHandlers.push_back(&KernelImp::setArgBuffer);
-    state1.argumentsResidencyContainer.push_back(reinterpret_cast<NEO::GraphicsAllocation *>(0x76543210ULL));
-    state1.implicitArgsResidencyContainerIndices.push_back(10);
-    state1.internalResidencyContainer.push_back(reinterpret_cast<NEO::GraphicsAllocation *>(0x65432109ULL));
-    state1.isArgUncached.push_back(true);
-    state1.isBindlessOffsetSet.push_back(true);
-    state1.usingSurfaceStateHeap.push_back(true);
-    state1.slmArgSizes.push_back(252U);
-    state1.slmArgOffsetValues.push_back(151U);
-    state1.syncBufferIndex = std::numeric_limits<size_t>::max() - 10;
-    state1.regionGroupBarrierIndex = std::numeric_limits<size_t>::max() - 11;
-    state1.globalOffsets[0] = 71;
-    state1.globalOffsets[1] = 72;
-    state1.globalOffsets[2] = 73;
-    state1.groupSize[0] = 74;
-    state1.groupSize[1] = 75;
-    state1.groupSize[2] = 76;
-    state1.perThreadDataSize = 81U;
-    state1.slmArgsTotalSize = 82U;
-    state1.kernelRequiresQueueUncachedMocsCount = 83U;
-    state1.kernelRequiresUncachedMocsCount = 84U;
-    state1.requiredWorkgroupOrder = 85U;
-    state1.threadExecutionMask = 86U;
-    state1.numThreadsPerThreadGroup = 87U;
-    state1.cacheConfigFlags = 88U;
-    state1.kernelHasIndirectAccess = true;
-    state1.kernelRequiresGenerationOfLocalIdsByRuntime = false;
+    state.kernelArgInfos.push_back({.value = reinterpret_cast<void *>(0x87654321ULL)});
+    state.kernelArgHandlers.push_back(&KernelImp::setArgBuffer);
+    state.argumentsResidencyContainer.push_back(reinterpret_cast<NEO::GraphicsAllocation *>(0x76543210ULL));
+    state.implicitArgsResidencyContainerIndices.push_back(10);
+    state.internalResidencyContainer.push_back(reinterpret_cast<NEO::GraphicsAllocation *>(0x65432109ULL));
+    state.isArgUncached.push_back(true);
+    state.isBindlessOffsetSet.push_back(true);
+    state.usingSurfaceStateHeap.push_back(true);
+    state.slmArgSizes.push_back(252U);
+    state.slmArgOffsetValues.push_back(151U);
+    state.syncBufferIndex = std::numeric_limits<size_t>::max() - 10;
+    state.regionGroupBarrierIndex = std::numeric_limits<size_t>::max() - 11;
+    state.globalOffsets[0] = 71;
+    state.globalOffsets[1] = 72;
+    state.globalOffsets[2] = 73;
+    state.groupSize[0] = 74;
+    state.groupSize[1] = 75;
+    state.groupSize[2] = 76;
+    state.perThreadDataSize = 81U;
+    state.slmArgsTotalSize = 82U;
+    state.kernelRequiresQueueUncachedMocsCount = 83U;
+    state.kernelRequiresUncachedMocsCount = 84U;
+    state.requiredWorkgroupOrder = 85U;
+    state.threadExecutionMask = 86U;
+    state.numThreadsPerThreadGroup = 87U;
+    state.cacheConfigFlags = 88U;
+    state.kernelHasIndirectAccess = true;
+    state.kernelRequiresGenerationOfLocalIdsByRuntime = false;
+}
+TEST_F(KernelImpTest, GivenKernelMutableStateWhenAssignmentOperatorUsedThenProperDeepCopyOrMoveMade) {
+    KernelMutableState state1{};
+    fillKernelMutableStateWithMockData(state1);
 
     KernelMutableState state2{};
     state2 = state1; // assignment operator is being tested
 
-    EXPECT_EQ(0, std::memcmp(state1.crossThreadData.get(), state2.crossThreadData.get(), state1.crossThreadDataSize));
-    EXPECT_EQ(0, std::memcmp(state1.surfaceStateHeapData.get(), state2.surfaceStateHeapData.get(), state1.surfaceStateHeapDataSize));
-    EXPECT_EQ(0, std::memcmp(state1.dynamicStateHeapData.get(), state2.dynamicStateHeapData.get(), state1.dynamicStateHeapDataSize));
+    EXPECT_EQ(0, std::memcmp(state1.crossThreadData.data(), state2.crossThreadData.data(), state1.crossThreadData.size()));
+    EXPECT_EQ(0, std::memcmp(state1.surfaceStateHeapData.data(), state2.surfaceStateHeapData.data(), state1.surfaceStateHeapData.size()));
+    EXPECT_EQ(0, std::memcmp(state1.dynamicStateHeapData.data(), state2.dynamicStateHeapData.data(), state1.dynamicStateHeapData.size()));
 
     EXPECT_EQ(0, std::memcmp(state1.perThreadDataForWholeThreadGroup, state2.perThreadDataForWholeThreadGroup, state1.perThreadDataSizeForWholeThreadGroup));
 
@@ -156,9 +167,8 @@ TEST_F(KernelImpTest, GivenKernelMutableStateWhenAssignmentOperatorUsedThenPrope
 
     EXPECT_EQ(0, std::memcmp(state1.globalOffsets, state2.globalOffsets, KernelMutableState::dimMax * sizeof(uint32_t)));
     EXPECT_EQ(0, std::memcmp(state1.groupSize, state2.groupSize, KernelMutableState::dimMax * sizeof(uint32_t)));
-    EXPECT_EQ(state1.crossThreadDataSize, state2.crossThreadDataSize);
-    EXPECT_EQ(state1.surfaceStateHeapDataSize, state2.surfaceStateHeapDataSize);
-    EXPECT_EQ(state1.dynamicStateHeapDataSize, state2.dynamicStateHeapDataSize);
+    EXPECT_EQ(state1.crossThreadData, state2.crossThreadData);
+    EXPECT_EQ(state1.surfaceStateHeapData, state2.surfaceStateHeapData);
     EXPECT_EQ(state1.perThreadDataSize, state2.perThreadDataSize);
     EXPECT_EQ(state1.slmArgsTotalSize, state2.slmArgsTotalSize);
     EXPECT_EQ(state1.perThreadDataSizeForWholeThreadGroup, state2.perThreadDataSizeForWholeThreadGroup);
@@ -170,12 +180,104 @@ TEST_F(KernelImpTest, GivenKernelMutableStateWhenAssignmentOperatorUsedThenPrope
     EXPECT_EQ(state1.numThreadsPerThreadGroup, state2.numThreadsPerThreadGroup);
     EXPECT_EQ(state1.cacheConfigFlags, state2.cacheConfigFlags);
     EXPECT_EQ(state1.kernelHasIndirectAccess, state2.kernelHasIndirectAccess);
+
+    KernelMutableState state3{};
+    state3 = std::move(state1);
+
+    EXPECT_EQ(0U, state1.crossThreadData.size());
+    EXPECT_EQ(0U, state1.surfaceStateHeapData.size());
+    EXPECT_EQ(0U, state1.dynamicStateHeapData.size());
+    EXPECT_EQ(nullptr, state1.pImplicitArgs);
+    EXPECT_EQ(nullptr, state1.pExtension);
+    EXPECT_EQ(nullptr, state1.perThreadDataForWholeThreadGroup);
+    EXPECT_EQ(0U, state1.perThreadDataSizeForWholeThreadGroup);
+    EXPECT_EQ(0U, state1.perThreadDataSizeForWholeThreadGroupAllocated);
+
+    EXPECT_EQ(0, std::memcmp(state3.crossThreadData.data(), state2.crossThreadData.data(), state3.crossThreadData.size()));
+    EXPECT_EQ(0, std::memcmp(state3.surfaceStateHeapData.data(), state2.surfaceStateHeapData.data(), state3.surfaceStateHeapData.size()));
+    EXPECT_EQ(0, std::memcmp(state3.dynamicStateHeapData.data(), state2.dynamicStateHeapData.data(), state3.dynamicStateHeapData.size()));
+
+    EXPECT_EQ(0, std::memcmp(state3.perThreadDataForWholeThreadGroup, state2.perThreadDataForWholeThreadGroup, state3.perThreadDataSizeForWholeThreadGroup));
+
+    EXPECT_TRUE(state3.suggestGroupSizeCache == state2.suggestGroupSizeCache);
+    EXPECT_TRUE(state3.kernelArgInfos == state2.kernelArgInfos);
+    EXPECT_TRUE(state3.kernelArgHandlers == state2.kernelArgHandlers);
+    EXPECT_TRUE(state3.argumentsResidencyContainer == state2.argumentsResidencyContainer);
+    EXPECT_TRUE(state3.implicitArgsResidencyContainerIndices == state2.implicitArgsResidencyContainerIndices);
+    EXPECT_TRUE(state3.internalResidencyContainer == state2.internalResidencyContainer);
+    EXPECT_TRUE(state3.isArgUncached == state2.isArgUncached);
+    EXPECT_TRUE(state3.isBindlessOffsetSet == state2.isBindlessOffsetSet);
+    EXPECT_TRUE(state3.usingSurfaceStateHeap == state2.usingSurfaceStateHeap);
+    EXPECT_TRUE(state3.slmArgSizes == state2.slmArgSizes);
+    EXPECT_TRUE(state3.slmArgOffsetValues == state2.slmArgOffsetValues);
+    EXPECT_TRUE(state3.syncBufferIndex == state2.syncBufferIndex);
+    EXPECT_TRUE(state3.regionGroupBarrierIndex == state2.regionGroupBarrierIndex);
+
+    EXPECT_EQ(0, std::memcmp(state3.globalOffsets, state2.globalOffsets, KernelMutableState::dimMax * sizeof(uint32_t)));
+    EXPECT_EQ(0, std::memcmp(state3.groupSize, state2.groupSize, KernelMutableState::dimMax * sizeof(uint32_t)));
+    EXPECT_EQ(state3.crossThreadData.size(), state2.crossThreadData.size());
+    EXPECT_EQ(state3.surfaceStateHeapData.size(), state2.surfaceStateHeapData.size());
+    EXPECT_EQ(state3.dynamicStateHeapData.size(), state2.dynamicStateHeapData.size());
+    EXPECT_EQ(state3.perThreadDataSize, state2.perThreadDataSize);
+    EXPECT_EQ(state3.slmArgsTotalSize, state2.slmArgsTotalSize);
+    EXPECT_EQ(state3.perThreadDataSizeForWholeThreadGroup, state2.perThreadDataSizeForWholeThreadGroup);
+    EXPECT_EQ(state3.perThreadDataSizeForWholeThreadGroupAllocated, state2.perThreadDataSizeForWholeThreadGroupAllocated);
+    EXPECT_EQ(state3.kernelRequiresQueueUncachedMocsCount, state2.kernelRequiresQueueUncachedMocsCount);
+    EXPECT_EQ(state3.kernelRequiresUncachedMocsCount, state2.kernelRequiresUncachedMocsCount);
+    EXPECT_EQ(state3.requiredWorkgroupOrder, state2.requiredWorkgroupOrder);
+    EXPECT_EQ(state3.threadExecutionMask, state2.threadExecutionMask);
+    EXPECT_EQ(state3.numThreadsPerThreadGroup, state2.numThreadsPerThreadGroup);
+    EXPECT_EQ(state3.cacheConfigFlags, state2.cacheConfigFlags);
+    EXPECT_EQ(state3.kernelHasIndirectAccess, state2.kernelHasIndirectAccess);
+}
+
+TEST_F(KernelImpTest, GivenKernelPrivateStateWhenKernelImpClonedThenSharedStateIsSharedAndPrivateIsCopied) {
+    NEO::KernelDescriptor descriptor;
+    WhiteBox<::L0::KernelImmutableData> kernelInfo{};
+    kernelInfo.kernelDescriptor = &descriptor;
+
+    Mock<Module> module(device, nullptr);
+    WhiteBox<KernelImp> kernel1;
+    kernel1.sharedState->kernelImmData = &kernelInfo;
+    kernel1.module = &module;
+
+    constexpr size_t mockSize{8U};
+    kernel1.privateState.crossThreadData.clear();
+    kernel1.privateState.crossThreadData.reserve(mockSize);
+    std::ranges::copy(std::to_array<uint8_t, mockSize>({91, 92, 93, 94, 95, 96, 97, 98}), std::back_inserter(kernel1.privateState.crossThreadData));
+    kernel1.privateState.reservePerThreadDataForWholeThreadGroup(mockSize);
+    std::memcpy(kernel1.privateState.perThreadDataForWholeThreadGroup, std::to_array<uint8_t>({81, 82, 83, 84, 85, 86, 87, 88}).data(), mockSize);
+
+    EXPECT_NE(nullptr, kernel1.ownedSharedState.get());
+    EXPECT_EQ(kernel1.sharedState, kernel1.ownedSharedState.get());
+    auto clonedKernel = kernel1.makeDependentClone();
+    auto kernel2 = static_cast<WhiteBox<KernelImp> *>(clonedKernel.get());
+    EXPECT_EQ(nullptr, kernel2->ownedSharedState.get());
+    EXPECT_EQ(kernel2->sharedState, kernel1.ownedSharedState.get());
+
+    // KernelMutableState part taken from `state`
+    EXPECT_EQ(0, std::memcmp(kernel2->privateState.crossThreadData.data(), kernel1.privateState.crossThreadData.data(), mockSize));
+    EXPECT_EQ(0, std::memcmp(kernel2->privateState.perThreadDataForWholeThreadGroup, kernel1.privateState.perThreadDataForWholeThreadGroup, mockSize));
+
+    // KernelImp part taken from `kernel1`
+    EXPECT_EQ(kernel2->sharedState->kernelImmData, &kernelInfo);
+    EXPECT_EQ(kernel2->sharedState->devicePrintfKernelMutex, kernel1.sharedState->devicePrintfKernelMutex);
+    EXPECT_EQ(kernel2->sharedState->privateMemoryGraphicsAllocation, kernel1.sharedState->privateMemoryGraphicsAllocation);
+    EXPECT_EQ(kernel2->sharedState->printfBuffer, kernel1.sharedState->printfBuffer);
+    EXPECT_EQ(kernel2->sharedState->surfaceStateAlignmentMask, kernel1.sharedState->surfaceStateAlignmentMask);
+    EXPECT_EQ(kernel2->sharedState->surfaceStateAlignment, kernel1.sharedState->surfaceStateAlignment);
+    EXPECT_EQ(kernel2->sharedState->implicitArgsVersion, kernel1.sharedState->implicitArgsVersion);
+    EXPECT_EQ(kernel2->sharedState->walkerInlineDataSize, kernel1.sharedState->walkerInlineDataSize);
+    EXPECT_EQ(kernel2->sharedState->maxWgCountPerTileCcs, kernel1.sharedState->maxWgCountPerTileCcs);
+    EXPECT_EQ(kernel2->sharedState->maxWgCountPerTileRcs, kernel1.sharedState->maxWgCountPerTileRcs);
+    EXPECT_EQ(kernel2->sharedState->maxWgCountPerTileCooperative, kernel1.sharedState->maxWgCountPerTileCooperative);
+    EXPECT_EQ(kernel2->sharedState->heaplessEnabled, kernel1.sharedState->heaplessEnabled);
+    EXPECT_EQ(kernel2->sharedState->implicitScalingEnabled, kernel1.sharedState->implicitScalingEnabled);
+    EXPECT_EQ(kernel2->sharedState->rcsAvailable, kernel1.sharedState->rcsAvailable);
+    EXPECT_EQ(kernel2->sharedState->cooperativeSupport, kernel1.sharedState->cooperativeSupport);
 }
 
 TEST_F(KernelImpTest, GivenCrossThreadDataThenIsCorrectlyPatchedWithGlobalWorkSizeAndGroupCount) {
-    uint32_t *crossThreadData =
-        reinterpret_cast<uint32_t *>(alignedMalloc(sizeof(uint32_t[6]), 32));
-
     WhiteBox<::L0::KernelImmutableData> kernelInfo = {};
     NEO::KernelDescriptor descriptor;
     kernelInfo.kernelDescriptor = &descriptor;
@@ -187,12 +289,11 @@ TEST_F(KernelImpTest, GivenCrossThreadDataThenIsCorrectlyPatchedWithGlobalWorkSi
     kernelInfo.kernelDescriptor->payloadMappings.dispatchTraits.numWorkGroups[2] = 5 * sizeof(uint32_t);
 
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
-    kernel.state.crossThreadData.reset(reinterpret_cast<uint8_t *>(crossThreadData));
-    kernel.state.crossThreadDataSize = sizeof(uint32_t[6]);
-    kernel.state.groupSize[0] = 2;
-    kernel.state.groupSize[1] = 3;
-    kernel.state.groupSize[2] = 5;
+    kernel.sharedState->kernelImmData = &kernelInfo;
+    kernel.privateState.crossThreadData.resize(sizeof(uint32_t[6]));
+    kernel.privateState.groupSize[0] = 2;
+    kernel.privateState.groupSize[1] = 3;
+    kernel.privateState.groupSize[2] = 5;
 
     kernel.KernelImp::setGroupCount(7, 11, 13);
     auto crossThread = kernel.KernelImp::getCrossThreadData();
@@ -207,8 +308,7 @@ TEST_F(KernelImpTest, GivenCrossThreadDataThenIsCorrectlyPatchedWithGlobalWorkSi
     EXPECT_EQ(11U, numGroups[1]);
     EXPECT_EQ(13U, numGroups[2]);
 
-    kernel.state.crossThreadData.release();
-    alignedFree(crossThreadData);
+    kernel.privateState.crossThreadData.clear();
 }
 
 TEST_F(KernelImpTest, givenExecutionMaskWithoutReminderWhenProgrammingItsValueThenSetValidNumberOfBits) {
@@ -218,13 +318,13 @@ TEST_F(KernelImpTest, givenExecutionMaskWithoutReminderWhenProgrammingItsValueTh
 
     Mock<Module> module(device, nullptr);
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
 
     const std::array<uint32_t, 4> testedSimd = {{1, 8, 16, 32}};
-    kernel.state.groupSize[0] = 0;
-    kernel.state.groupSize[1] = 0;
-    kernel.state.groupSize[2] = 0;
+    kernel.privateState.groupSize[0] = 0;
+    kernel.privateState.groupSize[1] = 0;
+    kernel.privateState.groupSize[2] = 0;
 
     for (auto simd : testedSimd) {
         descriptor.kernelAttributes.simdSize = simd;
@@ -251,7 +351,7 @@ TEST_F(KernelImpTest, WhenSuggestingGroupSizeThenClampToMaxGroupSize) {
     module.getMaxGroupSizeResult = 8;
 
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
     uint32_t groupSize[3];
     kernel.KernelImp::suggestGroupSize(256, 1, 1, groupSize, groupSize + 1, groupSize + 2);
@@ -273,9 +373,9 @@ TEST_F(KernelImpTest, WhenSuggestingGroupSizeThenCacheValues) {
     module.getMaxGroupSizeResult = 8;
 
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
-    auto &suggestGroupSizeCache = kernel.state.suggestGroupSizeCache;
+    auto &suggestGroupSizeCache = kernel.privateState.suggestGroupSizeCache;
 
     EXPECT_EQ(suggestGroupSizeCache.size(), 0u);
     EXPECT_EQ(kernel.getSlmTotalSize(), 0u);
@@ -330,7 +430,7 @@ TEST_F(KernelImpTest, WhenSuggestingGroupSizeThenCacheValues) {
     EXPECT_EQ(suggestGroupSizeCache[0].suggestedGroupSize[1], groupSize[1]);
     EXPECT_EQ(suggestGroupSizeCache[0].suggestedGroupSize[2], groupSize[2]);
 
-    kernel.state.slmArgsTotalSize = 1;
+    kernel.privateState.slmArgsTotalSize = 1;
     kernel.KernelImp::suggestGroupSize(2048, 1, 1, groupSize, groupSize + 1, groupSize + 2);
 
     EXPECT_EQ(suggestGroupSizeCache.size(), 3u);
@@ -388,7 +488,7 @@ TEST_P(KernelImpSuggestGroupSize, WhenSuggestingGroupThenProperGroupSizeChosen) 
     uint32_t size = GetParam();
 
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
     uint32_t groupSize[3];
     kernel.KernelImp::suggestGroupSize(size, 1, 1, groupSize, groupSize + 1, groupSize + 2);
@@ -446,7 +546,7 @@ TEST_P(KernelImpSuggestGroupSize, WhenSlmSizeExceedsLocalMemorySizeAndSuggesting
     uint32_t size = GetParam();
 
     Mock<KernelImp> function;
-    function.kernelImmData = &funcInfo;
+    function.sharedState->kernelImmData = &funcInfo;
     function.module = &module;
     uint32_t groupSize[3];
 
@@ -481,7 +581,7 @@ TEST_F(KernelImpTest, givenSetGroupSizeWithGreaterGroupSizeThanAllowedThenCorrec
 
     Mock<Module> module(device, nullptr);
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
 
     uint32_t maxGroupSizeX = static_cast<uint32_t>(device->getDeviceInfo().maxWorkItemSizes[0]);
@@ -501,7 +601,7 @@ TEST_F(KernelImpTest, GivenNumChannelsZeroWhenSettingGroupSizeThenLocalIdsNotGen
 
     Mock<Module> module(device, nullptr);
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     kernel.module = &module;
 
     kernel.KernelImp::setGroupSize(16U, 16U, 1U);
@@ -613,13 +713,13 @@ HWTEST_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenMultiTileWhenCalcul
 }
 
 HWTEST2_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenBarriersWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToBarriersCount, IsAtLeastXe2HpgCore) {
-    usesBarriers = 1;
+    usesBarriers = 4;
     auto expected = dssCount * (maxBarrierCount / usesBarriers);
     EXPECT_EQ(expected, getMaxWorkGroupCount());
 }
 
 HWTEST2_F(KernelImpSuggestMaxCooperativeGroupCountTests, GivenUsedSlmSizeWhenCalculatingMaxCooperativeGroupCountThenResultIsCalculatedWithRegardToUsedSlmSize, IsAtLeastXe2HpgCore) {
-    usedSlm = 64 * MemoryConstants::kiloByte;
+    usedSlm = 128 * MemoryConstants::kiloByte;
     auto expected = availableSlm / usedSlm;
     EXPECT_EQ(expected, getMaxWorkGroupCount());
 }
@@ -639,13 +739,12 @@ HWTEST2_F(KernelTest, GivenInlineSamplersWhenSettingInlineSamplerThenDshIsPatche
     Mock<Module> module(device, nullptr);
     Mock<KernelImp> kernel;
     kernel.module = &module;
-    kernel.kernelImmData = &kernelImmData;
-    kernel.state.dynamicStateHeapData.reset(new uint8_t[64 + sizeof(SamplerState)]);
-    kernel.state.dynamicStateHeapDataSize = 64 + sizeof(SamplerState);
+    kernel.sharedState->kernelImmData = &kernelImmData;
+    kernel.privateState.dynamicStateHeapData.resize(64 + sizeof(SamplerState));
 
     kernel.setInlineSamplers();
 
-    auto samplerState = reinterpret_cast<const SamplerState *>(kernel.state.dynamicStateHeapData.get() + 64U);
+    auto samplerState = reinterpret_cast<const SamplerState *>(&kernel.getDynamicStateHeapDataSpan()[64U]);
     EXPECT_TRUE(samplerState->getNonNormalizedCoordinateEnable());
     EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_WRAP, samplerState->getTcxAddressControlMode());
     EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_WRAP, samplerState->getTcyAddressControlMode());
@@ -685,14 +784,13 @@ HWTEST2_F(KernelTest, givenTwoInlineSamplersWithBindlessAddressingWhenSettingInl
     Mock<Module> module(device, nullptr);
     Mock<KernelImp> kernel;
     kernel.module = &module;
-    kernel.kernelImmData = &kernelImmData;
-    kernel.state.dynamicStateHeapData.reset(new uint8_t[borderColorStateSize + 2 * sizeof(SamplerState)]);
-    kernel.state.dynamicStateHeapDataSize = borderColorStateSize + 2 * sizeof(SamplerState);
+    kernel.sharedState->kernelImmData = &kernelImmData;
+    kernel.privateState.dynamicStateHeapData.resize(borderColorStateSize + 2 * sizeof(SamplerState));
 
     kernel.setInlineSamplers();
 
-    const SamplerState *samplerState = reinterpret_cast<const SamplerState *>(kernel.state.dynamicStateHeapData.get() + borderColorStateSize);
-    const SamplerState *samplerState2 = reinterpret_cast<const SamplerState *>(kernel.state.dynamicStateHeapData.get() + sizeof(SamplerState) + borderColorStateSize);
+    const SamplerState *samplerState = reinterpret_cast<const SamplerState *>(&kernel.getDynamicStateHeapDataSpan()[borderColorStateSize]);
+    const SamplerState *samplerState2 = reinterpret_cast<const SamplerState *>(&kernel.getDynamicStateHeapDataSpan()[sizeof(SamplerState) + borderColorStateSize]);
 
     EXPECT_TRUE(samplerState->getNonNormalizedCoordinateEnable());
     EXPECT_EQ(SamplerState::TEXTURE_COORDINATE_MODE_CLAMP, samplerState->getTcxAddressControlMode());
@@ -737,7 +835,8 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
         size_t allocSize = 0x1100;
-        NEO::MockGraphicsAllocation globalConstBuffer(buffer, gpuAddress, allocSize);
+        auto globalConstBufferMockGA = NEO::MockGraphicsAllocation(buffer, gpuAddress, allocSize);
+        auto globalConstBuffer = std::make_unique<NEO::SharedPoolAllocation>(&globalConstBufferMockGA);
 
         auto kernelInfo = std::make_unique<KernelInfo>();
 
@@ -760,7 +859,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
         const auto globalConstantsSurfaceAddressSSIndex = 1;
 
         auto kernelImmutableData = std::make_unique<KernelImmutableData>(&deviceImp);
-        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, &globalConstBuffer, nullptr, false);
+        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, globalConstBuffer.get(), nullptr, false);
 
         auto &gfxCoreHelper = device->getGfxCoreHelper();
         auto surfaceStateSize = static_cast<uint32_t>(gfxCoreHelper.getRenderSurfaceStateSize());
@@ -769,14 +868,14 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
 
         auto &residencyContainer = kernelImmutableData->getResidencyContainer();
         EXPECT_EQ(1u, residencyContainer.size());
-        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), &globalConstBuffer));
+        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), globalConstBuffer->getGraphicsAllocation()));
 
         EXPECT_EQ(1u, encodeBufferSurfaceStateCalled);
         EXPECT_EQ(allocSize, savedSurfaceStateArgs.size);
         EXPECT_EQ(gpuAddress, savedSurfaceStateArgs.graphicsAddress);
 
         EXPECT_EQ(ptrOffset(kernelImmutableData->getSurfaceStateHeapTemplate(), globalConstantsSurfaceAddressSSIndex * surfaceStateSize), savedSurfaceStateArgs.outMemory);
-        EXPECT_EQ(&globalConstBuffer, savedSurfaceStateArgs.allocation);
+        EXPECT_EQ(globalConstBuffer->getGraphicsAllocation(), savedSurfaceStateArgs.allocation);
     }
 }
 
@@ -807,7 +906,8 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
         size_t allocSize = 0x1100;
-        NEO::MockGraphicsAllocation globalVarBuffer(buffer, gpuAddress, allocSize);
+        auto globalVarBufferMockGA = NEO::MockGraphicsAllocation(buffer, gpuAddress, allocSize);
+        auto globalVarBuffer = std::make_unique<NEO::SharedPoolAllocation>(&globalVarBufferMockGA);
 
         auto kernelInfo = std::make_unique<KernelInfo>();
 
@@ -830,7 +930,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
         const auto globalVariablesSurfaceAddressSSIndex = 1;
 
         auto kernelImmutableData = std::make_unique<KernelImmutableData>(&deviceImp);
-        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, nullptr, &globalVarBuffer, false);
+        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, nullptr, globalVarBuffer.get(), false);
 
         auto &gfxCoreHelper = device->getGfxCoreHelper();
         auto surfaceStateSize = static_cast<uint32_t>(gfxCoreHelper.getRenderSurfaceStateSize());
@@ -839,14 +939,14 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
 
         auto &residencyContainer = kernelImmutableData->getResidencyContainer();
         EXPECT_EQ(1u, residencyContainer.size());
-        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), &globalVarBuffer));
+        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), globalVarBuffer->getGraphicsAllocation()));
 
         EXPECT_EQ(1u, encodeBufferSurfaceStateCalled);
         EXPECT_EQ(allocSize, savedSurfaceStateArgs.size);
         EXPECT_EQ(gpuAddress, savedSurfaceStateArgs.graphicsAddress);
 
         EXPECT_EQ(ptrOffset(kernelImmutableData->getSurfaceStateHeapTemplate(), globalVariablesSurfaceAddressSSIndex * surfaceStateSize), savedSurfaceStateArgs.outMemory);
-        EXPECT_EQ(&globalVarBuffer, savedSurfaceStateArgs.allocation);
+        EXPECT_EQ(globalVarBuffer->getGraphicsAllocation(), savedSurfaceStateArgs.allocation);
     }
 }
 
@@ -881,7 +981,8 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
         size_t allocSize = 0x1100;
-        NEO::MockGraphicsAllocation globalConstBuffer(buffer, gpuAddress, allocSize);
+        auto globalConstBufferMockGA = NEO::MockGraphicsAllocation(buffer, gpuAddress, allocSize);
+        auto globalConstBuffer = std::make_unique<NEO::SharedPoolAllocation>(&globalConstBufferMockGA);
 
         auto kernelInfo = std::make_unique<KernelInfo>();
 
@@ -904,7 +1005,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
         kernelInfo->kernelDescriptor.initBindlessOffsetToSurfaceState();
 
         auto kernelImmutableData = std::make_unique<KernelImmutableData>(&deviceImp);
-        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, &globalConstBuffer, nullptr, false);
+        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, globalConstBuffer.get(), nullptr, false);
 
         auto &gfxCoreHelper = device->getGfxCoreHelper();
         auto surfaceStateSize = static_cast<uint32_t>(gfxCoreHelper.getRenderSurfaceStateSize());
@@ -913,12 +1014,12 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
 
         auto &residencyContainer = kernelImmutableData->getResidencyContainer();
         EXPECT_EQ(1u, residencyContainer.size());
-        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), &globalConstBuffer));
-        EXPECT_EQ(0, std::count(residencyContainer.begin(), residencyContainer.end(), globalConstBuffer.getBindlessInfo().heapAllocation));
+        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), globalConstBuffer->getGraphicsAllocation()));
+        EXPECT_EQ(0, std::count(residencyContainer.begin(), residencyContainer.end(), globalConstBuffer->getGraphicsAllocation()->getBindlessInfo().heapAllocation));
 
         auto crossThreadData = kernelImmutableData->getCrossThreadDataTemplate();
         auto patchLocation = reinterpret_cast<const uint32_t *>(ptrOffset(crossThreadData, globalConstSurfaceAddressBindlessOffset));
-        auto patchValue = gfxCoreHelper.getBindlessSurfaceExtendedMessageDescriptorValue(static_cast<uint32_t>(globalConstBuffer.getBindlessInfo().surfaceStateOffset));
+        auto patchValue = gfxCoreHelper.getBindlessSurfaceExtendedMessageDescriptorValue(static_cast<uint32_t>(globalConstBuffer->getGraphicsAllocation()->getBindlessInfo().surfaceStateOffset));
 
         EXPECT_EQ(patchValue, *patchLocation);
 
@@ -926,12 +1027,12 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalConstBufferAndBindlessExpl
         EXPECT_EQ(allocSize, savedSurfaceStateArgs.size);
         EXPECT_EQ(gpuAddress, savedSurfaceStateArgs.graphicsAddress);
 
-        EXPECT_NE(globalConstBuffer.getBindlessInfo().ssPtr, savedSurfaceStateArgs.outMemory);
+        EXPECT_NE(globalConstBuffer->getGraphicsAllocation()->getBindlessInfo().ssPtr, savedSurfaceStateArgs.outMemory);
 
-        const auto surfState = reinterpret_cast<RENDER_SURFACE_STATE *>(globalConstBuffer.getBindlessInfo().ssPtr);
+        const auto surfState = reinterpret_cast<RENDER_SURFACE_STATE *>(globalConstBuffer->getGraphicsAllocation()->getBindlessInfo().ssPtr);
         ASSERT_NE(nullptr, surfState);
         EXPECT_EQ(gpuAddress, surfState->getSurfaceBaseAddress());
-        EXPECT_EQ(&globalConstBuffer, savedSurfaceStateArgs.allocation);
+        EXPECT_EQ(globalConstBuffer->getGraphicsAllocation(), savedSurfaceStateArgs.allocation);
     }
 }
 
@@ -966,7 +1067,8 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
         uint64_t gpuAddress = 0x1200;
         void *buffer = reinterpret_cast<void *>(gpuAddress);
         size_t allocSize = 0x1100;
-        NEO::MockGraphicsAllocation globalVarBuffer(buffer, gpuAddress, allocSize);
+        auto globalVarBufferMockGA = NEO::MockGraphicsAllocation(buffer, gpuAddress, allocSize);
+        auto globalVarBuffer = std::make_unique<NEO::SharedPoolAllocation>(&globalVarBufferMockGA);
 
         auto kernelInfo = std::make_unique<KernelInfo>();
 
@@ -989,7 +1091,7 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
         kernelInfo->kernelDescriptor.initBindlessOffsetToSurfaceState();
 
         auto kernelImmutableData = std::make_unique<KernelImmutableData>(&deviceImp);
-        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, nullptr, &globalVarBuffer, false);
+        kernelImmutableData->initialize(kernelInfo.get(), &deviceImp, 0, nullptr, globalVarBuffer.get(), false);
 
         auto &gfxCoreHelper = device->getGfxCoreHelper();
         auto surfaceStateSize = static_cast<uint32_t>(gfxCoreHelper.getRenderSurfaceStateSize());
@@ -998,12 +1100,12 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
 
         auto &residencyContainer = kernelImmutableData->getResidencyContainer();
         EXPECT_EQ(1u, residencyContainer.size());
-        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), &globalVarBuffer));
-        EXPECT_EQ(0, std::count(residencyContainer.begin(), residencyContainer.end(), globalVarBuffer.getBindlessInfo().heapAllocation));
+        EXPECT_EQ(1, std::count(residencyContainer.begin(), residencyContainer.end(), globalVarBuffer->getGraphicsAllocation()));
+        EXPECT_EQ(0, std::count(residencyContainer.begin(), residencyContainer.end(), globalVarBuffer->getGraphicsAllocation()->getBindlessInfo().heapAllocation));
 
         auto crossThreadData = kernelImmutableData->getCrossThreadDataTemplate();
         auto patchLocation = reinterpret_cast<const uint32_t *>(ptrOffset(crossThreadData, globalVariablesSurfaceAddressBindlessOffset));
-        auto patchValue = gfxCoreHelper.getBindlessSurfaceExtendedMessageDescriptorValue(static_cast<uint32_t>(globalVarBuffer.getBindlessInfo().surfaceStateOffset));
+        auto patchValue = gfxCoreHelper.getBindlessSurfaceExtendedMessageDescriptorValue(static_cast<uint32_t>(globalVarBuffer->getGraphicsAllocation()->getBindlessInfo().surfaceStateOffset));
 
         EXPECT_EQ(patchValue, *patchLocation);
 
@@ -1011,12 +1113,12 @@ HWTEST2_F(KernelImmutableDataBindlessTest, givenGlobalVarBufferAndBindlessExplic
         EXPECT_EQ(allocSize, savedSurfaceStateArgs.size);
         EXPECT_EQ(gpuAddress, savedSurfaceStateArgs.graphicsAddress);
 
-        EXPECT_NE(globalVarBuffer.getBindlessInfo().ssPtr, savedSurfaceStateArgs.outMemory);
+        EXPECT_NE(globalVarBuffer->getGraphicsAllocation()->getBindlessInfo().ssPtr, savedSurfaceStateArgs.outMemory);
 
-        const auto surfState = reinterpret_cast<RENDER_SURFACE_STATE *>(globalVarBuffer.getBindlessInfo().ssPtr);
+        const auto surfState = reinterpret_cast<RENDER_SURFACE_STATE *>(globalVarBuffer->getGraphicsAllocation()->getBindlessInfo().ssPtr);
         ASSERT_NE(nullptr, surfState);
         EXPECT_EQ(gpuAddress, surfState->getSurfaceBaseAddress());
-        EXPECT_EQ(&globalVarBuffer, savedSurfaceStateArgs.allocation);
+        EXPECT_EQ(globalVarBuffer->getGraphicsAllocation(), savedSurfaceStateArgs.allocation);
     }
 }
 
@@ -1029,7 +1131,7 @@ TEST_F(KernelImpTest, GivenGroupSizeRequiresSwLocalIdsGenerationWhenNextGroupSiz
     NEO::KernelDescriptor descriptor;
     kernelInfo.kernelDescriptor = &descriptor;
     kernelInfo.kernelDescriptor->kernelAttributes.numLocalIdChannels = 3;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
 
     kernel.enableForcingOfGenerateLocalIdByHw = true;
     kernel.forceGenerateLocalIdByHw = false;
@@ -1064,7 +1166,7 @@ TEST_F(KernelImpTest, GivenGroupSizeRequiresSwLocalIdsGenerationWhenKernelSpecif
     kernelInfo.kernelDescriptor->kernelAttributes.workgroupWalkOrder[2] = 0;
     kernelInfo.kernelDescriptor->kernelAttributes.simdSize = 32;
 
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
 
     kernel.enableForcingOfGenerateLocalIdByHw = true;
     kernel.forceGenerateLocalIdByHw = false;
@@ -1095,41 +1197,41 @@ TEST_F(KernelImpTest, givenHeaplessAndLocalDispatchEnabledWheSettingGroupSizeThe
     Mock<::L0::KernelImp> kernel;
     kernel.module = &module;
 
-    kernel.heaplessEnabled = false;
-    kernel.localDispatchSupport = false;
+    kernel.sharedState->heaplessEnabled = false;
+    kernel.sharedState->localDispatchSupport = false;
     kernel.setGroupSize(128, 1, 1);
 
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileRcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCooperative);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileRcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCooperative);
 
-    kernel.heaplessEnabled = true;
+    kernel.sharedState->heaplessEnabled = true;
     kernel.setGroupSize(64, 2, 1);
 
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileRcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCooperative);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileRcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCooperative);
 
-    kernel.localDispatchSupport = true;
+    kernel.sharedState->localDispatchSupport = true;
     kernel.setGroupSize(32, 4, 1);
 
-    EXPECT_NE(0u, kernel.maxWgCountPerTileCcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileRcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCooperative);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileCcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileRcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCooperative);
 
-    kernel.rcsAvailable = true;
+    kernel.sharedState->rcsAvailable = true;
     kernel.setGroupSize(16, 8, 1);
 
-    EXPECT_NE(0u, kernel.maxWgCountPerTileCcs);
-    EXPECT_NE(0u, kernel.maxWgCountPerTileRcs);
-    EXPECT_EQ(0u, kernel.maxWgCountPerTileCooperative);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileCcs);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileRcs);
+    EXPECT_EQ(0u, kernel.sharedState->maxWgCountPerTileCooperative);
 
-    kernel.cooperativeSupport = true;
+    kernel.sharedState->cooperativeSupport = true;
     kernel.setGroupSize(8, 8, 2);
 
-    EXPECT_NE(0u, kernel.maxWgCountPerTileCcs);
-    EXPECT_NE(0u, kernel.maxWgCountPerTileRcs);
-    EXPECT_NE(0u, kernel.maxWgCountPerTileCooperative);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileCcs);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileRcs);
+    EXPECT_NE(0u, kernel.sharedState->maxWgCountPerTileCooperative);
 }
 
 TEST_F(KernelImpTest, givenCorrectEngineTypeWhenGettingMaxWgCountPerTileThenReturnActualValue) {
@@ -1137,9 +1239,9 @@ TEST_F(KernelImpTest, givenCorrectEngineTypeWhenGettingMaxWgCountPerTileThenRetu
     Mock<::L0::KernelImp> kernel;
     kernel.module = &module;
 
-    kernel.maxWgCountPerTileCcs = 4;
-    kernel.maxWgCountPerTileRcs = 2;
-    kernel.maxWgCountPerTileCooperative = 100;
+    kernel.sharedState->maxWgCountPerTileCcs = 4;
+    kernel.sharedState->maxWgCountPerTileRcs = 2;
+    kernel.sharedState->maxWgCountPerTileCooperative = 100;
 
     EXPECT_EQ(4u, kernel.getMaxWgCountPerTile(NEO::EngineGroupType::compute));
     EXPECT_EQ(2u, kernel.getMaxWgCountPerTile(NEO::EngineGroupType::renderCompute));

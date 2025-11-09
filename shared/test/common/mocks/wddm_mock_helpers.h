@@ -18,6 +18,7 @@ namespace WddmMockHelpers {
 struct CallResult {
     uint32_t called = 0;
     uint64_t uint64ParamPassed = -1;
+    size_t alignment = 0;
     bool success = false;
     void *cpuPtrPassed = nullptr;
 };
@@ -26,9 +27,6 @@ struct MakeResidentCall : CallResult {
     uint32_t handleCount = 0;
     bool cantTrimFurther{};
     size_t totalSize{};
-};
-struct KmDafLockCall : CallResult {
-    std::vector<D3DKMT_HANDLE> lockedAllocations;
 };
 struct WaitFromCpuResult : CallResult {
     const MonitoredFence *monitoredFence = nullptr;

@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 struct _ze_command_queue_handle_t : BaseHandleWithLoaderTranslation<ZEL_HANDLE_COMMAND_QUEUE> {};
@@ -38,7 +39,7 @@ struct QueueProperties {
     NEO::SynchronizedDispatchMode synchronizedDispatchMode = NEO::SynchronizedDispatchMode::disabled;
     bool interruptHint = false;
     bool copyOffloadHint = false;
-    int priorityLevel = 0;
+    std::optional<int> priorityLevel = std::nullopt;
 };
 
 struct CommandQueue : _ze_command_queue_handle_t {
@@ -89,6 +90,18 @@ struct CommandQueue : _ze_command_queue_handle_t {
         this->isWalkerWithProfilingEnqueued = false;
         return retVal;
     }
+    inline void setPatchingPreamble(bool patching, bool saveWait) {
+        this->patchingPreamble = patching;
+        this->saveWaitForPreamble = saveWait;
+    }
+    inline bool getPatchingPreamble() const {
+        return this->patchingPreamble;
+    }
+    inline bool getSaveWaitForPreamble() const {
+        return this->saveWaitForPreamble;
+    }
+    void saveTagAndTaskCountForCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *commandListHandles,
+                                            NEO::GraphicsAllocation *tagGpuAllocation, TaskCountType submittedTaskCount);
 
   protected:
     bool frontEndTrackingEnabled() const;
@@ -111,6 +124,8 @@ struct CommandQueue : _ze_command_queue_handle_t {
     bool heaplessModeEnabled = false;
     bool heaplessStateInitEnabled = false;
     bool isWalkerWithProfilingEnqueued = false;
+    bool patchingPreamble = false;
+    bool saveWaitForPreamble = false;
 };
 
 using CommandQueueAllocatorFn = CommandQueue *(*)(Device *device, NEO::CommandStreamReceiver *csr,

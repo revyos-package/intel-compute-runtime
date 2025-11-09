@@ -102,7 +102,8 @@ LNLTEST_F(LnlProductHelper, whenCheckPreferredAllocationMethodThenAllocateByKmdI
         auto allocationType = static_cast<AllocationType>(i);
         auto preferredAllocationMethod = productHelper->getPreferredAllocationMethod(allocationType);
         if (allocationType == AllocationType::tagBuffer ||
-            allocationType == AllocationType::timestampPacketTagBuffer) {
+            allocationType == AllocationType::timestampPacketTagBuffer ||
+            allocationType == AllocationType::hostFunction) {
             EXPECT_TRUE(preferredAllocationMethod.has_value());
             EXPECT_EQ(GfxMemoryAllocationMethod::allocateByKmd, preferredAllocationMethod.value());
         }
@@ -113,8 +114,8 @@ LNLTEST_F(LnlProductHelper, givenProductHelperWhenCallIsCachingOnCpuAvailableThe
     EXPECT_FALSE(productHelper->isCachingOnCpuAvailable());
 }
 
-LNLTEST_F(LnlProductHelper, givenProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnTrue) {
-    EXPECT_TRUE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
+LNLTEST_F(LnlProductHelper, givenProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnFalse) {
+    EXPECT_FALSE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
 }
 
 LNLTEST_F(LnlProductHelper, givenProductHelperWhenCheckoverrideAllocationCpuCacheableThenTrueIsReturnedForCommandBuffer) {
@@ -154,4 +155,8 @@ LNLTEST_F(LnlProductHelper, givenProductHelperWhenCheckingIsHostDeviceUsmPoolAll
 
 LNLTEST_F(LnlProductHelper, givenProductHelperWhenCheckDirectSubmissionSupportedThenTrueIsReturned) {
     EXPECT_TRUE(productHelper->isDirectSubmissionSupported(releaseHelper));
+}
+
+LNLTEST_F(LnlProductHelper, givenProductHelperWhenIsMisalignedUserPtr2WayCoherentThenReturnTrue) {
+    EXPECT_TRUE(productHelper->isMisalignedUserPtr2WayCoherent());
 }

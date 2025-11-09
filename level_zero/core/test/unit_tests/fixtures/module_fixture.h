@@ -11,6 +11,7 @@
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/mocks/mock_modules_zebin.h"
 
+#include "level_zero/core/source/kernel/kernel_shared_state.h"
 #include "level_zero/core/source/module/module_imp.h"
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_kernel.h"
@@ -65,7 +66,7 @@ struct ModuleImmutableDataFixture : public DeviceFixture {
     struct MockModule : public L0::ModuleImp {
         using ModuleImp::allocatePrivateMemoryPerDispatch;
         using ModuleImp::getKernelImmutableDataVector;
-        using ModuleImp::kernelImmDatas;
+        using ModuleImp::kernelImmData;
         using ModuleImp::translationUnit;
         using ModuleImp::type;
 
@@ -88,18 +89,12 @@ struct ModuleImmutableDataFixture : public DeviceFixture {
 
     class MockKernel : public WhiteBox<L0::KernelImp> {
       public:
-        using KernelImp::implicitArgsVersion;
-        using KernelImp::kernelImmData;
         using KernelImp::patchBindlessOffsetsInCrossThreadData;
-        using KernelImp::printfBuffer;
-        using KernelImp::privateMemoryGraphicsAllocation;
-        using KernelImp::state;
-        using KernelImp::surfaceStateAlignment;
-        using KernelImp::surfaceStateAlignmentMask;
-        using KernelImp::walkerInlineDataSize;
+        using KernelImp::privateState;
+        using KernelImp::sharedState;
 
         MockKernel(MockModule *mockModule) : WhiteBox<L0::KernelImp>(mockModule) {
-            implicitArgsVersion = 0;
+            this->sharedState->implicitArgsVersion = 0;
         }
         void setBufferSurfaceState(uint32_t argIndex, void *address, NEO::GraphicsAllocation *alloc) override {
         }
@@ -181,11 +176,12 @@ struct ModuleWithZebinFixture : public DeviceFixture {
         using ModuleImp::getDebugInfo;
         using ModuleImp::getZebinSegments;
         using ModuleImp::isZebinBinary;
-        using ModuleImp::kernelImmDatas;
+        using ModuleImp::kernelImmData;
         using ModuleImp::translationUnit;
         MockModuleWithZebin(L0::Device *device);
 
         void addSegments();
+        void addSegments(bool createWithSharedGlobalConstSurfaces);
 
         void addEmptyZebin();
 

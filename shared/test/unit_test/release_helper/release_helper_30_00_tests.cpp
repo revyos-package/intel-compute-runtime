@@ -36,20 +36,16 @@ TEST_F(ReleaseHelper3000Tests, whenGettingCapabilitiesThenCorrectPropertiesAreRe
         EXPECT_TRUE(releaseHelper->isRcsExposureDisabled());
         EXPECT_FALSE(releaseHelper->isBindlessAddressingDisabled());
         EXPECT_TRUE(releaseHelper->isGlobalBindlessAllocatorEnabled());
-        EXPECT_EQ(10u, releaseHelper->getNumThreadsPerEu());
         EXPECT_TRUE(releaseHelper->isRayTracingSupported());
         EXPECT_EQ(64u, releaseHelper->getStackSizePerRay());
         EXPECT_TRUE(releaseHelper->isNumRtStacksPerDssFixedValue());
         EXPECT_EQ(revision != 0, releaseHelper->getFtrXe2Compression());
+        EXPECT_TRUE(releaseHelper->isSpirSupported());
     }
 }
 
 TEST_F(ReleaseHelper3000Tests, whenGettingSupportedNumGrfsThenCorrectValuesAreReturned) {
     whenGettingSupportedNumGrfsThenValuesUpTo256Returned();
-}
-
-TEST_F(ReleaseHelper3000Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey) {
-    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey();
 }
 
 TEST_F(ReleaseHelper3000Tests, whenGettingThreadsPerEuConfigsThenCorrectValueIsReturnedBasedOnNumThreadPerEu) {
@@ -115,4 +111,16 @@ TEST_F(ReleaseHelper3000Tests, whenGettingPreferredSlmSizeThenAllEntriesHaveCorr
         EXPECT_EQ(std::numeric_limits<uint32_t>::max(), preferredSlmValueArray[5].upperLimit);
         EXPECT_EQ(5u, preferredSlmValueArray[5].valueToProgram);
     }
+}
+
+TEST_F(ReleaseHelper3000Tests, whenCallingAdjustMaxThreadsPerEuCountThenCorrectValueIsReturned) {
+    whenCallingAdjustMaxThreadsPerEuCountThenCorrectValueIsReturned();
+}
+
+TEST_F(ReleaseHelper3000Tests, whenShouldQueryPeerAccessCalledThenFalseReturned) {
+    whenShouldQueryPeerAccessCalledThenFalseReturned();
+}
+
+TEST_F(ReleaseHelper3000Tests, whenIsSingleDispatchRequiredForMultiCCSCalledThenFalseReturned) {
+    whenIsSingleDispatchRequiredForMultiCCSCalledThenFalseReturned();
 }

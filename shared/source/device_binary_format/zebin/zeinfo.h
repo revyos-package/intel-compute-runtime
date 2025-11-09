@@ -66,6 +66,8 @@ inline constexpr ConstStringRef hasSample("has_sample");
 inline constexpr ConstStringRef actualKernelStartOffset("actual_kernel_start_offset");
 inline constexpr ConstStringRef requireImplicitArgBuffer("require_iab");
 inline constexpr ConstStringRef hasLscStoresWithNonDefaultL1CacheControls("has_lsc_stores_with_non_default_l1_cache_controls");
+inline constexpr ConstStringRef hasPrintfCalls("has_printf_calls");
+inline constexpr ConstStringRef hasIndirectCalls("has_indirect_calls");
 
 namespace ThreadSchedulingMode {
 inline constexpr ConstStringRef ageBased("age_based");
@@ -364,6 +366,8 @@ using WalkOrderT = int32_t;
 using PartitionDimT = int32_t;
 using RequireImplicitArgBufferT = bool;
 using HasLscStoresWithNonDefaultL1CacheControlsT = bool;
+using HasPrintfCallsT = bool;
+using HasIndirectCallsT = bool;
 
 namespace Defaults {
 inline constexpr BarrierCountT barrierCount = 0;
@@ -400,6 +404,8 @@ inline constexpr WalkOrderT dispatchWalkOrder = -1;
 inline constexpr PartitionDimT partitionDim = -1;
 inline constexpr RequireImplicitArgBufferT requireImplicitArgBuffer = false;
 inline constexpr HasLscStoresWithNonDefaultL1CacheControlsT hasLscStoresWithNonDefaultL1CacheControls = false;
+inline constexpr HasPrintfCallsT hasPrintfCalls = false;
+inline constexpr HasIndirectCallsT hasIndirectCalls = false;
 } // namespace Defaults
 
 inline constexpr ConstStringRef required[] = {
@@ -407,17 +413,9 @@ inline constexpr ConstStringRef required[] = {
     Tags::Kernel::ExecutionEnv::simdSize};
 
 struct ExecutionEnvExt;
-ExecutionEnvExt *allocateExecEnvExt();
-void freeExecEnvExt(ExecutionEnvExt *);
 
 struct ExecutionEnvBaseT final : NEO::NonCopyableAndNonMovableClass {
-    ExecutionEnvBaseT() {
-        execEnvExt = allocateExecEnvExt();
-    }
-    ~ExecutionEnvBaseT() {
-        freeExecEnvExt(execEnvExt);
-    }
-    ExecutionEnvExt *execEnvExt = nullptr;
+    Ext<ExecutionEnvExt, true> execEnvExt;
 
     BarrierCountT barrierCount = Defaults::barrierCount;
     DisableMidThreadPreemptionT disableMidThreadPreemption = Defaults::disableMidThreadPreemption;
@@ -452,6 +450,8 @@ struct ExecutionEnvBaseT final : NEO::NonCopyableAndNonMovableClass {
     PartitionDimT partitionDim = Defaults::partitionDim;
     RequireImplicitArgBufferT requireImplicitArgBuffer = Defaults::requireImplicitArgBuffer;
     HasLscStoresWithNonDefaultL1CacheControlsT hasLscStoresWithNonDefaultL1CacheControls = Defaults::hasLscStoresWithNonDefaultL1CacheControls;
+    HasPrintfCallsT hasPrintfCalls = Defaults::hasPrintfCalls;
+    HasIndirectCallsT hasIndirectCalls = Defaults::hasIndirectCalls;
 };
 
 static_assert(NEO::NonCopyableAndNonMovable<ExecutionEnvBaseT>);

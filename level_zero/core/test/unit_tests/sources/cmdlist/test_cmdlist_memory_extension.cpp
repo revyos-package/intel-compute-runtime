@@ -13,6 +13,7 @@
 #include "shared/source/helpers/register_offsets.h"
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/helpers/unit_test_helper.h"
+#include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
@@ -44,7 +45,7 @@ class CommandListWaitOnMemFixture : public DeviceFixture {
 
         eventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
         EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
-        event = std::unique_ptr<Event>(getHelper<L0GfxCoreHelper>().createEvent(eventPool.get(), &eventDesc, device));
+        event = std::unique_ptr<Event>(getHelper<L0GfxCoreHelper>().createEvent(eventPool.get(), &eventDesc, device, returnValue));
 
         size_t size = sizeof(uint32_t);
         size_t alignment = 1u;
@@ -90,10 +91,10 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
         return {0, 0, nullptr, false};
     }
 
-    ze_result_t appendMemoryCopyKernelWithGA(void *dstPtr,
+    ze_result_t appendMemoryCopyKernelWithGA(uintptr_t dstPtr,
                                              NEO::GraphicsAllocation *dstPtrAlloc,
                                              uint64_t dstOffset,
-                                             void *srcPtr,
+                                             uintptr_t srcPtr,
                                              NEO::GraphicsAllocation *srcPtrAlloc,
                                              uint64_t srcOffset,
                                              uint64_t size,
@@ -122,7 +123,7 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
                                      uint64_t dstOffset, uintptr_t srcPtr,
                                      NEO::GraphicsAllocation *srcPtrAlloc,
                                      uint64_t srcOffset,
-                                     uint64_t size, Event *signalEvent) override {
+                                     uint64_t size, Event *signalEvent, CmdListMemoryCopyParams &memoryCopyParams) override {
         appendMemoryCopyBlitCalledTimes++;
         if (failOnFirstCopy && appendMemoryCopyBlitCalledTimes == 1) {
             return ZE_RESULT_ERROR_UNKNOWN;
@@ -130,7 +131,7 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
         return ZE_RESULT_SUCCESS;
     }
 
-    void setAdditionalBlitProperties(NEO::BlitProperties &blitProperties, Event *signalEvent, bool useAdditionalTimestamp) override {}
+    void setAdditionalBlitProperties(NEO::BlitProperties &blitProperties, Event *signalEvent, uint64_t forceAggregatedEventIncValue, bool useAdditionalTimestamp) override {}
 
     ze_result_t appendMemoryCopyBlitRegion(AlignedAllocationData *srcAllocationData,
                                            AlignedAllocationData *dstAllocationData,
@@ -140,7 +141,7 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
                                            size_t dstRowPitch, size_t dstSlicePitch,
                                            const Vec3<size_t> &srcSize, const Vec3<size_t> &dstSize,
                                            Event *signalEvent,
-                                           uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch, bool doubleStreamCopyOffload) override {
+                                           uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams, bool doubleStreamCopyOffload) override {
         if (signalEvent) {
             useEvents = true;
         } else {
@@ -155,7 +156,8 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
                                          uint32_t dstPitch, size_t dstOffset,
                                          const ze_copy_region_t *srcRegion, uint32_t srcPitch,
                                          size_t srcOffset, Event *signalEvent,
-                                         uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override {
+                                         uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents,
+                                         bool relaxedOrderingDispatch, const bool isStateless) override {
         appendMemoryCopyKernel2dCalledTimes++;
         return ZE_RESULT_SUCCESS;
     }
@@ -166,7 +168,7 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
                                          const ze_copy_region_t *srcRegion, uint32_t srcPitch,
                                          uint32_t srcSlicePitch, size_t srcOffset,
                                          Event *signalEvent, uint32_t numWaitEvents,
-                                         ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override {
+                                         ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch, const bool isStateless) override {
         appendMemoryCopyKernel3dCalledTimes++;
         return ZE_RESULT_SUCCESS;
     }
@@ -182,8 +184,8 @@ class MockCommandListExtensionHw : public WhiteBox<::L0::CommandListCoreFamily<g
         }
         return ZE_RESULT_SUCCESS;
     }
-    ze_result_t appendCopyImageBlit(NEO::GraphicsAllocation *src,
-                                    NEO::GraphicsAllocation *dst,
+    ze_result_t appendCopyImageBlit(uintptr_t srcPtr, NEO::GraphicsAllocation *src,
+                                    uintptr_t dstPtr, NEO::GraphicsAllocation *dst,
                                     const Vec3<size_t> &srcOffsets, const Vec3<size_t> &dstOffsets,
                                     size_t srcRowPitch, size_t srcSlicePitch,
                                     size_t dstRowPitch, size_t dstSlicePitch,
@@ -372,7 +374,7 @@ HWTEST_F(CommandListAppendWaitOnMem, given64bValueAndOutEventWhenWaitOnMemory64C
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
     ASSERT_NE(nullptr, signalEvent.get());
 
     auto cmdStream = commandList->getCmdContainer().getCommandStream();
@@ -522,7 +524,7 @@ HWTEST_F(CommandListAppendWaitOnMem, givenAppendWaitOnMemWithSignalEventAndHostS
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -594,7 +596,7 @@ HWTEST_F(CommandListAppendWaitOnMem, givenAppendWaitOnMemWithSignalEventAndNoSco
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -664,7 +666,7 @@ HWTEST_F(CommandListAppendWaitOnMem, givenAppendWaitOnMemOnBcsWithSignalEventAnd
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -968,7 +970,7 @@ class ImmediateCommandListWaitOnMemFixture : public DeviceFixture {
 
         eventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
         EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
-        event = std::unique_ptr<Event>(getHelper<L0GfxCoreHelper>().createEvent(eventPool.get(), &eventDesc, device));
+        event = std::unique_ptr<Event>(getHelper<L0GfxCoreHelper>().createEvent(eventPool.get(), &eventDesc, device, returnValue));
 
         size_t size = sizeof(uint32_t);
         size_t alignment = 1u;
@@ -1135,7 +1137,7 @@ HWTEST_F(ImmediateCommandListAppendWaitOnMem, givenAppendWaitOnMemWithSignalEven
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -1207,7 +1209,7 @@ HWTEST_F(ImmediateCommandListAppendWaitOnMem, givenAppendWaitOnMemWithSignalEven
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -1277,7 +1279,7 @@ HWTEST_F(ImmediateCommandListAppendWaitOnMem, givenAppendWaitOnMemOnBcsWithSigna
 
     signalEventPool = std::unique_ptr<EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    signalEvent = std::unique_ptr<Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     zex_wait_on_mem_desc_t desc;
     desc.actionFlag = ZEX_WAIT_ON_MEMORY_FLAG_LESSER_THAN_EQUAL;
@@ -1387,6 +1389,7 @@ HWTEST_F(ImmediateCommandListAppendWriteToMem, givenAppendWriteToMemWithNoScopeT
             EXPECT_TRUE(cmd->getCommandStreamerStallEnable());
             EXPECT_FALSE(cmd->getDcFlushEnable());
             postSyncFound = true;
+            break;
         }
     }
     ASSERT_TRUE(postSyncFound);
@@ -1414,6 +1417,7 @@ HWTEST_F(ImmediateCommandListAppendWriteToMem, givenAppendWriteToMemOnBcsWithNoS
         if (cmd->getPostSyncOperation() == MI_FLUSH_DW::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA_QWORD) {
             EXPECT_EQ(cmd->getImmediateData(), data);
             postSyncFound = true;
+            break;
         }
     }
     ASSERT_TRUE(postSyncFound);
@@ -1432,6 +1436,17 @@ HWTEST_F(ImmediateCommandListAppendWriteToMem, givenAppendWriteToMemWithScopeThe
     result = immCommandList->appendWriteToMemory(reinterpret_cast<void *>(&desc), ptr, data);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
+    auto whiteBoxCmdList = static_cast<CommandList *>(immCommandList.get());
+    auto ultCsr = static_cast<NEO::UltCommandStreamReceiver<FamilyType> *>(whiteBoxCmdList->getCsr(false));
+
+    if (L0GfxCoreHelper::useImmediateComputeFlushTask(device->getNEODevice()->getRootDeviceEnvironment())) {
+        ImmediateDispatchFlags &recordedImmediateDispatchFlags = ultCsr->recordedImmediateDispatchFlags;
+        EXPECT_TRUE(recordedImmediateDispatchFlags.requireTaskCountUpdate);
+    } else {
+        DispatchFlags &recordedDispatchFlags = ultCsr->recordedDispatchFlags;
+        EXPECT_TRUE(recordedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
+
     GenCmdList cmdList;
     ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(
         cmdList, ptrOffset(commandContainer.getCommandStream()->getCpuBase(), 0), commandContainer.getCommandStream()->getUsed()));
@@ -1446,6 +1461,7 @@ HWTEST_F(ImmediateCommandListAppendWriteToMem, givenAppendWriteToMemWithScopeThe
             EXPECT_TRUE(cmd->getCommandStreamerStallEnable());
             EXPECT_EQ(NEO::MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, device->getNEODevice()->getRootDeviceEnvironment()), cmd->getDcFlushEnable());
             postSyncFound = true;
+            break;
         }
     }
     ASSERT_TRUE(postSyncFound);

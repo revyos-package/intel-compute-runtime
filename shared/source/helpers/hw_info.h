@@ -20,7 +20,7 @@ enum PreemptionMode : uint32_t;
 class ReleaseHelper;
 
 struct RuntimeCapabilityTable {
-    DirectSubmissionProperyEngines directSubmissionEngines;
+    DirectSubmissionPropertiesPerEngine directSubmissionEngines;
     KmdNotifyProperties kmdNotifyProperties;
     uint64_t gpuAddressSpace;
     uint64_t sharedSystemMemCapabilities;
@@ -31,7 +31,6 @@ struct RuntimeCapabilityTable {
     aub_stream::EngineType defaultEngineType;
     uint32_t maxRenderFrequency;
     unsigned int clVersionSupport;
-    uint32_t aubDeviceId;
     uint32_t extraQuantityThreadsPerEU;
     uint32_t maxProgrammableSlmSize;
     uint32_t grfSize;
@@ -93,8 +92,9 @@ bool getHwInfoForPlatformString(std::string &platform, const HardwareInfo *&hwIn
 void setHwInfoValuesFromConfig(const uint64_t hwInfoConfig, HardwareInfo &hwInfoIn);
 bool parseHwInfoConfigString(const std::string &hwInfoConfigStr, uint64_t &hwInfoConfig);
 aub_stream::EngineType getChosenEngineType(const HardwareInfo &hwInfo);
-void setupDefaultGtSysInfo(HardwareInfo *hwInfo, const ReleaseHelper *releaseHelper);
+void setupDefaultGtSysInfo(HardwareInfo *hwInfo);
 void setupDefaultFeatureTableAndWorkaroundTable(HardwareInfo *hwInfo, const ReleaseHelper &releaseHelper);
 uint32_t getNumSubSlicesPerSlice(const HardwareInfo &hwInfo);
+void applyDebugOverrides(HardwareInfo &hwInfo);
 
 } // namespace NEO

@@ -201,7 +201,7 @@ TEST_F(RawBinarySipTest, givenRawBinaryFileWhenOpenFileFailsThenSipIsNotLoadedFr
     SipKernel::freeSipKernels(&pDevice->getRootDeviceEnvironmentRef(), pDevice->getMemoryManager());
 }
 
-TEST_F(RawBinarySipTest, givenRawBinaryFileWhenTellSizeDiffrentThanBytesReadThenSipIsNotCreated) {
+TEST_F(RawBinarySipTest, givenRawBinaryFileWhenTellSizeDifferentThanBytesReadThenSipIsNotCreated) {
     IoFunctions::mockFtellReturn = 28;
     bool ret = SipKernel::initSipKernel(SipKernelType::csr, *pDevice);
     EXPECT_FALSE(ret);
@@ -450,7 +450,7 @@ TEST_F(StateSaveAreaSipTest, givenCorruptedStateSaveAreaHeaderWhenGetStateSaveAr
 
 TEST_F(StateSaveAreaSipTest, givenCorrectStateSaveAreaHeaderWhenGetStateSaveAreaSizeCalledThenCorrectDbgSurfaceSizeIsReturned) {
     auto hwInfo = pDevice->getHardwareInfo();
-    auto numSlices = NEO::GfxCoreHelper::getHighestEnabledSlice(hwInfo);
+    auto numSlices = std::max(hwInfo.gtSystemInfo.MaxSlicesSupported, NEO::GfxCoreHelper::getHighestEnabledSlice(hwInfo));
     MockSipData::mockSipKernel->mockStateSaveAreaHeader = MockSipData::createStateSaveAreaHeader(1);
     EXPECT_EQ(0x1800u * numSlices * 2 * 16 * 7 + alignUp(sizeof(SIP::StateSaveAreaHeader), MemoryConstants::pageSize), SipKernel::getSipKernel(*pDevice, nullptr).getStateSaveAreaSize(pDevice));
 
@@ -468,6 +468,18 @@ TEST_F(StateSaveAreaSipTest, givenStateSaveAreaHeaderVersion4WhenGetStateSaveAre
     auto header = reinterpret_cast<SIP::StateSaveAreaHeader *>(MockSipData::mockSipKernel->mockStateSaveAreaHeader.data());
     header->versionHeader.version.major = 4u;
     EXPECT_EQ(MockSipData::totalWmtpDataSize, SipKernel::getSipKernel(*pDevice, nullptr).getStateSaveAreaSize(pDevice));
+}
+
+TEST_F(StateSaveAreaSipTest, givenStateSaveAreaHeaderVersion4WhenGetStateSaveAreaSizeCalledAndForceWmtpDataSizeIsGreaterThanZeroThenForcedTotalWmtpDataSizeIsReturned) {
+    DebugManagerStateRestore restorer;
+    MockSipData::mockSipKernel->mockStateSaveAreaHeader = MockSipData::createStateSaveAreaHeader(4);
+    auto header = reinterpret_cast<SIP::StateSaveAreaHeader *>(MockSipData::mockSipKernel->mockStateSaveAreaHeader.data());
+    header->versionHeader.version.major = 4u;
+    const size_t forcedWmtpDataSize = 98304294; // any arbitrary number
+    debugManager.flags.ForceTotalWMTPDataSize.set(forcedWmtpDataSize);
+    const size_t expected = alignUp(forcedWmtpDataSize, MemoryConstants::pageSize);
+    const size_t actual = SipKernel::getSipKernel(*pDevice, nullptr).getStateSaveAreaSize(pDevice);
+    EXPECT_EQ(expected, actual);
 }
 
 TEST_F(StateSaveAreaSipTest, givenStateSaveAreaHeaderVersion4WhenGetSipKernelIsCalledForCsrSipThenPreemptionSurfaceSizeIsUpdated) {

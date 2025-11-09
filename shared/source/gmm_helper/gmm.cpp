@@ -77,7 +77,12 @@ Gmm::Gmm(GmmHelper *gmmHelper, const void *alignedPtr, size_t alignedSize, size_
 Gmm::Gmm(GmmHelper *gmmHelper, GMM_RESOURCE_INFO *inputGmm) : Gmm(gmmHelper, inputGmm, false) {}
 
 Gmm::Gmm(GmmHelper *gmmHelper, GMM_RESOURCE_INFO *inputGmm, bool openingHandle) : gmmHelper(gmmHelper) {
+    auto &rootDeviceEnvironment = gmmHelper->getRootDeviceEnvironment();
+    auto &gfxCoreHelper = rootDeviceEnvironment.getHelper<GfxCoreHelper>();
     gmmResourceInfo.reset(GmmResourceInfo::create(gmmHelper->getClientContext(), inputGmm, openingHandle));
+    if (!gfxCoreHelper.isCompressionAppliedForImportedResource(*this)) {
+        compressionEnabled = false;
+    }
     applyDebugOverrides();
 }
 
@@ -400,7 +405,7 @@ void Gmm::applyMemoryFlags(const StorageInfo &storageInfo) {
         if (storageInfo.systemMemoryPlacement) {
             resourceParams.Flags.Info.NonLocalOnly = 1;
         } else {
-            // `extraMemoryFlagsRequired()` is only virtual in tests where it is overriden by a mock for no better alternative
+            // `extraMemoryFlagsRequired()` is only virtual in tests where it is overridden by a mock for no better alternative
             const bool extraFlagsRequired{extraMemoryFlagsRequired()}; // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
             if (extraFlagsRequired) {
                 applyExtraMemoryFlags(storageInfo);

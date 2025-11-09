@@ -72,6 +72,14 @@ struct DebugSessionImp : DebugSession {
     static const SIP::regset_desc *getDebugScratchRegsetDesc();
     static const SIP::regset_desc *getThreadScratchRegsetDesc();
     static uint32_t typeToRegsetFlags(uint32_t type);
+    struct SipMemoryAccessArgs {
+        struct DebugSessionImp *debugSession;
+        uint64_t contextHandle;
+        uint64_t gpuVa;
+    };
+    static uint32_t readSipMemory(void *userArg, uint32_t offset, uint32_t size, void *destination);
+    static uint32_t writeSipMemory(void *userArg, uint32_t offset, uint32_t size, void *source);
+    std::unordered_map<uint64_t, void *> pIGSipHandleMap;
 
     using ApiEventQueue = std::queue<zet_debug_event_t>;
 
@@ -118,6 +126,7 @@ struct DebugSessionImp : DebugSession {
     MOCKABLE_VIRTUAL void generateEventsForPendingInterrupts();
 
     const NEO::StateSaveAreaHeader *getStateSaveAreaHeader();
+    void dumpDebugSurfaceToFile(uint64_t vmHandle, uint64_t gpuVa, const std::string &path);
     void validateAndSetStateSaveAreaHeader(uint64_t vmHandle, uint64_t gpuVa);
     virtual void readStateSaveAreaHeader(){};
     MOCKABLE_VIRTUAL ze_result_t readFifo(uint64_t vmHandle, std::vector<EuThread::ThreadId> &threadsWithAttention);
@@ -224,7 +233,7 @@ ze_result_t DebugSessionImp::slmMemoryAccess(EuThread::ThreadId threadId, const 
     SIP::sip_command sipCommand = {0};
 
     uint64_t offset = desc->address & maxNBitValue(slmAddressSpaceTag);
-    // SIP accesses SLM in units of slmSendBytesSize at offset allignment of slmSendBytesSize
+    // SIP accesses SLM in units of slmSendBytesSize at offset alignment of slmSendBytesSize
     uint32_t frontPadding = offset % slmSendBytesSize;
     uint64_t alignedOffset = offset - frontPadding;
     uint32_t remainingSlmSendUnits = static_cast<uint32_t>(std::ceil(static_cast<float>(size) / slmSendBytesSize));

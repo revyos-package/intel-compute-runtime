@@ -20,6 +20,7 @@
 #include "shared/source/device_binary_format/elf/ocl_elf.h"
 #include "shared/source/helpers/api_specific_config.h"
 #include "shared/source/helpers/compiler_product_helper.h"
+#include "shared/source/helpers/hash.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/product_config_helper.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
@@ -27,6 +28,7 @@
 #include "shared/test/common/helpers/stream_capture.h"
 #include "shared/test/common/helpers/variable_backup.h"
 #include "shared/test/common/mocks/mock_compiler_cache.h"
+#include "shared/test/common/mocks/mock_compiler_product_helper.h"
 #include "shared/test/common/mocks/mock_compilers.h"
 #include "shared/test/common/mocks/mock_io_functions.h"
 #include "shared/test/common/mocks/mock_modules_zebin.h"
@@ -102,7 +104,7 @@ bool isAnyIrSectionDefined(const SectionHeaders &sectionHeaders) {
 TEST_F(MultiCommandTests, WhenBuildingMultiCommandThenSuccessIsReturned) {
     VariableBackup<decltype(NEO::IoFunctions::mkdirPtr)> mockCreateDir(&NEO::IoFunctions::mkdirPtr, [](const char *path) -> int { return 0; });
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -129,7 +131,7 @@ TEST_F(MultiCommandTests, WhenBuildingMultiCommandThenSuccessIsReturned) {
 TEST_F(MultiCommandTests, GivenOutputFileWhenBuildingMultiCommandThenSuccessIsReturned) {
     VariableBackup<decltype(NEO::IoFunctions::mkdirPtr)> mockCreateDir(&NEO::IoFunctions::mkdirPtr, [](const char *path) -> int { return 0; });
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -165,7 +167,7 @@ TEST_F(MultiCommandTests, GivenOutputFileWhenBuildingMultiCommandThenSuccessIsRe
 TEST_F(MultiCommandTests, GivenSpecifiedOutputDirWhenBuildingMultiCommandThenSuccessIsReturned) {
     VariableBackup<decltype(NEO::IoFunctions::mkdirPtr)> mockCreateDir(&NEO::IoFunctions::mkdirPtr, [](const char *path) -> int { return 0; });
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -216,7 +218,7 @@ TEST_F(MultiCommandTests, GivenSpecifiedOutputDirWithProductConfigValueWhenBuild
         }
     }
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -252,7 +254,7 @@ TEST_F(MultiCommandTests, GivenSpecifiedOutputDirWithProductConfigValueWhenBuild
 }
 
 TEST_F(MultiCommandTests, GivenMissingTextFileWithArgsWhenBuildingMultiCommandThenInvalidFileErrorIsReturned) {
-    nameOfFileWithArgs = "ImANotExistedComandFile.txt";
+    nameOfFileWithArgs = "ImANotExistedCommandFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -273,7 +275,7 @@ TEST_F(MultiCommandTests, GivenMissingTextFileWithArgsWhenBuildingMultiCommandTh
 TEST_F(MultiCommandTests, GivenLackOfClFileWhenBuildingMultiCommandThenInvalidFileErrorIsReturned) {
     VariableBackup<decltype(NEO::IoFunctions::mkdirPtr)> mockCreateDir(&NEO::IoFunctions::mkdirPtr, [](const char *path) -> int { return 0; });
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -304,7 +306,7 @@ TEST_F(MultiCommandTests, GivenLackOfClFileWhenBuildingMultiCommandThenInvalidFi
 TEST_F(MultiCommandTests, GivenOutputFileListFlagWhenBuildingMultiCommandThenSuccessIsReturned) {
     VariableBackup<decltype(NEO::IoFunctions::mkdirPtr)> mockCreateDir(&NEO::IoFunctions::mkdirPtr, [](const char *path) -> int { return 0; });
 
-    nameOfFileWithArgs = "ImAMulitiComandMinimalGoodFile.txt";
+    nameOfFileWithArgs = "ImAMultiCommandMinimalGoodFile.txt";
     std::vector<std::string> argv = {
         "ocloc",
         "multi",
@@ -1966,40 +1968,6 @@ bool containsAnyIRSection(ArrayRef<const uint8_t> elfBinary, std::string &outErr
     return isAnyIrSectionDefined(elf.sectionHeaders);
 }
 
-TEST_F(OfflineCompilerTests, givenExcludeIrArgumentWhenGeneratingElfBinaryFromPatchtokensThenIrSectionIsNotPresent) {
-    std::vector<std::string> argv = {
-        "ocloc",
-        "-file",
-        clCopybufferFilename.c_str(),
-        "-exclude_ir",
-        "-device",
-        gEnvironment->devicePrefix.c_str(),
-        "--format",
-        "patchtokens"};
-
-    MockOfflineCompiler mockOfflineCompiler{};
-    mockOfflineCompiler.initialize(argv.size(), argv);
-
-    std::vector<uint8_t> storage;
-    iOpenCL::SProgramBinaryHeader headerTok = {};
-    headerTok.Magic = iOpenCL::MAGIC_CL;
-    headerTok.Version = iOpenCL::CURRENT_ICBE_VERSION;
-    headerTok.GPUPointerSizeInBytes = sizeof(uintptr_t);
-
-    storage.insert(storage.end(), reinterpret_cast<uint8_t *>(&headerTok), reinterpret_cast<uint8_t *>(&headerTok) + sizeof(iOpenCL::SProgramBinaryHeader));
-    mockOfflineCompiler.genBinary = new char[storage.size()];
-    mockOfflineCompiler.genBinarySize = storage.size();
-    memcpy_s(mockOfflineCompiler.genBinary, mockOfflineCompiler.genBinarySize, storage.data(), storage.size());
-    mockOfflineCompiler.generateElfBinary();
-
-    std::string errorReason{};
-    std::string warning{};
-    auto hasIR = containsAnyIRSection(mockOfflineCompiler.elfBinary, errorReason, warning);
-    ASSERT_TRUE(errorReason.empty());
-    ASSERT_TRUE(warning.empty());
-    EXPECT_FALSE(hasIR);
-}
-
 TEST_F(OfflineCompilerTests, givenZeroSizeInputFileWhenInitializationIsPerformedThenInvalidFileIsReturned) {
     std::vector<std::string> argv = {
         "ocloc",
@@ -2199,9 +2167,7 @@ TEST_F(OfflineCompilerTests, GivenArgsWhenBuildingThenBuildSucceeds) {
         "-file",
         clCopybufferFilename.c_str(),
         "-device",
-        gEnvironment->devicePrefix.c_str(),
-        "--format",
-        "patchtokens"};
+        gEnvironment->devicePrefix.c_str()};
 
     pOfflineCompiler = OfflineCompiler::create(argv.size(), argv, true, retVal, oclocArgHelperWithoutInput.get());
 
@@ -2242,9 +2208,7 @@ TEST_F(OfflineCompilerTests, GivenArgsWhenBuildingWithDeviceConfigValueThenBuild
         "-file",
         clCopybufferFilename.c_str(),
         "-device",
-        configStr,
-        "--format",
-        "patchtokens"};
+        configStr};
 
     pOfflineCompiler = OfflineCompiler::create(argv.size(), argv, true, retVal, oclocArgHelperWithoutInput.get());
 
@@ -2285,9 +2249,7 @@ TEST_F(OfflineCompilerTests, GivenArgsWhenBuildingWithDeviceIpVersionValueThenBu
         "-file",
         clCopybufferFilename.c_str(),
         "-device",
-        ipVersion.str(),
-        "--format",
-        "patchtokens"};
+        ipVersion.str()};
 
     pOfflineCompiler = OfflineCompiler::create(argv.size(), argv, true, retVal, oclocArgHelperWithoutInput.get());
 
@@ -2316,9 +2278,7 @@ TEST_F(OfflineCompilerTests, GivenLlvmTextWhenBuildingThenBuildSucceeds) {
         clCopybufferFilename.c_str(),
         "-device",
         gEnvironment->devicePrefix.c_str(),
-        "-llvm_text",
-        "--format",
-        "patchtokens"};
+        "-llvm_text"};
 
     pOfflineCompiler = OfflineCompiler::create(argv.size(), argv, true, retVal, oclocArgHelperWithoutInput.get());
 
@@ -2569,9 +2529,7 @@ TEST_F(OfflineCompilerTests, GivenCppFileWhenBuildingThenBuildSucceeds) {
         clCopybufferFilename.c_str(),
         "-device",
         gEnvironment->devicePrefix.c_str(),
-        "-cpp_file",
-        "--format",
-        "patchtokens"};
+        "-cpp_file"};
 
     pOfflineCompiler = OfflineCompiler::create(argv.size(), argv, true, retVal, oclocArgHelperWithoutInput.get());
 
@@ -4428,8 +4386,7 @@ TEST_F(OfflineCompilerStatelessToStatefulTests, whenAppendExtraInternalOptionsTh
     runTest();
 }
 
-template <PRODUCT_FAMILY productFamily>
-class MockCompilerProductHelperHw : public CompilerProductHelperHw<productFamily> {
+class MockCompilerProductHelperForceStateless : public MockCompilerProductHelper {
   public:
     bool isForceToStatelessRequired() const override {
         return true;
@@ -4437,8 +4394,7 @@ class MockCompilerProductHelperHw : public CompilerProductHelperHw<productFamily
 };
 
 HWTEST2_F(OfflineCompilerStatelessToStatefulTests, givenMockWhenAppendExtraInternalOptionsThenInternalOptionsAreCorrect, MatchAny) {
-
-    auto backup = std::unique_ptr<CompilerProductHelper>(new MockCompilerProductHelperHw<productFamily>());
+    auto backup = std::unique_ptr<CompilerProductHelper>(new MockCompilerProductHelperForceStateless());
     this->mockOfflineCompiler->compilerProductHelper.swap(backup);
 
     runTest();
@@ -4982,15 +4938,6 @@ TEST_F(OfflineCompilerTests, givenFormatFlagWithKnownFormatPassedThenEnforceSpec
     MockOfflineCompiler ocloc;
     ocloc.uniqueHelper->filesMap = filesMap;
 
-    std::vector<std::string> argvEnforcedFormatPatchtokens = {
-        "ocloc",
-        "-q",
-        "-file",
-        clCopybufferFilename.c_str(),
-        "-spv_only",
-        "--format",
-        "patchtokens"};
-
     std::vector<std::string> argvEnforcedFormatZebin = {
         "ocloc",
         "-q",
@@ -5000,32 +4947,35 @@ TEST_F(OfflineCompilerTests, givenFormatFlagWithKnownFormatPassedThenEnforceSpec
         "--format",
         "zebin"};
 
+    StreamCapture capture;
+    capture.captureStdout();
     int retVal = ocloc.initialize(argvEnforcedFormatZebin.size(), argvEnforcedFormatZebin);
     ASSERT_EQ(0, retVal);
-    EXPECT_FALSE(hasSubstr(ocloc.internalOptions, std::string{CompilerOptions::disableZebin}));
-
-    ocloc.internalOptions.clear();
-    retVal = ocloc.initialize(argvEnforcedFormatPatchtokens.size(), argvEnforcedFormatPatchtokens);
-    ASSERT_EQ(0, retVal);
-    EXPECT_TRUE(hasSubstr(ocloc.internalOptions, std::string{CompilerOptions::disableZebin}));
+    const auto output = capture.getCapturedStdout();
+    EXPECT_TRUE(output.empty());
 }
 
-HWTEST2_F(OfflineCompilerTests, givenNoFormatFlagSpecifiedWhenOclocInitializeThenZebinFormatIsEnforcedByDefault, HasOclocZebinFormatEnforced) {
+TEST_F(OfflineCompilerTests, givenPatchtokensFormatFlagThenWarningAboutDeprecatedFormatIsProduced) {
     MockOfflineCompiler ocloc;
     ocloc.uniqueHelper->filesMap = filesMap;
 
-    std::vector<std::string> argvNoFormatFlag = {
+    std::vector<std::string> argvEnforcedFormatPatchtokens = {
         "ocloc",
         "-q",
         "-file",
         clCopybufferFilename.c_str(),
         "-spv_only",
-        "-device",
-        gEnvironment->devicePrefix.c_str()};
+        "--format",
+        "patchtokens"};
 
-    int retVal = ocloc.initialize(argvNoFormatFlag.size(), argvNoFormatFlag);
+    StreamCapture capture;
+    capture.captureStdout();
+    int retVal = ocloc.initialize(argvEnforcedFormatPatchtokens.size(), argvEnforcedFormatPatchtokens);
+    const auto output = capture.getCapturedStdout();
     ASSERT_EQ(0, retVal);
-    EXPECT_FALSE(hasSubstr(ocloc.internalOptions, std::string{CompilerOptions::disableZebin}));
+
+    const auto expectedOutput{"WARNING: Ignoring deprecated '--format patchtokens' option.\n"};
+    EXPECT_EQ(expectedOutput, output);
 }
 
 TEST_F(OfflineCompilerTests, givenFormatFlagWithUnknownFormatPassedThenPrintWarning) {
@@ -5833,5 +5783,228 @@ TEST_F(OfflineCompilerTests, givenOneApiPvcSendWarWaEnvSetToFalseWhenInitializin
     std::string internalOptions = mockOfflineCompiler->internalOptions;
     EXPECT_TRUE(hasSubstr(internalOptions, "-ze-opt-disable-sendwarwa"));
 }
+TEST_F(OfflineCompilerTests, GivenDebugFlagWhenBuildingFromSourceThenTemporarySourceFileIsCreated) {
+    MockOfflineCompiler mockOfflineCompiler;
+    mockOfflineCompiler.uniqueHelper->interceptOutput = true;
+    mockOfflineCompiler.uniqueHelper->callBaseFileExists = false;
+    mockOfflineCompiler.uniqueHelper->callBaseLoadDataFromFile = false;
 
+    if (mockOfflineCompiler.cache == nullptr) {
+        mockOfflineCompiler.cache = std::make_unique<CompilerCacheMock>();
+    }
+
+    const char kernelSource[] = R"===(
+    __kernel void simpleKernel() {
+        int gid = get_global_id(0);
+    }
+    )===";
+
+    std::string inputFile = "kernel.cl";
+    mockOfflineCompiler.uniqueHelper->filesMap[inputFile] = kernelSource;
+
+    std::vector<std::string> argv = {
+        "ocloc",
+        "-file",
+        inputFile,
+        "-device",
+        gEnvironment->devicePrefix.c_str(),
+        "-options",
+        "-g"};
+
+    mockOfflineCompiler.buildReturnValue = OCLOC_SUCCESS;
+
+    int retVal = mockOfflineCompiler.parseCommandLine(argv.size(), argv);
+    EXPECT_EQ(OCLOC_SUCCESS, retVal);
+
+    mockOfflineCompiler.inputCodeType = IGC::CodeType::oclC;
+    mockOfflineCompiler.sourceCode = kernelSource;
+    mockOfflineCompiler.inputFile = inputFile;
+
+    uint64_t sourceHash = NEO::Hash::hash(kernelSource, strlen(kernelSource));
+    std::string tempFileName = "main_" + std::to_string(sourceHash) + ".cl";
+    std::filesystem::path expectedTempFilePath = std::filesystem::absolute(tempFileName);
+
+    StreamCapture capture;
+    capture.captureStdout();
+
+    mockOfflineCompiler.createTempSourceFileForDebug();
+
+    std::string capturedOutput = capture.getCapturedStdout();
+    EXPECT_NE(capturedOutput.find("Temporary source file for debug info created: " + expectedTempFilePath.string()), std::string::npos);
+
+    auto it = NEO::virtualFileList.find(expectedTempFilePath.string());
+    ASSERT_NE(NEO::virtualFileList.end(), it);
+    EXPECT_EQ(it->second.str(), kernelSource);
+
+    std::string expectedSOption = "-s \"" + expectedTempFilePath.string() + "\"";
+    EXPECT_TRUE(CompilerOptions::contains(mockOfflineCompiler.options, expectedSOption));
+}
+TEST_F(OfflineCompilerTests, GivenSpirvInputAndSpecConstFileWhenFileExistsThenSpecializationConstantsAreLoaded) {
+    MockOfflineCompiler mockOfflineCompiler;
+    mockOfflineCompiler.uniqueHelper->filesMap = filesMap;
+
+    const std::array<uint8_t, 4> spirvMagic = {0x03, 0x02, 0x23, 0x07};
+    mockOfflineCompiler.uniqueHelper->filesMap["some_file.spv"] = std::string(spirvMagic.begin(), spirvMagic.end());
+
+    mockOfflineCompiler.uniqueHelper->filesMap["constants.txt"] = "0: 42\n1: 100";
+    mockOfflineCompiler.uniqueHelper->callBaseFileExists = false;
+    mockOfflineCompiler.uniqueHelper->callBaseLoadDataFromFile = false;
+
+    std::vector<std::string> argv = {
+        "ocloc",
+        "-file", "some_file.spv",
+        "-spirv_input",
+        "-device", gEnvironment->devicePrefix.c_str(),
+        "-spec_const", "constants.txt",
+        "-v"};
+
+    StreamCapture capture;
+    capture.captureStdout();
+
+    mockOfflineCompiler.initialize(argv.size(), argv);
+    std::string output = capture.getCapturedStdout();
+    EXPECT_NE(output.find("Loaded 2 specialization constants from: constants.txt"), std::string::npos);
+
+    auto mockIgcOclDeviceCtx = new NEO::MockIgcOclDeviceCtx();
+    mockOfflineCompiler.mockIgcFacade->igcDeviceCtx = CIF::RAII::Pack<IGC::IgcOclDeviceCtxTagOCL>(mockIgcOclDeviceCtx);
+
+    int retVal = mockOfflineCompiler.build();
+    EXPECT_EQ(OCLOC_SUCCESS, retVal);
+    ASSERT_EQ(2u, mockOfflineCompiler.specConstants.size());
+    EXPECT_EQ(42u, mockOfflineCompiler.specConstants[0]);
+    EXPECT_EQ(100u, mockOfflineCompiler.specConstants[1]);
+}
+
+TEST_F(OfflineCompilerTests, GivenSpirvInputAndSpecConstFileWhenFileIsMissingThenInvalidFileErrorIsReturned) {
+    MockOfflineCompiler mockOfflineCompiler;
+    mockOfflineCompiler.uniqueHelper->filesMap = filesMap;
+    const std::array<uint8_t, 4> spirvMagic = {0x03, 0x02, 0x23, 0x07};
+    mockOfflineCompiler.uniqueHelper->filesMap["some_file.spv"] = std::string(spirvMagic.begin(), spirvMagic.end());
+    mockOfflineCompiler.uniqueHelper->callBaseFileExists = false;
+    mockOfflineCompiler.uniqueHelper->callBaseLoadDataFromFile = false;
+
+    std::vector<std::string> argv = {
+        "ocloc",
+        "-file", "some_file.spv",
+        "-spirv_input",
+        "-device",
+        gEnvironment->devicePrefix.c_str(),
+        "-spec_const", "constants.txt",
+        "-v"};
+
+    StreamCapture capture;
+    capture.captureStdout();
+
+    int initResult = mockOfflineCompiler.initialize(argv.size(), argv);
+    EXPECT_EQ(OCLOC_INVALID_FILE, initResult);
+
+    std::string output = capture.getCapturedStdout();
+    EXPECT_NE(output.find("Error: Spec constants file not found: constants.txt"), std::string::npos);
+}
+TEST_F(OfflineCompilerTests, GivenSpirvInputAndSpecConstFileAndNoVerboseModeWhenFileExistsThenSpecializationConstantsAreLoadedAndErrorMessageIsSuppressed) {
+    MockOfflineCompiler mockOfflineCompiler;
+    mockOfflineCompiler.uniqueHelper->filesMap = filesMap;
+
+    const std::array<uint8_t, 4> spirvMagic = {0x03, 0x02, 0x23, 0x07};
+    mockOfflineCompiler.uniqueHelper->filesMap["some_file.spv"] = std::string(spirvMagic.begin(), spirvMagic.end());
+
+    mockOfflineCompiler.uniqueHelper->filesMap["constants.txt"] = "0: 42\n1: 100";
+    mockOfflineCompiler.uniqueHelper->callBaseFileExists = false;
+    mockOfflineCompiler.uniqueHelper->callBaseLoadDataFromFile = false;
+
+    std::vector<std::string> argv = {
+        "ocloc",
+        "-file",
+        "some_file.spv",
+        "-spirv_input",
+        "-device",
+        gEnvironment->devicePrefix.c_str(),
+        "-spec_const",
+        "constants.txt",
+    };
+
+    StreamCapture capture;
+    capture.captureStdout();
+
+    mockOfflineCompiler.initialize(argv.size(), argv);
+    std::string output = capture.getCapturedStdout();
+    EXPECT_EQ(output.find("Loaded 2 specialization constants from: constants.txt"), std::string::npos);
+
+    auto mockIgcOclDeviceCtx = new NEO::MockIgcOclDeviceCtx();
+    mockOfflineCompiler.mockIgcFacade->igcDeviceCtx = CIF::RAII::Pack<IGC::IgcOclDeviceCtxTagOCL>(mockIgcOclDeviceCtx);
+
+    int retVal = mockOfflineCompiler.build();
+    EXPECT_EQ(OCLOC_SUCCESS, retVal);
+    ASSERT_EQ(2u, mockOfflineCompiler.specConstants.size());
+    EXPECT_EQ(42u, mockOfflineCompiler.specConstants[0]);
+    EXPECT_EQ(100u, mockOfflineCompiler.specConstants[1]);
+}
+TEST_F(OfflineCompilerTests, GivenVariousLinesInSpecConstFileWhenParsingThenFileIsValidatedWithProperErrorCodes) {
+    struct TestCase {
+        std::string fileContent;
+        int expectedReturnCode;
+        std::map<uint32_t, uint64_t> expectedConstants;
+    };
+
+    std::vector<TestCase> cases = {
+        {"0: 123", OCLOC_SUCCESS, {{0, 123}}},
+        {"1: 90", OCLOC_SUCCESS, {{1, 90}}},
+        {"abc: 2", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"1; 90", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"90", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"1: abc", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"abc: abc", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"   ", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"garbage", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"1234", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"123.0", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"123.0: 1", OCLOC_INVALID_COMMAND_LINE, {}},
+
+        {"0: 123\n1: 90", OCLOC_SUCCESS, {{0, 123}, {1, 90}}},
+        {"0: 123\n\n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n   \n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n1: abc\n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n90\n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n1; 90\n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n2: 456\n", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n2: 456\n   ", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n1: 456\n0: 789", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"-1: 123", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: -1", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 123\n1: 123abc\n2: 456", OCLOC_INVALID_COMMAND_LINE, {}},
+        {": 123", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"123:", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0:123", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: ", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"0: 184467440737095516160", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"1: 10\n2: 20", OCLOC_INVALID_COMMAND_LINE, {}},
+        {"", OCLOC_INVALID_FILE, {}}};
+
+    for (const auto &testCase : cases) {
+
+        MockOfflineCompiler mockOfflineCompiler;
+        mockOfflineCompiler.uniqueHelper->filesMap["constants.txt"] = testCase.fileContent;
+        mockOfflineCompiler.uniqueHelper->callBaseFileExists = false;
+        mockOfflineCompiler.uniqueHelper->callBaseLoadDataFromFile = false;
+
+        StreamCapture capture;
+        capture.captureStdout();
+
+        int result = mockOfflineCompiler.loadSpecializationConstants("constants.txt");
+        capture.getCapturedStdout();
+
+        EXPECT_EQ(testCase.expectedReturnCode, result);
+
+        if (testCase.expectedReturnCode == OCLOC_SUCCESS) {
+            EXPECT_EQ(testCase.expectedConstants.size(), mockOfflineCompiler.specConstants.size());
+
+            for (const auto &[id, value] : testCase.expectedConstants) {
+                ASSERT_NE(mockOfflineCompiler.specConstants.end(), mockOfflineCompiler.specConstants.find(id));
+                EXPECT_EQ(value, mockOfflineCompiler.specConstants.at(id));
+            }
+        } else {
+            EXPECT_TRUE(mockOfflineCompiler.specConstants.empty());
+        }
+    }
+}
 } // namespace NEO

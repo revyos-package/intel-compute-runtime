@@ -122,7 +122,7 @@ TEST_F(DefaultDescriptorWithoutBlitterTest, givenDeviceWithoutBlitterSupportWhen
 
 TEST_F(DefaultDescriptorWithoutBlitterTest, givenDeviceWithoutBlitterSupportWhenCreatingCommandListImmediateWithDefaultDescriptorThenInOrderAsyncCmdListWithoutCopyOffloadIsCreated) {
     ze_command_list_handle_t hCommandList = {};
-    ze_result_t result = context->createCommandListImmediate(device, &defaultCommandQueueDesc, &hCommandList);
+    ze_result_t result = context->createCommandListImmediate(device, &defaultIntelCommandQueueDesc, &hCommandList);
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 
     auto commandList = CommandList::whiteboxCast(L0::CommandList::fromHandle(hCommandList));
@@ -209,15 +209,6 @@ TEST_F(CommandListCreateTests, givenRegularCommandListThenDefaultNumIddPerBlockI
 
     const uint32_t defaultNumIdds = CommandList::defaultNumIddsPerBlock;
     EXPECT_EQ(defaultNumIdds, commandList->getCmdContainer().getNumIddPerBlock());
-}
-
-TEST_F(CommandListCreateTests, givenNonExistingPtrThenAppendMemAdviseReturnsError) {
-    ze_result_t returnValue;
-    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
-    ASSERT_NE(nullptr, commandList);
-
-    auto res = commandList->appendMemAdvise(device, nullptr, 0, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
-    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, res);
 }
 
 TEST_F(CommandListCreateTests, givenNonExistingPtrThenAppendMemoryPrefetchReturnsError) {
@@ -499,6 +490,38 @@ TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseSetAndC
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     flags = deviceImp->memAdviseSharedAllocations[allocData];
     EXPECT_EQ(0, flags.readOnly);
+
+    res = context->freeMem(ptr);
+    ASSERT_EQ(res, ZE_RESULT_SUCCESS);
+}
+
+TEST_F(CommandListCreateTests, givenValidDeviceMemPtrThenExecuteMemAdviseWhenSameAdviceIsSetMoreThanOnceThenDontExecuteAgain) {
+    size_t size = 10;
+    size_t alignment = 1u;
+    void *ptr = nullptr;
+
+    ze_device_mem_alloc_desc_t deviceDesc = {};
+    auto res = context->allocDeviceMem(device->toHandle(),
+                                       &deviceDesc,
+                                       size, alignment, &ptr);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+    EXPECT_NE(nullptr, ptr);
+
+    ze_result_t returnValue;
+    NEO::MemAdviseFlags flags;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::create(productFamily, device, NEO::EngineGroupType::renderCompute, 0u, returnValue, false));
+    ASSERT_NE(nullptr, commandList);
+
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+    auto allocData = device->getDriverHandle()->getSvmAllocsManager()->getSVMAlloc(ptr);
+    L0::DeviceImp *deviceImp = static_cast<L0::DeviceImp *>((L0::Device::fromHandle(device)));
+    flags = deviceImp->memAdviseSharedAllocations[allocData];
+    EXPECT_EQ(1, flags.readOnly);
+    res = commandList->executeMemAdvise(device, ptr, size, ZE_MEMORY_ADVICE_SET_READ_MOSTLY);
+    EXPECT_EQ(ZE_RESULT_SUCCESS, res);
+    flags = deviceImp->memAdviseSharedAllocations[allocData];
+    EXPECT_EQ(1, flags.readOnly);
 
     res = context->freeMem(ptr);
     ASSERT_EQ(res, ZE_RESULT_SUCCESS);
@@ -2201,41 +2224,47 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
 
     auto ultCsr = static_cast<NEO::UltCommandStreamReceiver<FamilyType> *>(whiteBoxCmdList->getCsr(false));
 
-    auto verifyFlag = [&ultCsr](ze_result_t result, bool dispatchFlag) {
+    auto verifyWalkerWithProfilingEnqueued = [&ultCsr](ze_result_t result, bool expectEnqueued) {
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-        EXPECT_EQ(ultCsr->isWalkerWithProfilingEnqueued, dispatchFlag);
+        const auto enqueueTimes = ultCsr->walkerWithProfilingEnqueuedTimes + ultCsr->isWalkerWithProfilingEnqueued;
+        if (expectEnqueued) {
+            EXPECT_GT(enqueueTimes, 0u);
+        } else {
+            EXPECT_EQ(0u, enqueueTimes);
+        }
+        ultCsr->walkerWithProfilingEnqueuedTimes = 0u;
         ultCsr->isWalkerWithProfilingEnqueued = false;
     };
 
-    auto expectFlagEnabled = true && this->device->getNEODevice()->getProductHelper().shouldRegisterEnqueuedWalkerWithProfiling();
+    bool expectWalkerWithProfilingEnqueued = this->device->getNEODevice()->getProductHelper().shouldRegisterEnqueuedWalkerWithProfiling();
     // non-pipelined state
-    verifyFlag(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams), expectWalkerWithProfilingEnqueued);
 
     // non-pipelined state already programmed
-    verifyFlag(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, launchParams), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, nullptr, 0, nullptr, launchParams), false);
 
-    verifyFlag(commandList->appendLaunchKernelIndirect(kernel.toHandle(), groupCount, event, 0, nullptr, false), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernelIndirect(kernel.toHandle(), groupCount, event, 0, nullptr, false), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendBarrier(event, 0, nullptr, false), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendBarrier(event, 0, nullptr, false), false);
 
     CmdListMemoryCopyParams copyParams = {};
-    verifyFlag(commandList->appendMemoryCopy(dstPtr, srcPtr, 8, event, 0, nullptr, copyParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendMemoryCopy(dstPtr, srcPtr, 8, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendMemoryCopyRegion(dstPtr, &region, 0, 0, srcPtr, &region, 0, 0, event, 0, nullptr, copyParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendMemoryCopyRegion(dstPtr, &region, 0, 0, srcPtr, &region, 0, 0, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, event, 0, nullptr, copyParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendMemoryFill(dstPtr, srcPtr, 8, 1, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendEventReset(event), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendEventReset(event), false);
 
-    verifyFlag(commandList->appendSignalEvent(event, false), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendSignalEvent(event, false), false);
 
-    verifyFlag(commandList->appendPageFaultCopy(kernel.getIsaAllocation(), kernel.getIsaAllocation(), 1, false), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendPageFaultCopy(kernel.getIsaAllocation(), kernel.getIsaAllocation(), 1, false), false);
 
-    verifyFlag(commandList->appendWaitOnEvents(1, &event, nullptr, false, true, false, false, false, false), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendWaitOnEvents(1, &event, nullptr, false, true, false, false, false, false), false);
 
-    verifyFlag(commandList->appendWriteGlobalTimestamp(reinterpret_cast<uint64_t *>(dstPtr), event, 0, nullptr), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendWriteGlobalTimestamp(reinterpret_cast<uint64_t *>(dstPtr), event, 0, nullptr), false);
 
     if constexpr (FamilyType::supportsSampler) {
         auto kernel = device->getBuiltinFunctionsLib()->getImageFunction(ImageBuiltin::copyImageRegion);
@@ -2251,27 +2280,27 @@ HWTEST2_F(CommandListCreateTests, givenDirectSubmissionAndImmCmdListWhenDispatch
 
         CmdListMemoryCopyParams copyParams = {};
 
-        verifyFlag(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, event, 0, nullptr, copyParams), expectFlagEnabled);
+        verifyWalkerWithProfilingEnqueued(commandList->appendImageCopyRegion(image->toHandle(), image->toHandle(), &imgRegion, &imgRegion, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-        verifyFlag(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, event, 0, nullptr, copyParams), expectFlagEnabled);
+        verifyWalkerWithProfilingEnqueued(commandList->appendImageCopyFromMemory(image->toHandle(), dstPtr, &imgRegion, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-        verifyFlag(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, event, 0, nullptr, copyParams), expectFlagEnabled);
+        verifyWalkerWithProfilingEnqueued(commandList->appendImageCopyToMemory(dstPtr, image->toHandle(), &imgRegion, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-        verifyFlag(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, event, 0, nullptr, copyParams), expectFlagEnabled);
+        verifyWalkerWithProfilingEnqueued(commandList->appendImageCopyFromMemoryExt(image->toHandle(), dstPtr, &imgRegion, bytesPerPixel, bytesPerPixel, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
 
-        verifyFlag(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, event, 0, nullptr, copyParams), expectFlagEnabled);
+        verifyWalkerWithProfilingEnqueued(commandList->appendImageCopyToMemoryExt(dstPtr, image->toHandle(), &imgRegion, bytesPerPixel, bytesPerPixel, event, 0, nullptr, copyParams), expectWalkerWithProfilingEnqueued);
     }
 
     size_t rangeSizes = 1;
     const void **ranges = reinterpret_cast<const void **>(&dstPtr[0]);
-    verifyFlag(commandList->appendMemoryRangesBarrier(1, &rangeSizes, ranges, event, 0, nullptr), false);
+    verifyWalkerWithProfilingEnqueued(commandList->appendMemoryRangesBarrier(1, &rangeSizes, ranges, event, 0, nullptr), false);
 
     CmdListKernelLaunchParams cooperativeParams = {};
     cooperativeParams.isCooperative = true;
 
-    verifyFlag(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, cooperativeParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, cooperativeParams), expectWalkerWithProfilingEnqueued);
 
-    verifyFlag(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, cooperativeParams), expectFlagEnabled);
+    verifyWalkerWithProfilingEnqueued(commandList->appendLaunchKernel(kernel.toHandle(), groupCount, event, 0, nullptr, cooperativeParams), expectWalkerWithProfilingEnqueued);
 
     driverHandle->releaseImportedPointer(dstPtr);
 }
@@ -2537,6 +2566,7 @@ TEST_F(CommandListCreateTests, givenCreatingRegularCommandlistAndppendCommandLis
     EXPECT_FALSE(commandList->isImmediateType());
     auto result = commandList->appendCommandLists(0u, nullptr, nullptr, 0u, nullptr);
     EXPECT_EQ(result, ZE_RESULT_ERROR_INVALID_ARGUMENT);
+    commandList->setPatchingPreamble(true, false);
 }
 
 HWTEST_F(CommandListCreateTests, GivenGpuHangWhenCreatingImmediateCommandListAndAppendingEventResetThenDeviceLostIsReturned) {
@@ -2959,6 +2989,50 @@ TEST_F(CommandListCreateTests, whenInvokingAppendMemoryCopyFromContextForImmedia
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
 }
 
+HWTEST_F(CommandListCreateTests, givenImmediateCmdListWhenInvokingAppendMemoryCopyWithExternalHostPtrThenRequireTaskCountUpdate) {
+    ze_command_queue_desc_t desc = {};
+    desc.mode = ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS;
+    ze_result_t returnValue;
+    std::unique_ptr<L0::CommandList> commandList(CommandList::createImmediate(productFamily, device, &desc, false, NEO::EngineGroupType::compute, returnValue));
+    ASSERT_NE(nullptr, commandList);
+    auto whiteBoxCmdList = static_cast<CommandList *>(commandList.get());
+
+    EXPECT_EQ(device, commandList->getDevice());
+    EXPECT_TRUE(commandList->isImmediateType());
+    EXPECT_NE(nullptr, whiteBoxCmdList->cmdQImmediate);
+
+    constexpr size_t transferSize = sizeof(size_t);
+    void *hostPtr;
+    ze_host_mem_alloc_desc_t hostDesc = {};
+    ASSERT_EQ(ZE_RESULT_SUCCESS, context->allocHostMem(&hostDesc, transferSize, 0u, &hostPtr));
+    size_t externalHostAlloc = 0;
+    CmdListMemoryCopyParams copyParams = {};
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopy(hostPtr, &externalHostAlloc, sizeof(size_t), nullptr, 0, nullptr, copyParams));
+
+    auto ultCsr = static_cast<NEO::UltCommandStreamReceiver<FamilyType> *>(whiteBoxCmdList->getCsr(false));
+
+    if (L0GfxCoreHelper::useImmediateComputeFlushTask(device->getNEODevice()->getRootDeviceEnvironment())) {
+        ImmediateDispatchFlags &recordedImmediateDispatchFlags = ultCsr->recordedImmediateDispatchFlags;
+        EXPECT_TRUE(recordedImmediateDispatchFlags.requireTaskCountUpdate);
+    } else {
+        DispatchFlags &recordedDispatchFlags = ultCsr->recordedDispatchFlags;
+        EXPECT_TRUE(recordedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
+
+    const ze_copy_region_t region = {0U, 0U, 0U, 1, 1, 0U};
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopyRegion(hostPtr, &region, 0, 0, &externalHostAlloc, &region, 0, 0, nullptr, 0, nullptr, copyParams));
+
+    if (L0GfxCoreHelper::useImmediateComputeFlushTask(device->getNEODevice()->getRootDeviceEnvironment())) {
+        ImmediateDispatchFlags &recordedImmediateDispatchFlags = ultCsr->recordedImmediateDispatchFlags;
+        EXPECT_TRUE(recordedImmediateDispatchFlags.requireTaskCountUpdate);
+    } else {
+        DispatchFlags &recordedDispatchFlags = ultCsr->recordedDispatchFlags;
+        EXPECT_TRUE(recordedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, context->freeMem(hostPtr));
+}
+
 TEST_F(CommandListCreateTests, whenInvokingAppendMemoryCopyFromContextForImmediateCommandListThenSuccessIsReturned) {
     const ze_command_queue_desc_t desc = {};
     ze_result_t returnValue;
@@ -3254,7 +3328,7 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingBeforeCommand
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     auto baseAddr = event->getGpuAddress(device);
     auto contextOffset = event->getContextStartOffset();
@@ -3292,7 +3366,7 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingBeforeCommand
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     auto baseAddr = event->getGpuAddress(device);
     auto contextOffset = event->getContextStartOffset();
@@ -3339,7 +3413,7 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandF
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     commandList->appendEventForProfilingCopyCommand(event.get(), false);
 
@@ -3374,7 +3448,7 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandF
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     commandList->appendEventForProfilingCopyCommand(event.get(), false);
 
@@ -3409,7 +3483,7 @@ HWTEST2_F(CommandListCreateTests, givenCopyCommandListWhenProfilingAfterCommandF
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     commandList->appendEventForProfilingCopyCommand(event.get(), false);
 
@@ -3492,6 +3566,8 @@ TEST(BuiltinTypeHelperTest, givenNonStatelessAndNonHeaplessWhenAdjustBuiltinType
     bool isHeapless = false;
 
     EXPECT_EQ(Builtin::copyBufferBytes, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferBytes>(isStateless, isHeapless));
+    EXPECT_EQ(Builtin::copyBufferRectBytes2d, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes2d>(isStateless, isHeapless));
+    EXPECT_EQ(Builtin::copyBufferRectBytes3d, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes3d>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::copyBufferToBufferMiddle, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferMiddle>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::copyBufferToBufferSide, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferSide>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::fillBufferImmediate, BuiltinTypeHelper::adjustBuiltinType<Builtin::fillBufferImmediate>(isStateless, isHeapless));
@@ -3506,6 +3582,8 @@ TEST(BuiltinTypeHelperTest, givenStatelessAndNonHeaplessWhenAdjustBuiltinTypeIsC
     bool isHeapless = false;
 
     EXPECT_EQ(Builtin::copyBufferBytesStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferBytes>(isStateless, isHeapless));
+    EXPECT_EQ(Builtin::copyBufferRectBytes2dStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes2d>(isStateless, isHeapless));
+    EXPECT_EQ(Builtin::copyBufferRectBytes3dStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes3d>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::copyBufferToBufferMiddleStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferMiddle>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::copyBufferToBufferSideStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferSide>(isStateless, isHeapless));
     EXPECT_EQ(Builtin::fillBufferImmediateStateless, BuiltinTypeHelper::adjustBuiltinType<Builtin::fillBufferImmediate>(isStateless, isHeapless));
@@ -3605,15 +3683,6 @@ HWTEST2_F(CommandListCreateTests, givenDummyBlitNotRequiredWhenEncodeMiFlushThen
     EXPECT_EQ(commandContainer.getResidencyContainer().size(), 0u);
 }
 
-HWTEST_F(CommandListCreateTests, givenEmptySvmManagerWhenIsAllocationImportedThenFalseIsReturned) {
-    auto commandListCore = std::make_unique<WhiteBox<L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
-    commandListCore->initialize(device, NEO::EngineGroupType::compute, 0u);
-
-    NEO::SVMAllocsManager *svmManager = nullptr;
-
-    EXPECT_FALSE(commandListCore->isAllocationImported(nullptr, svmManager));
-}
-
 using CommandListAppendLaunchKernelWithArgumentsTests = Test<CommandListCreateFixture>;
 TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenNullptrInputWhenAppendLaunchKernelWithArgumentsThenErrorIsReturned) {
 
@@ -3645,7 +3714,7 @@ TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenNullptrInputWhenApp
     kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
 
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
-    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+    mockModule->kernelImmData.push_back(std::move(kernelImmutableData));
 
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();
@@ -3671,7 +3740,7 @@ TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenIncorrectGroupSizeW
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();
 
-    const void *arguments = nullptr;
+    void *arguments = nullptr;
     retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, &arguments, nullptr, nullptr, 0, nullptr);
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION, retVal);
 }
@@ -3719,7 +3788,7 @@ TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, whenAppendLaunchKernelWi
     kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
 
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
-    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+    mockModule->kernelImmData.push_back(std::move(kernelImmutableData));
 
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();
@@ -3737,7 +3806,7 @@ TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, whenAppendLaunchKernelWi
     uint8_t argImmediate[16]{};
     size_t argSlm = 0x60;
 
-    const void *arguments[] = {&argBuffer, &argImage, &argSampler, &argImmediate, &argSlm};
+    void *arguments[] = {&argBuffer, &argImage, &argSampler, &argImmediate, &argSlm};
     retVal = zeCommandListAppendLaunchKernelWithArguments(commandList->toHandle(), kernel.toHandle(), groupCounts, groupSizes, arguments, nullptr, nullptr, 0, nullptr);
     EXPECT_EQ(ZE_RESULT_SUCCESS, retVal);
 
@@ -3784,7 +3853,7 @@ TEST_F(CommandListAppendLaunchKernelWithArgumentsTests, givenKernelWithoutArgume
     kernelImmutableData->initialize(&kernelInfo, device, 0, nullptr, nullptr, false);
 
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::user);
-    mockModule->kernelImmDatas.push_back(std::move(kernelImmutableData));
+    mockModule->kernelImmData.push_back(std::move(kernelImmutableData));
 
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();

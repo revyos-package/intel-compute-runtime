@@ -66,16 +66,12 @@ HWTEST2_F(XeLpgHwInfoTests, whenCheckDirectSubmissionEnginesThenProperValuesAreS
             EXPECT_FALSE(directSubmissionEngines.data[i].submitOnInit);
             EXPECT_FALSE(directSubmissionEngines.data[i].useNonDefault);
             EXPECT_TRUE(directSubmissionEngines.data[i].useRootDevice);
-            EXPECT_FALSE(directSubmissionEngines.data[i].useInternal);
-            EXPECT_FALSE(directSubmissionEngines.data[i].useLowPriority);
             break;
         default:
             EXPECT_FALSE(directSubmissionEngines.data[i].engineSupported);
             EXPECT_FALSE(directSubmissionEngines.data[i].submitOnInit);
             EXPECT_FALSE(directSubmissionEngines.data[i].useNonDefault);
             EXPECT_FALSE(directSubmissionEngines.data[i].useRootDevice);
-            EXPECT_FALSE(directSubmissionEngines.data[i].useInternal);
-            EXPECT_FALSE(directSubmissionEngines.data[i].useLowPriority);
         }
     }
 }
@@ -340,7 +336,8 @@ HWTEST2_F(XeLpgProductHelperTests, whenCheckPreferredAllocationMethodThenAllocat
         auto allocationType = static_cast<AllocationType>(i);
         auto preferredAllocationMethod = productHelper->getPreferredAllocationMethod(allocationType);
         if (allocationType == AllocationType::tagBuffer ||
-            allocationType == AllocationType::timestampPacketTagBuffer) {
+            allocationType == AllocationType::timestampPacketTagBuffer ||
+            allocationType == AllocationType::hostFunction) {
             EXPECT_FALSE(preferredAllocationMethod.has_value());
         } else {
             EXPECT_TRUE(preferredAllocationMethod.has_value());

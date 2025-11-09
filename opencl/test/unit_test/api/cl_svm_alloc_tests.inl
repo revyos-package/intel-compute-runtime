@@ -26,7 +26,6 @@ class ClSvmAllocTemplateTests : public ApiFixture<>,
   public:
     void SetUp() override {
         ApiFixture::setUp();
-        REQUIRE_SVM_OR_SKIP(pDevice);
     }
 
     void TearDown() override {
@@ -49,7 +48,7 @@ TEST(clSVMAllocTest, givenPlatformWithoutDevicesWhenClSVMAllocIsCalledThenDevice
     }
     cl_device_id deviceId = clDevice.get();
     cl_int retVal;
-    auto context = ReleaseableObjectPtr<Context>(Context::create<Context>(nullptr, ClDeviceVector(&deviceId, 1), nullptr, nullptr, retVal));
+    auto context = ReleaseableObjectPtr<MockContext>(MockContext::create<MockContext>(nullptr, ClDeviceVector(&deviceId, 1), nullptr, nullptr, retVal));
     EXPECT_EQ(CL_SUCCESS, retVal);
 
     EXPECT_EQ(0u, platform()->getNumDevices());
@@ -187,7 +186,6 @@ TEST_F(ClSVMAllocTests, GivenZeroAlignmentWhenAllocatingSvmThenSvmIsAllocated) {
 }
 
 TEST_F(ClSVMAllocTests, givenUnrestrictedFlagWhenCreatingSvmAllocThenAllowSizeBiggerThanMaxMemAllocSize) {
-    REQUIRE_SVM_OR_SKIP(pDevice);
 
     const size_t maxMemAllocSize = 128;
 
@@ -253,7 +251,6 @@ TEST_F(ClSVMAllocTests, GivenAlignmentTooLargeWhenAllocatingSvmThenSvmIsNotAlloc
 };
 
 TEST_F(ClSVMAllocTests, GivenForcedFineGrainedSvmWhenCreatingSvmAllocThenAllocationIsCreated) {
-    REQUIRE_SVM_OR_SKIP(pDevice);
     DebugManagerStateRestore restore{};
     HardwareInfo *hwInfo = pDevice->getExecutionEnvironment()->rootDeviceEnvironments[testedRootDeviceIndex]->getMutableHardwareInfo();
     hwInfo->capabilityTable.ftrSupportsCoherency = false;
@@ -269,7 +266,6 @@ TEST_F(ClSVMAllocTests, GivenForcedFineGrainedSvmWhenCreatingSvmAllocThenAllocat
 }
 
 TEST(clSvmAllocTest, givenSubDeviceWhenCreatingSvmAllocThenProperDeviceBitfieldIsPassed) {
-    REQUIRE_SVM_OR_SKIP(defaultHwInfo.get());
     UltClDeviceFactory deviceFactory{1, 2};
     auto device = deviceFactory.subDevices[1];
 

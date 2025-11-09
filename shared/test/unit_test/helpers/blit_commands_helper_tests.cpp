@@ -9,6 +9,8 @@
 
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_stream/command_stream_receiver.h"
+#include "shared/source/gmm_helper/client_context/gmm_client_context.h"
+#include "shared/source/gmm_helper/resource_info.h"
 #include "shared/source/helpers/blit_properties.h"
 #include "shared/source/helpers/definitions/command_encoder_args.h"
 #include "shared/test/common/cmd_parse/hw_parse.h"
@@ -74,48 +76,7 @@ TEST(BlitCommandsHelperTest, GivenBufferParamsWhenConstructingPropertiesForReadW
     blitProperties.dstAllocation->hostPtrTaskCountAssignment--;
 }
 
-TEST(BlitCommandsHelperTest, GivenTwoGraphicAllocationsConstructPropertiesForSystemCopyCreatedCorrectly) {
-    uint32_t src[] = {1, 2, 3, 4};
-    uint32_t dst[] = {4, 3, 2, 1};
-    uint32_t clear[] = {5, 6, 7, 8};
-    uint64_t srcGpuAddr = 0x12345;
-    uint64_t dstGpuAddr = 0x54321;
-    uint64_t clearGpuAddr = 0x5678;
-    std::unique_ptr<MockGraphicsAllocation> srcAlloc(new MockGraphicsAllocation(src, srcGpuAddr, sizeof(src)));
-    std::unique_ptr<MockGraphicsAllocation> dstAlloc(new MockGraphicsAllocation(dst, dstGpuAddr, sizeof(dst)));
-    std::unique_ptr<GraphicsAllocation> clearColorAllocation(new MockGraphicsAllocation(clear, clearGpuAddr, sizeof(clear)));
-
-    Vec3<size_t> srcOffsets{1, 2, 3};
-    Vec3<size_t> dstOffsets{3, 2, 1};
-    Vec3<size_t> copySize{2, 2, 2};
-
-    size_t srcRowPitch = 2;
-    size_t srcSlicePitch = 3;
-
-    size_t dstRowPitch = 2;
-    size_t dstSlicePitch = 3;
-
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForSystemCopy(dstAlloc.get(), srcAlloc.get(), dstGpuAddr, srcGpuAddr,
-                                                                                dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
-                                                                                dstRowPitch, dstSlicePitch, clearColorAllocation.get());
-
-    EXPECT_EQ(blitProperties.blitDirection, BlitterConstants::BlitDirection::bufferToBuffer);
-    EXPECT_EQ(blitProperties.dstAllocation, dstAlloc.get());
-    EXPECT_EQ(blitProperties.srcAllocation, srcAlloc.get());
-    EXPECT_EQ(blitProperties.clearColorAllocation, clearColorAllocation.get());
-    EXPECT_EQ(blitProperties.dstGpuAddress, dstGpuAddr);
-    EXPECT_EQ(blitProperties.srcGpuAddress, srcGpuAddr);
-    EXPECT_EQ(blitProperties.copySize, copySize);
-    EXPECT_EQ(blitProperties.dstOffset, dstOffsets);
-    EXPECT_EQ(blitProperties.srcOffset, srcOffsets);
-    EXPECT_EQ(blitProperties.dstRowPitch, dstRowPitch);
-    EXPECT_EQ(blitProperties.dstSlicePitch, dstSlicePitch);
-    EXPECT_EQ(blitProperties.srcRowPitch, srcRowPitch);
-    EXPECT_EQ(blitProperties.srcSlicePitch, srcSlicePitch);
-    EXPECT_FALSE(blitProperties.isSystemMemoryPoolUsed);
-}
-
-TEST(BlitCommandsHelperTest, GivenSourceGraphicAllocationConstructPropertiesForSystemCopyCreatedCorrectly) {
+TEST(BlitCommandsHelperTest, GivenSourceGraphicAllocationAndDestinationIsSystemAllocatedConstructPropertiesForCopyCreatedCorrectly) {
     uint32_t src[] = {1, 2, 3, 4};
     uint32_t clear[] = {5, 6, 7, 8};
     uint64_t srcGpuAddr = 0x12345;
@@ -135,9 +96,9 @@ TEST(BlitCommandsHelperTest, GivenSourceGraphicAllocationConstructPropertiesForS
     size_t dstRowPitch = 0;
     size_t dstSlicePitch = 0;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForSystemCopy(dstAlloc, srcAlloc.get(), dstGpuAddr, srcGpuAddr,
-                                                                                dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
-                                                                                dstRowPitch, dstSlicePitch, clearColorAllocation.get());
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc, dstGpuAddr, srcAlloc.get(), srcGpuAddr,
+                                                                          dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
+                                                                          dstRowPitch, dstSlicePitch, clearColorAllocation.get());
 
     EXPECT_EQ(blitProperties.blitDirection, BlitterConstants::BlitDirection::bufferToBuffer);
     EXPECT_EQ(blitProperties.dstAllocation, nullptr);
@@ -154,7 +115,7 @@ TEST(BlitCommandsHelperTest, GivenSourceGraphicAllocationConstructPropertiesForS
     EXPECT_TRUE(blitProperties.isSystemMemoryPoolUsed);
 }
 
-TEST(BlitCommandsHelperTest, GivenDestinationGraphicAllocationConstructPropertiesForSystemCopyCreatedCorrectly) {
+TEST(BlitCommandsHelperTest, GivenDestinationGraphicAllocationAndSrcIsSystemAllocatedConstructPropertiesForCopyCreatedCorrectly) {
     uint32_t dst[] = {1, 2, 3, 4};
     uint32_t clear[] = {5, 6, 7, 8};
     uint64_t srcGpuAddr = 0x12345;
@@ -174,9 +135,9 @@ TEST(BlitCommandsHelperTest, GivenDestinationGraphicAllocationConstructPropertie
     size_t dstRowPitch = 2;
     size_t dstSlicePitch = 3;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForSystemCopy(dstAlloc.get(), srcAlloc, dstGpuAddr, srcGpuAddr,
-                                                                                dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
-                                                                                dstRowPitch, dstSlicePitch, clearColorAllocation.get());
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), dstGpuAddr, srcAlloc, srcGpuAddr,
+                                                                          dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
+                                                                          dstRowPitch, dstSlicePitch, clearColorAllocation.get());
 
     EXPECT_EQ(blitProperties.blitDirection, BlitterConstants::BlitDirection::bufferToBuffer);
     EXPECT_EQ(blitProperties.dstAllocation, dstAlloc.get());
@@ -215,7 +176,7 @@ TEST(BlitCommandsHelperTest, GivenBufferParamsWhenConstructingPropertiesForBuffe
     size_t dstRowPitch = 2;
     size_t dstSlicePitch = 3;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), srcAlloc.get(),
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), 0, srcAlloc.get(), 0,
                                                                           dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                           dstRowPitch, dstSlicePitch, clearColorAllocation.get());
 
@@ -254,7 +215,7 @@ TEST(BlitCommandsHelperTest, GivenCopySizeYAndZEqual0WhenConstructingPropertiesF
     size_t dstRowPitch = 2;
     size_t dstSlicePitch = 3;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), srcAlloc.get(),
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), 0, srcAlloc.get(), 0,
                                                                           dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                           dstRowPitch, dstSlicePitch, clearColorAllocation.get());
     Vec3<size_t> expectedSize{copySize.x, 1, 1};
@@ -390,7 +351,7 @@ HWTEST_F(BlitTests, givenMemoryWhenFillPatternWithBlitThenCommandIsProgrammed) {
                                           reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
                                           MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -400,12 +361,12 @@ HWTEST_F(BlitTests, givenMemoryWhenFillPatternWithBlitThenCommandIsProgrammed) {
     EXPECT_NE(cmdList.end(), itor);
 }
 
-HWTEST_F(BlitTests, givenConstructPropertiesForSystemMemoryFillCreatedSuccessfully) {
+HWTEST_F(BlitTests, givenSystemAllocatedMemoryWhenConstructPropertiesForMemoryFillIsCalledThenVerifyPropertiesAreCreatedSuccessfully) {
     uint32_t pattern[4] = {1, 0, 0, 0};
     uint64_t dstPtr = 0x1234;
     size_t size = 0x1000;
 
-    auto blitProperties = BlitProperties::constructPropertiesForSystemMemoryFill(dstPtr, size, pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(nullptr, dstPtr, size, pattern, sizeof(uint32_t), 0);
 
     EXPECT_EQ(blitProperties.dstAllocation, nullptr);
     EXPECT_EQ(blitProperties.dstGpuAddress, dstPtr);
@@ -423,7 +384,7 @@ HWTEST_F(BlitTests, givenUnalignedPatternSizeWhenDispatchingBlitFillThenSetCorre
 
     size_t copySize = 0x800'0000;
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, copySize, pattern, 3, 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, copySize, pattern, 3, 0);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -448,7 +409,7 @@ HWTEST_F(BlitTests, givenMemorySizeBiggerThanMaxWidthButLessThanTwiceMaxWidthWhe
                                           reinterpret_cast<void *>(0x1234), 0x1000, 0, (2 * BlitterConstants::maxBlitWidth) - 1,
                                           MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -471,7 +432,7 @@ HWTEST_F(BlitTests, givenMemoryPointerOffsetVerifyCorrectDestinationBaseAddress)
                                           reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t),
                                           MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0x234);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0x234);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -500,7 +461,7 @@ HWTEST_F(BlitTests, givenMemorySizeTwiceBiggerThanMaxWidthWhenFillPatternWithBli
                                           reinterpret_cast<void *>(0x1234), 0x1000, 0, (2 * BlitterConstants::maxBlitWidth * sizeof(uint32_t)),
                                           MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -530,7 +491,7 @@ HWTEST_F(BlitTests, givenMemorySizeIsLessThanTwicenMaxWidthWhenFillPatternWithBl
                                           reinterpret_cast<void *>(0x1234), 0x1000, 0, ((BlitterConstants::maxBlitWidth + 1) * sizeof(uint32_t)),
                                           MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
 
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&mockAllocation, 0, mockAllocation.getUnderlyingBufferSize(), pattern, sizeof(uint32_t), 0);
 
     BlitCommandsHelper<FamilyType>::dispatchBlitMemoryColorFill(blitProperties, stream, pDevice->getRootDeviceEnvironmentRef());
     GenCmdList cmdList;
@@ -562,15 +523,15 @@ HWTEST2_F(BlitTests, givenXe2HpgCoreWhenAppendBlitCommandsMemCopyIsCalledThenNot
     EXPECT_EQ(bltCmd.getCompressionFormat(), 0);
 }
 
-HWTEST2_F(BlitTests, givenXe2HpgCoreWhenAppendBlitCommandsMemCopyIsCalledWithDebugFlagSetThenNothingChanged, IsXe2HpgCore) {
+HWTEST2_F(BlitTests, givenXe2HpgCoreWhenAppendBlitCommandsMemCopyIsCalledWithDebugFlagSetThenCompFormatChanged, IsXe2HpgCore) {
     auto bltCmd = FamilyType::cmdInitXyCopyBlt;
     DebugManagerStateRestore restore{};
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(1);
     BlitProperties properties = {};
     properties.dstAllocation = nullptr;
     properties.srcAllocation = nullptr;
     NEO::BlitCommandsHelper<FamilyType>::appendBlitCommandsMemCopy(properties, bltCmd, pDevice->getRootDeviceEnvironment());
-    EXPECT_EQ(bltCmd.getCompressionFormat(), 0);
+    EXPECT_EQ(bltCmd.getCompressionFormat(), 1u);
 }
 
 HWTEST2_F(BlitTests, givenXe2HpgCoreWhenDstGraphicAlloctionWhenAppendBlitCommandsMemCopyIsCalledThenCompressionChanged, IsXe2HpgCore) {
@@ -599,9 +560,9 @@ HWTEST2_F(BlitTests, givenXe2HpgCoreWhenDstGraphicAlloctionAndStatelessFlagSetWh
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 1;
-    uint32_t statelessCompressionFormat = debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get();
+    uint32_t statelessCompressionFormat = 15u;
     debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(statelessCompressionFormat);
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -621,7 +582,7 @@ HWTEST2_F(BlitTests, givenXe2HpgCoreWhenDstGraphicAlloctionAndStatelessFlagSetAn
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 2;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
+    debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.set(static_cast<int32_t>(newCompressionFormat));
     debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
@@ -661,10 +622,8 @@ HWTEST2_F(BlitTests, givenXe2HpgCoreWhenSrcGraphicAlloctionAndStatelessFlagSetWh
     BlitProperties properties = {};
     DebugManagerStateRestore dbgRestore;
 
-    uint32_t newCompressionFormat = 1;
-    uint32_t statelessCompressionFormat = debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get();
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    uint32_t statelessCompressionFormat = 15u;
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(statelessCompressionFormat);
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -684,8 +643,7 @@ HWTEST2_F(BlitTests, givenXe2HpgCoreWhenSrcGraphicAlloctionAndStatelessFlagSetAn
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 2;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(static_cast<int32_t>(newCompressionFormat));
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -708,24 +666,10 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenAppendBlitCommandsMemCopyIsCalledThenNothin
     EXPECT_EQ(bltCmd.getCompressionFormat(), 0);
 }
 
-HWTEST2_F(BlitTests, givenXe3CoreWhenAppendBlitCommandsMemCopyIsCalledWithDebugFlagSetThenNothingChanged, IsXe3Core) {
-    auto bltCmd = FamilyType::cmdInitXyCopyBlt;
-    DebugManagerStateRestore restore{};
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
-    BlitProperties properties = {};
-    properties.dstAllocation = nullptr;
-    properties.srcAllocation = nullptr;
-    NEO::BlitCommandsHelper<FamilyType>::appendBlitCommandsMemCopy(properties, bltCmd, pDevice->getRootDeviceEnvironment());
-    EXPECT_EQ(bltCmd.getCompressionFormat(), 0);
-}
-
 HWTEST2_F(BlitTests, givenXe3CoreWhenDstGraphicAlloctionWhenAppendBlitCommandsMemCopyIsCalledThenCompressionChanged, IsXe3Core) {
     auto bltCmd = FamilyType::cmdInitXyCopyBlt;
     BlitProperties properties = {};
-    DebugManagerStateRestore dbgRestore;
-
-    uint32_t newCompressionFormat = 1;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
+    uint32_t newCompressionFormat = 2;
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -736,6 +680,11 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenDstGraphicAlloctionWhenAppendBlitCommandsMe
     properties.dstAllocation = &mockAllocation;
     properties.srcAllocation = nullptr;
     NEO::BlitCommandsHelper<FamilyType>::appendBlitCommandsMemCopy(properties, bltCmd, pDevice->getRootDeviceEnvironment());
+
+    if (pDevice->getProductHelper().isCompressionFormatFromGmmRequired()) {
+        auto resourceFormat = mockAllocation.getDefaultGmm()->gmmResourceInfo->getResourceFormat();
+        newCompressionFormat = pDevice->getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
+    }
     EXPECT_EQ(bltCmd.getCompressionFormat(), newCompressionFormat);
 }
 
@@ -745,9 +694,9 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenDstGraphicAlloctionAndStatelessFlagSetWhenA
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 1;
-    uint32_t statelessCompressionFormat = debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get();
+    uint32_t statelessCompressionFormat = 15u;
     debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(statelessCompressionFormat);
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -767,8 +716,7 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenDstGraphicAlloctionAndStatelessFlagSetAndSy
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 1;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(static_cast<int32_t>(newCompressionFormat));
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -788,7 +736,7 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenSrcGraphicAlloctionWhenAppendBlitCommandsMe
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 1;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(static_cast<int32_t>(newCompressionFormat));
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -807,10 +755,8 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenSrcGraphicAlloctionAndStatelessFlagSetWhenA
     BlitProperties properties = {};
     DebugManagerStateRestore dbgRestore;
 
-    uint32_t newCompressionFormat = 1;
-    uint32_t statelessCompressionFormat = debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get();
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    uint32_t statelessCompressionFormat = 15u;
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(statelessCompressionFormat);
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -830,8 +776,7 @@ HWTEST2_F(BlitTests, givenXe3CoreWhenSrcGraphicAlloctionAndStatelessFlagSetAndSy
     DebugManagerStateRestore dbgRestore;
 
     uint32_t newCompressionFormat = 1;
-    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(newCompressionFormat));
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(static_cast<int32_t>(newCompressionFormat));
 
     auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
     gmm->setCompressionEnabled(true);
@@ -977,7 +922,7 @@ HWTEST2_F(BlitTests, givenMemoryAndImageWhenDispatchCopyImageCallThenCommandAdde
     size_t dstRowPitch = dstSize.x;
     size_t dstSlicePitch = dstSize.y;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(&dstAlloc, &srcAlloc,
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(&dstAlloc, 0, &srcAlloc, 0,
                                                                           dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                           dstRowPitch, dstSlicePitch, &clearColorAllocation);
 
@@ -1130,26 +1075,71 @@ HWTEST2_F(BlitTests, givenPlatformWhenCallingDispatchPreBlitCommandThenNoneMiFlu
     ASSERT_EQ(hwParser.cmdList.end(), cmdIterator);
 }
 
-HWTEST_F(BlitTests, givenPlatformWhenCallingDispatchPreBlitCommandThenNoneMiFlushDwIsProgramed) {
-    auto mockTagAllocator = std::make_unique<MockTagAllocator<>>(pDevice->getRootDeviceIndex(), pDevice->getExecutionEnvironment()->memoryManager.get(), 10u);
-    auto tag = mockTagAllocator->getTag();
-    BlitProperties blitProperties{};
-    blitProperties.copySize = {1, 1, 1};
-    BlitPropertiesContainer blitPropertiesContainer1;
-    blitPropertiesContainer1.push_back(blitProperties);
-    blitPropertiesContainer1.push_back(blitProperties);
-    blitPropertiesContainer1.push_back(blitProperties);
+HWTEST_F(BlitTests, givenBlitPropertiesContainerWithNullSrcOrDstAllocationWhenEstimatingCommandsSizeThenCalculateForAllAttachedProperties) {
+    const auto max2DBlitSize = BlitterConstants::maxBlitWidth * BlitterConstants::maxBlitHeight;
+    const uint32_t numberOfBlts = 3;
+    const size_t bltSize = (3 * max2DBlitSize);
+    const uint32_t numberOfBlitOperations = 4;
 
-    auto estimatedSizeWithoutNode = BlitCommandsHelper<FamilyType>::estimateBlitCommandsSize(
-        blitPropertiesContainer1, false, true, false, false, pDevice->getRootDeviceEnvironment());
-    blitProperties.multiRootDeviceEventSync = tag;
-    BlitPropertiesContainer blitPropertiesContainer2;
-    blitPropertiesContainer2.push_back(blitProperties);
-    blitPropertiesContainer2.push_back(blitProperties);
-    blitPropertiesContainer2.push_back(blitProperties);
-    auto estimatedSizeWithNode = BlitCommandsHelper<FamilyType>::estimateBlitCommandsSize(
-        blitPropertiesContainer2, false, true, false, false, pDevice->getRootDeviceEnvironment());
-    EXPECT_NE(estimatedSizeWithoutNode, estimatedSizeWithNode);
+    auto &rootDeviceEnvironment = pDevice->getRootDeviceEnvironment();
+
+    EncodeDummyBlitWaArgs waArgs{false, &(pDevice->getRootDeviceEnvironmentRef())};
+
+    size_t cmdsSizePerBlit = sizeof(typename FamilyType::XY_COPY_BLT) + EncodeMiArbCheck<FamilyType>::getCommandSize();
+    if (BlitCommandsHelper<FamilyType>::miArbCheckWaRequired()) {
+        cmdsSizePerBlit += EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs);
+    }
+    auto expectedBlitInstructionsSize = cmdsSizePerBlit * numberOfBlts;
+
+    if (BlitCommandsHelper<FamilyType>::preBlitCommandWARequired()) {
+        expectedBlitInstructionsSize += EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs);
+    }
+
+    waArgs.isWaRequired = true;
+    auto baseSize = EncodeMiFlushDW<FamilyType>::getCommandSizeWithWa(waArgs) + sizeof(typename FamilyType::MI_BATCH_BUFFER_END);
+    auto syncSize = 2 * MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, pDevice->getRootDeviceEnvironment());
+
+    // Test both scenarios: dstAllocation=nullptr, srcAllocation=nullptr
+    for (auto isSourceAllocationNullptr : ::testing::Bool()) {
+        size_t expectedAlignedSize = baseSize + syncSize;
+
+        MockGraphicsAllocation bufferMockAllocation(0, 1u, AllocationType::buffer, reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t), MemoryPool::localMemory, MemoryManager::maxOsContextCount);
+        MockGraphicsAllocation hostMockAllocation(0, 1u, AllocationType::externalHostPtr, reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t), MemoryPool::system64KBPages, MemoryManager::maxOsContextCount);
+
+        BlitPropertiesContainer blitPropertiesContainer;
+        for (uint32_t i = 0; i < numberOfBlitOperations; i++) {
+            BlitProperties blitProperties;
+            blitProperties.blitDirection = BlitterConstants::BlitDirection::bufferToHostPtr;
+            blitProperties.auxTranslationDirection = AuxTranslationDirection::none;
+            blitProperties.copySize = {bltSize, 1, 1};
+
+            if (isSourceAllocationNullptr) {
+                blitProperties.dstAllocation = &hostMockAllocation;
+                blitProperties.srcAllocation = nullptr;
+            } else {
+                blitProperties.dstAllocation = nullptr;
+                blitProperties.srcAllocation = &bufferMockAllocation;
+            }
+
+            blitPropertiesContainer.push_back(blitProperties);
+
+            expectedAlignedSize += expectedBlitInstructionsSize;
+
+            bool deviceToHostPostSyncFenceRequired = rootDeviceEnvironment.getProductHelper().isDeviceToHostCopySignalingFenceRequired() &&
+                                                     ((blitProperties.srcAllocation && blitProperties.srcAllocation->isAllocatedInLocalMemoryPool()) &&
+                                                      (blitProperties.dstAllocation && !blitProperties.dstAllocation->isAllocatedInLocalMemoryPool()));
+            if (deviceToHostPostSyncFenceRequired) {
+                expectedAlignedSize += MemorySynchronizationCommands<FamilyType>::getSizeForAdditionalSynchronization(NEO::FenceType::release, rootDeviceEnvironment);
+            }
+        }
+
+        expectedAlignedSize = alignUp(expectedAlignedSize, MemoryConstants::cacheLineSize);
+
+        auto alignedEstimatedSize = BlitCommandsHelper<FamilyType>::estimateBlitCommandsSize(
+            blitPropertiesContainer, false, false, false, false, pDevice->getRootDeviceEnvironment());
+
+        EXPECT_EQ(expectedAlignedSize, alignedEstimatedSize);
+    }
 }
 
 HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesWithAndWithoutUseAdditionalPropertiesWhenCallingDispatchBlitCommandForBufferPerRowThenTheResultsAreTheSame, MatchAny) {
@@ -1175,7 +1165,7 @@ HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesWithAndWithoutUseAdditio
     size_t dstRowPitch = 0;
     size_t dstSlicePitch = 0;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), srcAlloc.get(),
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), 0, srcAlloc.get(), 0,
                                                                           dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                           dstRowPitch, dstSlicePitch, clearColorAllocation.get());
     ASSERT_FALSE(blitProperties.isSystemMemoryPoolUsed);
@@ -1224,7 +1214,7 @@ HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesWithAndWithoutUseAdditio
     size_t dstRowPitch = 0;
     size_t dstSlicePitch = 0;
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), srcAlloc.get(),
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAlloc.get(), 0, srcAlloc.get(), 0,
                                                                           dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                           dstRowPitch, dstSlicePitch, clearColorAllocation.get());
     ASSERT_FALSE(blitProperties.isSystemMemoryPoolUsed);
@@ -1272,7 +1262,7 @@ HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesWithAndWithoutUseAdditio
     size_t dstRowPitch = dstSize.x;
     size_t dstSlicePitch = dstSize.y;
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(&dstAlloc, &srcAlloc,
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(&dstAlloc, 0, &srcAlloc, 0,
                                                                      dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
                                                                      dstRowPitch, dstSlicePitch, &clearColorAllocation);
     ASSERT_FALSE(blitProperties.isSystemMemoryPoolUsed);
@@ -1318,7 +1308,7 @@ HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesAndSingleBytePatternWith
                                     MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
     uint32_t pattern[4] = {};
     pattern[0] = 0x1;
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&dstAlloc, dstSize, pattern, sizeof(uint8_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&dstAlloc, 0, dstSize, pattern, sizeof(uint8_t), 0);
     EXPECT_EQ(1u, blitProperties.fillPatternSize);
 
     auto nBlits = NEO::BlitCommandsHelper<FamilyType>::getNumberOfBlitsForColorFill(blitProperties.copySize, sizeof(uint8_t), pDevice->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
@@ -1355,7 +1345,7 @@ HWTEST2_F(BlitTests, givenPlatformWithBlitSyncPropertiesWithAndWithoutUseAdditio
                                     MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
     uint32_t pattern[4] = {};
     pattern[0] = 0x4567;
-    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&dstAlloc, dstSize, pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(&dstAlloc, 0, dstSize, pattern, sizeof(uint32_t), 0);
     ASSERT_TRUE(blitProperties.isSystemMemoryPoolUsed);
 
     auto nBlitsColorFill = NEO::BlitCommandsHelper<FamilyType>::getNumberOfBlitsForColorFill(blitProperties.copySize, sizeof(uint32_t), pDevice->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
@@ -1396,7 +1386,7 @@ HWTEST2_F(BlitTests, givenSystemMemoryPlatformWithBlitSyncPropertiesWithAndWitho
 
     uint32_t pattern[4] = {};
     pattern[0] = 0x4567;
-    auto blitProperties = BlitProperties::constructPropertiesForSystemMemoryFill(reinterpret_cast<uint64_t>(dstPtr), dstSize, pattern, sizeof(uint32_t), 0);
+    auto blitProperties = BlitProperties::constructPropertiesForMemoryFill(nullptr, reinterpret_cast<uint64_t>(dstPtr), dstSize, pattern, sizeof(uint32_t), 0);
     ASSERT_TRUE(blitProperties.isSystemMemoryPoolUsed);
 
     auto nBlitsColorFill = NEO::BlitCommandsHelper<FamilyType>::getNumberOfBlitsForColorFill(blitProperties.copySize, sizeof(uint32_t), pDevice->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
@@ -1450,4 +1440,259 @@ HWTEST2_F(BlitTests, givenXyCopyBltCommandWhenApplyBlitPropertiesIsCalledThenNot
     EXPECT_EQ(memcmp(&bltCmd, &bltCmdBefore, sizeof(XY_COPY_BLT)), 0);
     NEO::BlitCommandsHelper<FamilyType>::applyAdditionalBlitProperties(properties, bltCmd, pDevice->getRootDeviceEnvironment(), true);
     EXPECT_EQ(memcmp(&bltCmd, &bltCmdBefore, sizeof(XY_COPY_BLT)), 0);
+}
+
+HWTEST2_F(BlitTests, givenSrcAndDstAllocationWithCompressionEnabledWhenAppendBlitCommandsBlockCopyThenSetSrcAndDstTargetMemToLocalMemAndCompressionHandled, IsXeHpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties{};
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    gmm->setCompressionEnabled(true);
+    MockGraphicsAllocation mockDstAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x1234),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockSrcAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x2345),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    mockDstAllocation.setGmm(gmm.get(), 0);
+    mockSrcAllocation.setGmm(gmm.get(), 0);
+
+    properties.dstAllocation = &mockDstAllocation;
+    properties.srcAllocation = &mockSrcAllocation;
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getDestinationCompressionEnable(), XY_BLOCK_COPY_BLT::COMPRESSION_ENABLE::COMPRESSION_ENABLE_COMPRESSION_ENABLE);
+    EXPECT_EQ(blitCmd.getSourceCompressionEnable(), XY_BLOCK_COPY_BLT::COMPRESSION_ENABLE::COMPRESSION_ENABLE_COMPRESSION_ENABLE);
+    EXPECT_EQ(blitCmd.getDestinationAuxiliarysurfacemode(), XY_BLOCK_COPY_BLT::AUXILIARY_SURFACE_MODE_AUX_CCS_E);
+    EXPECT_EQ(blitCmd.getSourceAuxiliarysurfacemode(), XY_BLOCK_COPY_BLT::AUXILIARY_SURFACE_MODE_AUX_CCS_E);
+}
+
+HWTEST2_F(BlitTests, givenSrcAndDstAllocationWithoutCompressionEnabledWhenAppendBlitCommandsBlockCopyThenSetSrcAndDstTargetMemToLocalMemAndCompressionHandled, IsXeHpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties{};
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    gmm->setCompressionEnabled(false);
+    MockGraphicsAllocation mockDstAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x1234),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockSrcAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x2345),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    mockDstAllocation.setGmm(gmm.get(), 0);
+    mockSrcAllocation.setGmm(gmm.get(), 0);
+
+    properties.dstAllocation = &mockDstAllocation;
+    properties.srcAllocation = &mockSrcAllocation;
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getDestinationCompressionEnable(), 0u);
+    EXPECT_EQ(blitCmd.getSourceCompressionEnable(), 0u);
+    EXPECT_EQ(blitCmd.getDestinationAuxiliarysurfacemode(), 0u);
+    EXPECT_EQ(blitCmd.getSourceAuxiliarysurfacemode(), 0u);
+}
+
+HWTEST2_F(BlitTests, givenNullAllocationsWhenAppendBlitCommandsBlockCopyThenSetSrcAndDstTargetMemToLocalMemAndCompressionHandled, IsXeHpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties{};
+
+    properties.dstAllocation = nullptr;
+    properties.srcAllocation = nullptr;
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_LOCAL_MEM);
+    EXPECT_EQ(blitCmd.getDestinationCompressionEnable(), 0u);
+    EXPECT_EQ(blitCmd.getSourceCompressionEnable(), 0u);
+    EXPECT_EQ(blitCmd.getDestinationAuxiliarysurfacemode(), 0u);
+    EXPECT_EQ(blitCmd.getSourceAuxiliarysurfacemode(), 0u);
+}
+
+HWTEST2_F(BlitTests, givenNullAllocationsWhenAdjustControlSurfaceTypeThenSurfaceTypeWillNotChange, IsXeHpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    BlitProperties properties{};
+    properties.srcAllocation = nullptr;
+    properties.dstAllocation = nullptr;
+
+    constexpr auto initialSrcSurface = 0; // CONTROL_SURFACE_TYPE_3D
+    constexpr auto initialDstSurface = 0; // CONTROL_SURFACE_TYPE_3D
+
+    BlitCommandsHelper<FamilyType>::adjustControlSurfaceType(properties, blitCmd);
+
+    EXPECT_EQ(blitCmd.getSourceControlSurfaceType(), initialSrcSurface);
+    EXPECT_EQ(blitCmd.getDestinationControlSurfaceType(), initialDstSurface);
+}
+
+HWTEST2_F(BlitTests, givenSrcAndDstAllocationWithCompressionEnabledAndForceBufferCompressionFormatSetWhenAppendBlitCommandsBlockCopyIsCalledThenSetSrcAndDstTargetMemToSystemMemAndCompressionHandled, IsAtLeastXe2HpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties = {};
+    DebugManagerStateRestore dbgRestore;
+
+    uint32_t compressionFormat = 1;
+    debugManager.flags.ForceBufferCompressionFormat.set(static_cast<int32_t>(compressionFormat));
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    gmm->setCompressionEnabled(true);
+    MockGraphicsAllocation mockDstAllocation(0, 1u /*num gmms*/, AllocationType::buffer, reinterpret_cast<void *>(0x1234), 0x1000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    MockGraphicsAllocation mockSrcAllocation(0, 1u /*num gmms*/, AllocationType::buffer, reinterpret_cast<void *>(0x2345), 0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+    mockDstAllocation.setGmm(gmm.get(), 0);
+    mockSrcAllocation.setGmm(gmm.get(), 0);
+
+    properties.dstAllocation = &mockDstAllocation;
+    properties.srcAllocation = &mockSrcAllocation;
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationCompressionFormat(), compressionFormat);
+    EXPECT_EQ(blitCmd.getSourceCompressionFormat(), compressionFormat);
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+}
+
+HWTEST2_F(BlitTests, givenSrcAllocationWithoutCompressionEnabledAndForceBufferCompressionFormatSetWhenAppendBlitCommandsBlockCopyIsCalledThenSetSrcTargetMemToSystemMemAndCompressionHandled, IsAtLeastXe2HpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties = {};
+    DebugManagerStateRestore dbgRestore;
+
+    MockGraphicsAllocation mockSrcAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x1234),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    gmm->setCompressionEnabled(false);
+    mockSrcAllocation.setGmm(gmm.get(), 0);
+
+    properties.srcAllocation = &mockSrcAllocation;
+    properties.dstAllocation = nullptr;
+
+    debugManager.flags.ForceBufferCompressionFormat.set(1);
+
+    auto initialDstCompressionFormat = blitCmd.getDestinationCompressionFormat();
+    auto initialSrcCompressionFormat = blitCmd.getSourceCompressionFormat();
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationCompressionFormat(), initialDstCompressionFormat);
+    EXPECT_EQ(blitCmd.getSourceCompressionFormat(), initialSrcCompressionFormat);
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+}
+
+HWTEST2_F(BlitTests, givenDstAllocationWithoutCompressionEnabledAndForceBufferCompressionFormatSetWhenAppendBlitCommandsBlockCopyIsCalledThenSetDstTargetMemToSystemMemAndCompressionHandled, IsAtLeastXe2HpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties = {};
+    DebugManagerStateRestore dbgRestore;
+
+    MockGraphicsAllocation mockDstAllocation(0, 1u /*num gmms*/, AllocationType::internalHostMemory, reinterpret_cast<void *>(0x1234),
+                                             0x2000, 0, sizeof(uint32_t), MemoryPool::system4KBPages, MemoryManager::maxOsContextCount);
+
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    gmm->setCompressionEnabled(false);
+    mockDstAllocation.setGmm(gmm.get(), 0);
+
+    properties.dstAllocation = &mockDstAllocation;
+    properties.srcAllocation = nullptr;
+
+    debugManager.flags.ForceBufferCompressionFormat.set(1);
+
+    auto initialDstCompressionFormat = blitCmd.getDestinationCompressionFormat();
+    auto initialSrcCompressionFormat = blitCmd.getSourceCompressionFormat();
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationCompressionFormat(), initialDstCompressionFormat);
+    EXPECT_EQ(blitCmd.getSourceCompressionFormat(), initialSrcCompressionFormat);
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+}
+
+HWTEST2_F(BlitTests, givenNullAllocationsAndForceBufferCompressionFormatSetWhenAppendBlitCommandsBlockCopyIsCalledThenSetSrcAndDstTargetMemToSystemMemAndCompressionHandled, IsAtLeastXe2HpgCore) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    blitCmd.setSourceX1CoordinateLeft(0);
+    blitCmd.setSourceY1CoordinateTop(0);
+    blitCmd.setDestinationX2CoordinateRight(1);
+    blitCmd.setDestinationY2CoordinateBottom(1);
+
+    BlitProperties properties = {};
+    DebugManagerStateRestore dbgRestore;
+
+    properties.dstAllocation = nullptr;
+    properties.srcAllocation = nullptr;
+
+    debugManager.flags.ForceBufferCompressionFormat.set(1);
+
+    auto initialDstCompressionFormat = blitCmd.getDestinationCompressionFormat();
+    auto initialSrcCompressionFormat = blitCmd.getSourceCompressionFormat();
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsBlockCopy(properties, blitCmd, pDevice->getRootDeviceEnvironment());
+
+    EXPECT_EQ(blitCmd.getDestinationCompressionFormat(), initialDstCompressionFormat);
+    EXPECT_EQ(blitCmd.getSourceCompressionFormat(), initialSrcCompressionFormat);
+    EXPECT_EQ(blitCmd.getDestinationTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+    EXPECT_EQ(blitCmd.getSourceTargetMemory(), XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
+}
+
+HWTEST2_F(BlitTests, givenNullAllocationsWhenAppendBlitCommandsForImagesThenSlicePitchesWillBeUpdated, IsNotPVC) {
+    using XY_BLOCK_COPY_BLT = typename FamilyType::XY_BLOCK_COPY_BLT;
+    XY_BLOCK_COPY_BLT blitCmd = FamilyType::cmdInitXyBlockCopyBlt;
+
+    BlitProperties properties{};
+    properties.dstAllocation = nullptr;
+    properties.srcAllocation = nullptr;
+    properties.dstSize = {8, 12, 1};
+    properties.srcSize = {10, 10, 1};
+    properties.dstRowPitch = 0x40;
+    properties.srcRowPitch = 0x10;
+    uint32_t dstSlicePitch = 0;
+    uint32_t srcSlicePitch = 0;
+
+    BlitCommandsHelper<FamilyType>::appendBlitCommandsForImages(properties, blitCmd, pDevice->getRootDeviceEnvironment(), srcSlicePitch, dstSlicePitch);
+
+    EXPECT_NE(dstSlicePitch, 0u);
+    EXPECT_NE(srcSlicePitch, 0u);
 }

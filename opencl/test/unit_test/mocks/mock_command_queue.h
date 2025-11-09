@@ -45,7 +45,6 @@ class MockCommandQueue : public CommandQueue {
     using CommandQueue::queueFamilyIndex;
     using CommandQueue::queueFamilySelected;
     using CommandQueue::queueIndexWithinFamily;
-    using CommandQueue::requiresCacheFlushAfterWalker;
     using CommandQueue::splitBarrierRequired;
     using CommandQueue::throttle;
     using CommandQueue::timestampPacketContainer;
@@ -226,19 +225,22 @@ class MockCommandQueue : public CommandQueue {
     cl_int enqueueResourceBarrier(BarrierCommand *resourceBarrier, cl_uint numEventsInWaitList, const cl_event *eventWaitList,
                                   cl_event *event) override { return CL_SUCCESS; }
 
-    cl_int finish() override {
+    cl_int finish(bool resolvePendingL3Flushes) override {
         ++finishCalledCount;
         return CL_SUCCESS;
     }
 
     cl_int flush() override { return CL_SUCCESS; }
 
+    void programPendingL3Flushes(CommandStreamReceiver &csr, bool &waitForTaskCountRequired, bool resolvePendingL3Flushes) override {
+    }
+
     bool waitForTimestamps(std::span<CopyEngineState> copyEnginesToWait, WaitStatus &status, TimestampPacketContainer *mainContainer, TimestampPacketContainer *deferredContainer) override {
         waitForTimestampsCalled = true;
         return false;
     };
 
-    bool isCompleted(TaskCountType gpgpuTaskCount, const std::span<CopyEngineState> &bcsStates) override;
+    bool isCompleted(TaskCountType gpgpuTaskCount, std::span<const CopyEngineState> bcsStates) override;
 
     bool enqueueMarkerWithWaitListCalled = false;
     bool releaseIndirectHeapCalled = false;
@@ -264,8 +266,10 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     using BaseClass = CommandQueueHw<GfxFamily>;
 
   public:
+    using BaseClass::bcsAllowed;
     using BaseClass::bcsEngineCount;
     using BaseClass::bcsEngines;
+    using BaseClass::bcsInitialized;
     using BaseClass::bcsQueueEngineType;
     using BaseClass::bcsSplitInitialized;
     using BaseClass::bcsStates;
@@ -281,9 +285,9 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     using BaseClass::isBlitAuxTranslationRequired;
     using BaseClass::isCacheFlushOnNextBcsWriteRequired;
     using BaseClass::isCompleted;
+    using BaseClass::isForceStateless;
     using BaseClass::isGpgpuSubmissionForBcsRequired;
     using BaseClass::l3FlushAfterPostSyncEnabled;
-    using BaseClass::l3FlushedAfterCpuRead;
     using BaseClass::latestSentEnqueueType;
     using BaseClass::minimalSizeForBcsSplit;
     using BaseClass::obtainCommandStream;
@@ -292,23 +296,10 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     using BaseClass::prepareCsrDependency;
     using BaseClass::processDispatchForKernels;
     using BaseClass::relaxedOrderingForGpgpuAllowed;
-    using BaseClass::requiresCacheFlushAfterWalker;
     using BaseClass::splitBarrierRequired;
     using BaseClass::taskCount;
     using BaseClass::throttle;
     using BaseClass::timestampPacketContainer;
-
-    void clearBcsStates() {
-        CopyEngineState unusedState{};
-        std::fill(bcsStates.begin(), bcsStates.end(), unusedState);
-    }
-
-    void insertBcsEngine(aub_stream::EngineType bcsEngineType) {
-        const auto index = NEO::EngineHelpers::getBcsIndex(bcsEngineType);
-        const auto engine = &getDevice().getEngine(bcsEngineType, EngineUsage::regular);
-        bcsEngines[index] = engine;
-        bcsQueueEngineType = bcsEngineType;
-    }
 
     MockCommandQueueHw(Context *context,
                        ClDevice *device,
@@ -320,8 +311,20 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
         this->constructBcsEngine(false);
     }
 
+    void clearBcsStates() {
+        CopyEngineState unusedState{};
+        std::fill(bcsStates.begin(), bcsStates.end(), unusedState);
+    }
+
     void clearBcsEngines() {
         std::fill(bcsEngines.begin(), bcsEngines.end(), nullptr);
+    }
+
+    void insertBcsEngine(aub_stream::EngineType bcsEngineType) {
+        const auto index = NEO::EngineHelpers::getBcsIndex(bcsEngineType);
+        const auto engine = &getDevice().getEngine(bcsEngineType, EngineUsage::regular);
+        bcsEngines[index] = engine;
+        bcsQueueEngineType = bcsEngineType;
     }
 
     cl_int flush() override {
@@ -504,7 +507,7 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
         return latestWaitForTimestampsStatus;
     }
 
-    bool isCompleted(TaskCountType gpgpuTaskCount, const std::span<CopyEngineState> &bcsStates) override {
+    bool isCompleted(TaskCountType gpgpuTaskCount, std::span<const CopyEngineState> bcsStates) override {
         isCompletedCalled++;
 
         return CommandQueue::isCompleted(gpgpuTaskCount, bcsStates);
@@ -521,23 +524,46 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
         return BaseClass::enqueueSVMMemcpy(blockingCopy, dstPtr, srcPtr, size, numEventsInWaitList, eventWaitList, event, csrParam);
     }
 
-    cl_int finish() override {
+    cl_int finish(bool resolvePendingL3Flushes) override {
         finishCalledCount++;
-        return BaseClass::finish();
+        return BaseClass::finish(resolvePendingL3Flushes);
     }
 
-    unsigned int lastCommandType;
+    LinearStream *peekCommandStream() {
+        return this->commandStream;
+    }
+
+    ADDMETHOD(processDispatchForBlitEnqueue, BlitProperties, true, {}, (CommandStreamReceiver & blitCommandStreamReceiver, const MultiDispatchInfo &multiDispatchInfo, TimestampPacketDependencies &timestampPacketDependencies, const EventsRequest &eventsRequest, LinearStream *commandStream, uint32_t commandType, bool queueBlocked, bool profilingEnabled, TagNodeBase *multiRootDeviceEventSync), (blitCommandStreamReceiver, multiDispatchInfo, timestampPacketDependencies, eventsRequest, commandStream, commandType, queueBlocked, profilingEnabled, multiRootDeviceEventSync));
+
+    ADDMETHOD(enqueueCommandWithoutKernel, CompletionStamp, true, {}, (Surface * *surfaces, size_t surfaceCount, LinearStream *commandStream, size_t commandStreamStart, bool &blocking, const EnqueueProperties &enqueueProperties, TimestampPacketDependencies &timestampPacketDependencies, EventsRequest &eventsRequest, EventBuilder &eventBuilder, TaskCountType taskLevel, CsrDependencies &csrDeps, CommandStreamReceiver *bcsCsr, bool hasRelaxedOrderingDependencies), (surfaces, surfaceCount, commandStream, commandStreamStart, blocking, enqueueProperties, timestampPacketDependencies, eventsRequest, eventBuilder, taskLevel, csrDeps, bcsCsr, hasRelaxedOrderingDependencies));
+
     std::vector<Kernel *> lastEnqueuedKernels;
     MultiDispatchInfo storedMultiDispatchInfo;
+    BuiltinOpParams kernelParams;
     size_t enqueueWriteImageCounter = 0;
-    bool enqueueWriteImageCallBase = true;
     size_t enqueueReadImageCounter = 0;
-    bool enqueueReadImageCallBase = true;
     size_t enqueueWriteBufferCounter = 0;
-    bool enqueueWriteBufferCallBase = true;
     size_t enqueueReadBufferCounter = 0;
-    bool enqueueReadBufferCallBase = true;
     size_t requestedCmdStreamSize = 0;
+    size_t enqueueSVMMemcpyCalledCount = 0;
+    size_t finishCalledCount = 0;
+    std::atomic<TaskCountType> latestTaskCountWaited{std::numeric_limits<uint32_t>::max()};
+    std::atomic<uint32_t> isCompletedCalled = 0;
+    unsigned int lastCommandType;
+    int setQueueBlocked = -1;
+    int forceGpgpuSubmissionForBcsRequired = -1;
+    int waitForAllEnginesCalledCount = 0;
+    int enqueueMarkerWithWaitListCalledCount = 0;
+    std::optional<WaitStatus> waitForAllEnginesReturnValue{};
+    std::optional<WaitStatus> waitUntilCompleteReturnValue{};
+    struct OverrideReturnValue {
+        bool enabled = false;
+        bool returnValue = false;
+    } overrideIsCacheFlushForBcsRequired;
+    bool enqueueWriteImageCallBase = true;
+    bool enqueueReadImageCallBase = true;
+    bool enqueueWriteBufferCallBase = true;
+    bool enqueueReadBufferCallBase = true;
     bool blockingWriteBuffer = false;
     bool blockingReadBuffer = false;
     bool storeMultiDispatchInfo = false;
@@ -549,25 +575,7 @@ class MockCommandQueueHw : public CommandQueueHw<GfxFamily> {
     bool waitForTimestampsCalled = false;
     bool latestWaitForTimestampsStatus = false;
     bool recordedSkipWait = false;
-    int setQueueBlocked = -1;
-    int forceGpgpuSubmissionForBcsRequired = -1;
-    mutable bool isBlitEnqueueImageAllowed = false;
-    struct OverrideReturnValue {
-        bool enabled = false;
-        bool returnValue = false;
-    } overrideIsCacheFlushForBcsRequired;
-    BuiltinOpParams kernelParams;
-    std::atomic<TaskCountType> latestTaskCountWaited{std::numeric_limits<uint32_t>::max()};
-    std::atomic<uint32_t> isCompletedCalled = 0;
     bool flushCalled = false;
-    std::optional<WaitStatus> waitForAllEnginesReturnValue{};
-    std::optional<WaitStatus> waitUntilCompleteReturnValue{};
-    int waitForAllEnginesCalledCount{0};
-    int enqueueMarkerWithWaitListCalledCount{0};
-    size_t enqueueSVMMemcpyCalledCount{0};
-    size_t finishCalledCount{0};
-    LinearStream *peekCommandStream() {
-        return this->commandStream;
-    }
+    mutable bool isBlitEnqueueImageAllowed = false;
 };
 } // namespace NEO

@@ -97,10 +97,14 @@ size_t SipKernel::getStateSaveAreaSize(Device *device) const {
 
     auto hdr = reinterpret_cast<const NEO::StateSaveAreaHeader *>(stateSaveAreaHeader.data());
 
-    auto numSlices = NEO::GfxCoreHelper::getHighestEnabledSlice(hwInfo);
+    auto numSlices = std::max(hwInfo.gtSystemInfo.MaxSlicesSupported, NEO::GfxCoreHelper::getHighestEnabledSlice(hwInfo));
     size_t stateSaveAreaSize = 0;
     if (hdr->versionHeader.version.major == 4) {
-        stateSaveAreaSize = static_cast<size_t>(hdr->totalWmtpDataSize);
+        if (debugManager.flags.ForceTotalWMTPDataSize.get() > -1) {
+            stateSaveAreaSize = static_cast<size_t>(debugManager.flags.ForceTotalWMTPDataSize.get());
+        } else {
+            stateSaveAreaSize = static_cast<size_t>(hdr->totalWmtpDataSize);
+        }
     } else if (hdr->versionHeader.version.major == 3) {
         stateSaveAreaSize = numSlices *
                                 hdr->regHeaderV3.num_subslices_per_slice *

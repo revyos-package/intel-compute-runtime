@@ -25,12 +25,13 @@ class SysmanProductHelperHw : public SysmanProductHelper {
     // Frequency
     void getFrequencyStepSize(double *pStepSize) override;
     bool isFrequencySetRangeSupported() override;
-    zes_freq_throttle_reason_flags_t getThrottleReasons(LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) override;
+    zes_freq_throttle_reason_flags_t getThrottleReasons(SysmanKmdInterface *pSysmanKmdInterface, SysFsAccessInterface *pSysfsAccess, uint32_t subdeviceId, void *pNext) override;
 
     // Memory
     ze_result_t getMemoryProperties(zes_mem_properties_t *pProperties, LinuxSysmanImp *pLinuxSysmanImp, NEO::Drm *pDrm, SysmanKmdInterface *pSysmanKmdInterface, uint32_t subDeviceId, bool isSubdevice) override;
     ze_result_t getMemoryBandwidth(zes_mem_bandwidth_t *pBandwidth, LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) override;
     void getMemoryHealthIndicator(FirmwareUtil *pFwInterface, zes_mem_health_t *health) override;
+    ze_result_t getNumberOfMemoryChannels(LinuxSysmanImp *pLinuxSysmanImp, uint32_t *pNumChannels) override;
 
     // Performance
     void getMediaPerformanceFactorMultiplier(const double performanceFactor, double *pMultiplier) override;
@@ -63,7 +64,6 @@ class SysmanProductHelperHw : public SysmanProductHelper {
 
     // Firmware
     void getDeviceSupportedFwTypes(FirmwareUtil *pFwInterface, std::vector<std::string> &fwTypes) override;
-    bool isLateBindingSupported() override;
 
     // Ecc
     bool isEccConfigurationSupported() override;

@@ -10,10 +10,12 @@
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/register_offsets.h"
 #include "shared/source/memory_manager/internal_allocation_storage.h"
+#include "shared/source/utilities/staging_buffer_manager.h"
 #include "shared/test/common/cmd_parse/gen_cmd_parse.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
+#include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
 #include "level_zero/core/test/unit_tests/fixtures/cmdlist_fixture.inl"
 #include "level_zero/core/test/unit_tests/fixtures/device_fixture.h"
 #include "level_zero/core/test/unit_tests/mocks/mock_cmdlist.h"
@@ -448,8 +450,12 @@ HWTEST_F(AppendMemoryCopyTests, givenAsyncImmediateCommandListWhenAppendingMemor
     auto cmdQueue = std::make_unique<Mock<CommandQueue>>();
     cmdQueue->csr = ultCsr;
     cmdQueue->isCopyOnlyCommandQueue = true;
-    size_t src = 0;
-    size_t dst = 0;
+
+    constexpr size_t transferSize = sizeof(size_t);
+    void *src, *dst;
+    ze_host_mem_alloc_desc_t hostDesc = {};
+    ASSERT_EQ(ZE_RESULT_SUCCESS, context->allocHostMem(&hostDesc, transferSize, 0u, &src));
+    ASSERT_EQ(ZE_RESULT_SUCCESS, context->allocHostMem(&hostDesc, transferSize, 0u, &dst));
 
     auto commandList = std::make_unique<WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>>>();
     ASSERT_NE(nullptr, commandList);
@@ -477,7 +483,7 @@ HWTEST_F(AppendMemoryCopyTests, givenAsyncImmediateCommandListWhenAppendingMemor
         expectedSize = alignUp(ultCsr->getCmdsSizeForHardwareContext() + sizeof(typename FamilyType::MI_BATCH_BUFFER_START), MemoryConstants::cacheLineSize);
     }
 
-    ASSERT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopy(&dst, &src, sizeof(size_t), nullptr, 0, nullptr, copyParams));
+    ASSERT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopy(dst, src, transferSize, nullptr, 0, nullptr, copyParams));
 
     EXPECT_EQ(expectedSize, ultCsr->getCS(0).getUsed() - sizeUsedBefore);
 
@@ -528,13 +534,16 @@ HWTEST_F(AppendMemoryCopyTests, givenAsyncImmediateCommandListWhenAppendingMemor
     size_t csrOfffset = ultCsr->getCS(0).getUsed();
     size_t cmdListOffset = commandList->commandContainer.getCommandStream()->getUsed();
 
-    ASSERT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopy(&dst, &src, sizeof(size_t), nullptr, 0, nullptr, copyParams));
+    ASSERT_EQ(ZE_RESULT_SUCCESS, commandList->appendMemoryCopy(dst, src, transferSize, nullptr, 0, nullptr, copyParams));
 
     EXPECT_EQ(csrOfffset, ultCsr->getCS(0).getUsed());
 
     EXPECT_FALSE(findTagUpdate(ptrOffset(commandList->commandContainer.getCommandStream()->getCpuBase(), cmdListOffset),
                                commandList->commandContainer.getCommandStream()->getUsed() - cmdListOffset,
                                ultCsr->getTagAllocation()->getGpuAddress()));
+
+    EXPECT_EQ(ZE_RESULT_SUCCESS, context->freeMem(src));
+    EXPECT_EQ(ZE_RESULT_SUCCESS, context->freeMem(dst));
 }
 
 HWTEST_F(AppendMemoryCopyTests, givenSyncImmediateCommandListWhenAppendingMemoryCopyWithCopyEngineThenProgramCmdStreamWithFlushTask) {
@@ -709,7 +718,7 @@ HWTEST_F(AppendMemoryCopyTests, givenCopyCommandListWhenTimestampPassedToMemoryC
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     commandList.appendMemoryCopy(&dst, &src, sizeof(size_t), event->toHandle(), 0, nullptr, copyParams);
     EXPECT_EQ(commandList.appendMemoryCopyBlitCalled, 1u);
@@ -794,7 +803,7 @@ HWTEST2_F(AppendMemoryCopyTests,
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     uint64_t globalStartAddress = event->getGpuAddress(device) + event->getGlobalStartOffset();
     uint64_t contextStartAddress = event->getGpuAddress(device) + event->getContextStartOffset();
@@ -854,7 +863,7 @@ HWTEST2_F(AppendMemoryCopyTests,
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     uint64_t globalStartAddress = event->getGpuAddress(device) + event->getGlobalStartOffset();
     uint64_t contextStartAddress = event->getGpuAddress(device) + event->getContextStartOffset();
@@ -1041,8 +1050,8 @@ HWTEST2_F(AppendMemoryCopyFenceTest, givenDeviceToHostCopyWhenProgrammingThenAdd
 
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
 
-    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device));
-    auto regularEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device, result));
+    auto regularEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     auto csr = device->getNEODevice()->getDefaultEngine().commandStreamReceiver;
     ze_command_queue_desc_t desc = {};
@@ -1226,8 +1235,8 @@ HWTEST2_F(AppendMemoryCopyFenceTest, givenRegularCmdListWhenDeviceToHostCopyProg
 
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
 
-    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device));
-    auto regularEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto hostVisibleEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDescHostVisible, device, result));
+    auto regularEvent = DestroyableZeUniquePtr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     ze_command_queue_desc_t desc = {};
     auto mockCmdQHw = makeZeUniquePtr<MockCommandQueueHw<FamilyType::gfxCoreFamily>>(device, device->getNEODevice()->getDefaultEngine().commandStreamReceiver, &desc);
@@ -1425,10 +1434,23 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithoutStagingThenImportAll
     EXPECT_FALSE(cmdList.getCsr(false)->getInternalAllocationStorage()->getTemporaryAllocations().peekIsEmpty());
 }
 
-HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingThenDontImportAllocation) {
-    NEO::debugManager.flags.EnableCopyWithStagingBuffers.set(1);
-
+HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingAndNonUsmDstThenImportAllocation) {
     MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
+    cmdList.cmdQImmediate = queue.get();
+    cmdList.initialize(device, NEO::EngineGroupType::compute, 0u);
+
+    auto src = alignedMalloc(size, MemoryConstants::cacheLineSize);
+    auto dst = alignedMalloc(size, MemoryConstants::cacheLineSize);
+    auto res = cmdList.appendMemoryCopy(&dst, &src, size, nullptr, 0, nullptr, copyParams);
+    ASSERT_EQ(ZE_RESULT_SUCCESS, res);
+    EXPECT_FALSE(cmdList.getCsr(false)->getInternalAllocationStorage()->getTemporaryAllocations().peekIsEmpty());
+    alignedFree(src);
+    alignedFree(dst);
+}
+
+HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingThenDontImportAllocation) {
+    MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
+    cmdList.callBaseExecute = true;
     cmdList.cmdQImmediate = queue.get();
     cmdList.initialize(device, NEO::EngineGroupType::compute, 0u);
 
@@ -1436,12 +1458,47 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingThenDontImportAl
     auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, nullptr, 0, nullptr, copyParams);
     ASSERT_EQ(ZE_RESULT_SUCCESS, res);
     EXPECT_EQ(2u, cmdList.appendMemoryCopyKernelWithGACalledCount);
-    EXPECT_TRUE(cmdList.getCsr(false)->getInternalAllocationStorage()->getTemporaryAllocations().peekIsEmpty());
+    auto csr = cmdList.getCsr(false);
+    EXPECT_TRUE(csr->getInternalAllocationStorage()->getTemporaryAllocations().peekIsEmpty());
+    auto ultCsr = static_cast<NEO::UltCommandStreamReceiver<FamilyType> *>(csr);
+    if (L0GfxCoreHelper::useImmediateComputeFlushTask(device->getNEODevice()->getRootDeviceEnvironment())) {
+        ImmediateDispatchFlags &recordedImmediateDispatchFlags = ultCsr->recordedImmediateDispatchFlags;
+        EXPECT_TRUE(recordedImmediateDispatchFlags.requireTaskCountUpdate);
+    } else {
+        DispatchFlags &recordedDispatchFlags = ultCsr->recordedDispatchFlags;
+        EXPECT_TRUE(recordedDispatchFlags.guardCommandBufferWithPipeControl);
+    }
+}
+
+HWTEST_F(StagingBuffersFixture, givenSharedSystemUsmThenDontUseStagingBuffers) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableSharedSystemUsmSupport.set(1);
+    debugManager.flags.TreatNonUsmForTransfersAsSharedSystem.set(1);
+    debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.set(1);
+    MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
+    cmdList.cmdQImmediate = queue.get();
+    cmdList.initialize(device, NEO::EngineGroupType::compute, 0u);
+
+    auto &hwInfo = *device->getNEODevice()->getRootDeviceEnvironment().getMutableHardwareInfo();
+    VariableBackup<uint64_t> sharedSystemMemCapabilities{&hwInfo.capabilityTable.sharedSystemMemCapabilities};
+    sharedSystemMemCapabilities = 0xf;
+
+    size_t src[size] = {};
+    auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, nullptr, 0, nullptr, copyParams);
+    ASSERT_EQ(ZE_RESULT_SUCCESS, res);
+    EXPECT_EQ(1u, cmdList.getMemAdviseOperations().size());
+}
+
+HWTEST_F(StagingBuffersFixture, givenStagingBufferManagerDestroyedAndHostSynchronizeCalledThenSuccessReturned) {
+    driverHandle->stagingBufferManager.reset();
+    MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
+    cmdList.cmdQImmediate = queue.get();
+    cmdList.initialize(device, NEO::EngineGroupType::compute, 0u);
+    auto res = cmdList.hostSynchronize(std::numeric_limits<uint64_t>::max());
+    ASSERT_EQ(ZE_RESULT_SUCCESS, res);
 }
 
 HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingWhenAppendFailedThenPropagateError) {
-    NEO::debugManager.flags.EnableCopyWithStagingBuffers.set(1);
-
     MockCommandListImmediateHw<FamilyType::gfxCoreFamily> cmdList;
     cmdList.cmdQImmediate = queue.get();
     cmdList.initialize(device, NEO::EngineGroupType::compute, 0u);
@@ -1482,7 +1539,7 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingAndProfilingThen
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     size_t src[size] = {};
     auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, event->toHandle(), 0, nullptr, copyParams);
@@ -1529,7 +1586,7 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithStagingAndEventWithoutP
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(L0::EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     size_t src[size] = {};
     auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, event->toHandle(), 0, nullptr, copyParams);
@@ -1571,7 +1628,7 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithOOQCmdListAndCounterBas
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     size_t src[size] = {};
     auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, event->toHandle(), 0, nullptr, copyParams);
@@ -1599,7 +1656,7 @@ HWTEST_F(StagingBuffersFixture, givenAppendMemoryCopyWithCounterBasedEventThenCo
     ze_result_t result = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(L0::Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     size_t src[size] = {};
     auto res = cmdList.appendMemoryCopy(usmDevice, &src, size, event->toHandle(), 0, nullptr, copyParams);

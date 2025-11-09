@@ -25,7 +25,7 @@ using namespace NEO;
 
 using CommandEncodeStatesTestPvcAndLater = Test<CommandEncodeStatesFixture>;
 
-HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenOverrideSlmTotalSizeDebugVariableWhenDispatchingKernelThenSharedMemorySizeIsSetCorrectly, IsHeapfulSupportedAndAtLeastXeHpcCore) {
+HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenOverrideSlmTotalSizeDebugVariableWhenDispatchingKernelThenSharedMemorySizeIsSetCorrectly, IsHeapfulRequiredAndAtLeastXeHpcCore) {
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
     DebugManagerStateRestore restorer;
     uint32_t dims[] = {2, 1, 1};
@@ -98,7 +98,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandEncodeStatesTestPvcAndLater, givenCommandCon
 
     StreamProperties streamProperties{};
     streamProperties.initSupport(rootDeviceEnvironment);
-    streamProperties.stateComputeMode.setPropertiesAll(false, GrfConfig::largeGrfNumber, 0u, PreemptionMode::Disabled);
+    streamProperties.stateComputeMode.setPropertiesAll(false, GrfConfig::largeGrfNumber, 0u, PreemptionMode::Disabled, false);
     EncodeComputeMode<FamilyType>::programComputeModeCommand(*cmdContainer->getCommandStream(), streamProperties.stateComputeMode, rootDeviceEnvironment);
     GenCmdList commands;
     CmdParse<FamilyType>::parseCommandBuffer(commands, ptrOffset(cmdContainer->getCommandStream()->getCpuBase(), 0), cmdContainer->getCommandStream()->getUsed());
@@ -166,7 +166,7 @@ HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenMultipleTilesAndImplicitScali
     InterfaceDescriptorType iddArg = FamilyType::template getInitInterfaceDescriptor<InterfaceDescriptorType>();
     const uint32_t numGrf = GrfConfig::defaultGrfNumber;
     auto &gfxCoreHelper = pDevice->getGfxCoreHelper();
-    const uint32_t threadGroupCount = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, numGrf) / 32u;
+    const uint32_t threadGroupCount = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, numGrf, pDevice->getRootDeviceEnvironment()) / 32u;
     uint32_t threadsPerThreadGroup = 64u;
     const uint32_t requiredThreadGroupDispatchSize = 0u;
     iddArg.setNumberOfThreadsInGpgpuThreadGroup(threadsPerThreadGroup);
@@ -341,7 +341,7 @@ HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenDifferentNumGrfWhenCallingEnc
     }
 }
 
-HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenVariousDispatchParamtersWhenAlogrithmV2IsUsedThenProperThreadGroupDispatchSizeIsChoosen, IsAtLeastXeHpcCore) {
+HWTEST2_F(CommandEncodeStatesTestPvcAndLater, givenVariousDispatchParametersWhenAlogrithmV2IsUsedThenProperThreadGroupDispatchSizeIsChoosen, IsAtLeastXeHpcCore) {
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadGroupDispatchSizeAlgorithm.set(2u);
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;

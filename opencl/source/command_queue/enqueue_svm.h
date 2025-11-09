@@ -128,9 +128,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMap(cl_bool blockingMap,
         dc.direction = csrSelectionArgs.direction;
 
         MultiDispatchInfo dispatchInfo(dc);
-        const bool useStateless = forceStateless(svmData->size);
+        const bool isStateless = forceStateless(svmData->size);
         const bool useHeapless = this->getHeaplessModeEnabled();
-        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(useStateless, useHeapless);
+        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(isStateless, useHeapless);
         const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, eBuiltInOps, numEventsInWaitList, eventWaitList, event, blocking, csr);
         if (dispatchResult != CL_SUCCESS) {
             return dispatchResult;
@@ -219,9 +219,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMUnmap(void *svmPtr,
         dc.direction = csrSelectionArgs.direction;
 
         MultiDispatchInfo dispatchInfo(dc);
-        const bool useStateless = forceStateless(svmData->size);
+        const bool isStateless = forceStateless(svmData->size);
         const bool useHeapless = this->getHeaplessModeEnabled();
-        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(useStateless, useHeapless);
+        auto eBuiltInOps = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(isStateless, useHeapless);
         const auto dispatchResult = dispatchBcsOrGpgpuEnqueue<CL_COMMAND_READ_BUFFER>(dispatchInfo, surfaces, eBuiltInOps, numEventsInWaitList, eventWaitList, event, false, csr);
         if (dispatchResult != CL_SUCCESS) {
             return dispatchResult;
@@ -354,13 +354,10 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMemcpy(cl_bool blockingCopy,
         pageFaultManager->moveAllocationToGpuDomain(reinterpret_cast<void *>(srcAllocation->getGpuAddress()));
     }
 
-    auto isStatelessRequired = false;
-    if (srcSvmData != nullptr) {
-        isStatelessRequired = forceStateless(srcSvmData->size);
-    }
-    if (dstSvmData != nullptr) {
-        isStatelessRequired |= forceStateless(dstSvmData->size);
-    }
+    bool isStatelessRequired =
+        isForceStateless ||
+        (srcSvmData != nullptr && forceStateless(srcSvmData->size)) ||
+        (dstSvmData != nullptr && forceStateless(dstSvmData->size));
 
     const bool useHeapless = this->getHeaplessModeEnabled();
     auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(isStatelessRequired, useHeapless);
@@ -499,11 +496,11 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMemFill(void *svmPtr,
         pageFaultManager->moveAllocationToGpuDomain(reinterpret_cast<void *>(gpuAllocation->getGpuAddress()));
     }
 
-    auto commandStreamReceieverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
+    auto commandStreamReceiverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
     auto storageWithAllocations = getGpgpuCommandStreamReceiver().getInternalAllocationStorage();
     auto allocationType = AllocationType::fillPattern;
     auto patternAllocation = storageWithAllocations->obtainReusableAllocation(patternSize, allocationType).release();
-    commandStreamReceieverOwnership.unlock();
+    commandStreamReceiverOwnership.unlock();
 
     if (!patternAllocation) {
         patternAllocation = memoryManager->allocateGraphicsMemoryWithProperties({getDevice().getRootDeviceIndex(), patternSize, allocationType, getDevice().getDeviceBitfield()});
@@ -521,9 +518,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueSVMMemFill(void *svmPtr,
         memcpy_s(patternAllocation->getUnderlyingBuffer(), patternSize, pattern, patternSize);
     }
 
-    const bool useStateless = forceStateless(svmData->size);
+    const bool isStateless = forceStateless(svmData->size);
     const bool useHeapless = this->getHeaplessModeEnabled();
-    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::fillBuffer>(useStateless, useHeapless);
+    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::fillBuffer>(isStateless, useHeapless);
 
     auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtInType,
                                                                             this->getClDevice());

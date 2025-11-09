@@ -874,7 +874,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndSignalEventAndN
     ze_result_t returnValue = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
-    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     EXPECT_EQ(event->queryStatus(), ZE_RESULT_NOT_READY);
     auto res = cmdList.appendMemoryCopy(devicePtr, nonUsmHostPtr, 1024, event->toHandle(), 0, nullptr, copyParams);
@@ -905,7 +905,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndSignalEventAndC
     ze_result_t returnValue = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
-    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     EXPECT_EQ(event->queryStatus(), ZE_RESULT_NOT_READY);
     cmdList.appendBarrier(nullptr, 0, nullptr, false);
@@ -993,7 +993,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListWhenAppendWaitOnEv
     ze_result_t returnValue = ZE_RESULT_SUCCESS;
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
-    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
     auto eventHandle = event->toHandle();
     cmdList.appendWaitOnEvents(1, &eventHandle, nullptr, false, true, false, false, false, false);
 
@@ -1011,8 +1011,8 @@ class MockAppendMemoryLockedCopyTestImmediateCmdList : public MockCommandListImm
     MockAppendMemoryLockedCopyTestImmediateCmdList() : MockCommandListImmediateHw<gfxCoreFamily>() {
         this->copyThroughLockedPtrEnabled = true;
     }
-    ze_result_t appendMemoryCopyKernelWithGA(void *dstPtr, NEO::GraphicsAllocation *dstPtrAlloc,
-                                             uint64_t dstOffset, void *srcPtr,
+    ze_result_t appendMemoryCopyKernelWithGA(uintptr_t dstPtr, NEO::GraphicsAllocation *dstPtrAlloc,
+                                             uint64_t dstOffset, uintptr_t srcPtr,
                                              NEO::GraphicsAllocation *srcPtrAlloc,
                                              uint64_t srcOffset, uint64_t size,
                                              uint64_t elementSize, Builtin builtin,
@@ -1182,7 +1182,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndCpuMemcpyWithDe
     ze_event_handle_t waitlist[numEvents] = {};
 
     for (uint32_t i = 0; i < numEvents; i++) {
-        events[i] = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+        events[i] = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
         waitlist[i] = events[i]->toHandle();
     }
 
@@ -1218,7 +1218,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndCpuMemcpyWithDe
     ze_event_handle_t waitlist[numEvents] = {};
 
     for (uint32_t i = 0; i < numEvents; i++) {
-        events[i] = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+        events[i] = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
         events[i]->hostSignal(false);
         waitlist[i] = events[i]->toHandle();
     }
@@ -1265,7 +1265,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndTimestampFlagSe
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
-    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
     auto phEvent = event->toHandle();
     cmdList.appendMemoryCopy(devicePtr, nonUsmHostPtr, 2 * MemoryConstants::kiloByte, phEvent, 0, nullptr, copyParams);
     ze_kernel_timestamp_result_t resultTimestamp = {};
@@ -1300,7 +1300,7 @@ HWTEST_F(AppendMemoryLockedCopyTest, givenImmediateCommandListAndTimestampFlagNo
     auto eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
     EXPECT_EQ(ZE_RESULT_SUCCESS, returnValue);
 
-    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    auto event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
     auto phEvent = event->toHandle();
     cmdList.appendMemoryCopy(devicePtr, nonUsmHostPtr, 2 * MemoryConstants::kiloByte, phEvent, 0, nullptr, copyParams);
     ze_kernel_timestamp_result_t resultTimestamp = {};
@@ -1381,7 +1381,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenUnalignePtrToFillWhenSettingFillPro
     EXPECT_EQ(outArguments.groups * outArguments.mainGroupSize, sizeToFill);
 }
 
-HWTEST_F(CommandListAppendLaunchKernel, givenAlignePtrToFillWhenSettingFillPropertiesThenAllGroupsCountEqualSizeToFillDevidedBySizeOfUint32) {
+HWTEST_F(CommandListAppendLaunchKernel, givenAlignePtrToFillWhenSettingFillPropertiesThenAllGroupsCountEqualSizeToFillDividedBySizeOfUint32) {
     createKernel();
     ze_command_queue_desc_t queueDesc = {};
     auto queue = std::make_unique<Mock<CommandQueue>>(device, device->getNEODevice()->getDefaultEngine().commandStreamReceiver, &queueDesc);
@@ -1631,7 +1631,7 @@ HWTEST_F(CommandListMappedTimestampTest, givenMappedTimestampSignalEventWhenAppe
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     ze_group_count_t groupCount{1, 1, 1};
 
@@ -1660,7 +1660,7 @@ HWTEST_F(CommandListMappedTimestampTest, givenSignalEventWithoutMappedTimstampWh
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     ze_group_count_t groupCount{1, 1, 1};
 
@@ -1689,7 +1689,7 @@ HWTEST_F(CommandListMappedTimestampTest, givenMappedTimestampSignalEventWhenAppe
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     ze_group_count_t groupCount{1, 1, 1};
 
@@ -1722,7 +1722,7 @@ HWTEST_F(CommandListMappedTimestampTest, givenEventIsAddedToMappedEventListWhenS
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
@@ -1831,7 +1831,7 @@ HWTEST_F(CommandListCreate, givenCmdListWhenAllocateOrReuseCalledForSizeThatIsSt
     auto mockMem = std::make_unique<uint8_t[]>(0x1000);
     Mock<Module> mockModule(this->device, nullptr);
     Mock<KernelImp> mockKernel;
-    const_cast<uint32_t &>(mockKernel.kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = 0x1000;
+    const_cast<uint32_t &>(mockKernel.sharedState->kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = 0x1000;
     mockKernel.module = &mockModule;
     MockGraphicsAllocation mockGA(mockMem.get(), 2 * sizePerHwThread * this->neoDevice->getDeviceInfo().computeUnitsUsedForScratch);
     PrivateAllocsToReuseContainer mapForReuse;
@@ -1849,7 +1849,7 @@ HWTEST_F(CommandListCreate, givenNewSizeDifferentThanSizesInMapWhenAllocatingPri
     auto mockMem = std::make_unique<uint8_t[]>(0x1000);
     Mock<Module> mockModule(this->device, nullptr);
     Mock<KernelImp> mockKernel;
-    const_cast<uint32_t &>(mockKernel.kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = sizePerHwThread;
+    const_cast<uint32_t &>(mockKernel.sharedState->kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = sizePerHwThread;
     mockKernel.module = &mockModule;
     MockGraphicsAllocation mockGA(mockMem.get(), sizePerHwThread * this->neoDevice->getDeviceInfo().computeUnitsUsedForScratch / 2);
     PrivateAllocsToReuseContainer mapForReuse;
@@ -1868,7 +1868,7 @@ HWTEST_F(CommandListCreate, givenNewSizeDifferentThanSizesInMapWhenAllocatingPri
     auto mockMem = std::make_unique<uint8_t[]>(0x1000);
     Mock<Module> mockModule(this->device, nullptr);
     Mock<KernelImp> mockKernel;
-    const_cast<uint32_t &>(mockKernel.kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = sizePerHwThread;
+    const_cast<uint32_t &>(mockKernel.sharedState->kernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize) = sizePerHwThread;
     mockKernel.module = &mockModule;
     MockGraphicsAllocation mockGA(mockMem.get(), sizePerHwThread * this->neoDevice->getDeviceInfo().computeUnitsUsedForScratch / 2);
     PrivateAllocsToReuseContainer mapForReuse;

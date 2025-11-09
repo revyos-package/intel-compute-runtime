@@ -184,12 +184,6 @@ set(CMAKE_C_FLAGS_RELEASEINTERNAL "${CMAKE_C_FLAGS_RELEASE}")
 set(CMAKE_CXX_FLAGS_RELEASEINTERNAL "${CMAKE_CXX_FLAGS_RELEASE}")
 set(CMAKE_SHARED_LINKER_FLAGS_RELEASEINTERNAL "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}")
 set(CMAKE_EXE_LINKER_FLAGS_RELEASEINTERNAL "${CMAKE_EXE_LINKER_FLAGS_RELEASE}")
-if(MSVC AND ENABLE_VS_FASTLINK)
-  string(APPEND CMAKE_EXE_LINKER_FLAGS_DEBUG " /debug:FASTLINK")
-  string(APPEND CMAKE_SHARED_LINKER_FLAGS_DEBUG " /debug:FASTLINK")
-  string(APPEND CMAKE_STATIC_LINKER_FLAGS_DEBUG " /debug:FASTLINK")
-  string(APPEND CMAKE_MODULE_LINKER_FLAGS_DEBUG " /debug:FASTLINK")
-endif()
 
 include(CheckCXXCompilerFlag)
 if(UNIX)
@@ -375,13 +369,6 @@ if(NOT NEO_SKIP_UNIT_TESTS)
   message(STATUS "GTest shuffle set to ${GTEST_SHUFFLE}")
 endif()
 
-if(NOT KMDAF_HEADERS_DIR)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../kmdaf/inc/common/kmDaf.h")
-    get_filename_component(KMDAF_HEADERS_DIR "../kmdaf/inc/common/" ABSOLUTE)
-    message(STATUS "KM-DAF headers dir: ${KMDAF_HEADERS_DIR}")
-  endif()
-endif()
-
 get_filename_component(AUB_STREAM_HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party${BRANCH_DIR_SUFFIX}aub_stream" ABSOLUTE)
 if(IS_DIRECTORY ${AUB_STREAM_HEADERS_DIR})
   message(STATUS "Aub Stream Headers dir: ${AUB_STREAM_HEADERS_DIR}")
@@ -434,6 +421,14 @@ else()
   add_definitions(-DGL_TARGET_OPENGL_VERSION=210)
 endif()
 message(STATUS "Khronos OpenGL headers dir: ${KHRONOS_GL_HEADERS_DIR}")
+
+if(NOT DEFINED KHRONOS_SPIRV_HEADERS_DIR)
+  get_filename_component(SPIRV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spirv_headers/include" ABSOLUTE)
+  if(IS_DIRECTORY ${SPIRV_DIR})
+    set(KHRONOS_SPIRV_HEADERS_DIR ${SPIRV_DIR})
+  endif()
+endif()
+message(STATUS "Khronos SPIR-V headers dir: ${KHRONOS_SPIRV_HEADERS_DIR}")
 
 if(NOT DEFINED AOT_CONFIG_HEADERS_DIR)
   get_filename_component(AOT_CONFIG_HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party${BRANCH_DIR_SUFFIX}aot_config_headers" ABSOLUTE)
@@ -686,6 +681,8 @@ if((CMAKE_HOST_UNIX OR("${CMAKE_GENERATOR}" STREQUAL "Ninja")) AND CCACHE_ALLOWE
 endif()
 
 # Miscs options
+option(NEO_ULTS_ENABLE_OPTIMIZATIONS "Enable compiler optimizations in ULTs builds" OFF)
+
 option(IGDRCL_GCOV "generate gcov report" OFF)
 
 option(NEO_SHOW_VERBOSE_ULT_RESULTS "Use the default/verbose test output" OFF)
@@ -873,6 +870,19 @@ if(NOT MSVC)
       # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111073
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow")
     endif()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+      # Disable specific warnings due to GCC bug for version 12
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12 AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-restrict")
+      endif()
+      # Disable specific warnings due to GCC bug for versions >= 12
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105616
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105562
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-maybe-uninitialized")
+      endif()
+    endif()
   endif()
 
   if(USE_SANITIZE_UB)
@@ -926,6 +936,7 @@ include_directories(${NEO_SHARED_DIRECTORY}/debug_settings/definitions${BRANCH_D
 include_directories(${NEO_SHARED_DIRECTORY}/dll/devices${BRANCH_DIR_SUFFIX})
 include_directories(${NEO_SHARED_DIRECTORY}/kernel/definitions${BRANCH_DIR_SUFFIX})
 include_directories(${NEO_SHARED_DIRECTORY}/gen_common${BRANCH_DIR_SUFFIX})
+include_directories(${NEO_SHARED_DIRECTORY}/gmm_helper/${DRIVER_MODEL})
 if(WIN32)
   include_directories(${NEO_SHARED_DIRECTORY}/gmm_helper/windows/gmm_memory${BRANCH_DIR_SUFFIX})
   include_directories(${NEO_SHARED_DIRECTORY}/os_interface/windows/wddm/definitions)

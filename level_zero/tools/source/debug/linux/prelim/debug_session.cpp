@@ -985,15 +985,8 @@ void DebugSessionLinuxi915::handleAttentionEvent(prelim_drm_i915_debug_event_eu_
     }
 
     std::vector<EuThread::ThreadId> threadsWithAttention;
-    auto hwInfo = connectedDevice->getHwInfo();
-    auto &l0GfxCoreHelper = connectedDevice->getL0GfxCoreHelper();
     if (tmpInterruptSent) {
-        std::unique_ptr<uint8_t[]> bitmask;
-        size_t bitmaskSize;
-        auto attReadResult = threadControl({}, tileIndex, ThreadControlCmd::stopped, bitmask, bitmaskSize);
-        if (attReadResult == 0) {
-            threadsWithAttention = l0GfxCoreHelper.getThreadsFromAttentionBitmask(hwInfo, tileIndex, bitmask.get(), bitmaskSize);
-        }
+        scanThreadsWithAttRaisedUntilSteadyState(tileIndex, threadsWithAttention);
     }
 
     AttentionEventFields attentionEventFields;
@@ -1133,6 +1126,8 @@ int DebugSessionLinuxi915::threadControl(const std::vector<EuThread::ThreadId> &
 
     std::unique_ptr<uint8_t[]> bitmask;
     size_t bitmaskSize = 0;
+    bool shouldPrintBitmask = command == PRELIM_I915_DEBUG_EU_THREADS_CMD_INTERRUPT ||
+                              command == PRELIM_I915_DEBUG_EU_THREADS_CMD_RESUME;
 
     if (command == PRELIM_I915_DEBUG_EU_THREADS_CMD_INTERRUPT ||
         command == PRELIM_I915_DEBUG_EU_THREADS_CMD_RESUME ||
@@ -1145,8 +1140,9 @@ int DebugSessionLinuxi915::threadControl(const std::vector<EuThread::ThreadId> &
     if (command == PRELIM_I915_DEBUG_EU_THREADS_CMD_RESUME) {
         applyResumeWa(bitmask.get(), bitmaskSize);
     }
-
-    printBitmask(bitmask.get(), bitmaskSize);
+    if (shouldPrintBitmask) {
+        printBitmask(bitmask.get(), bitmaskSize);
+    }
 
     auto euControlRetVal = ioctl(PRELIM_I915_DEBUG_IOCTL_EU_CONTROL, &euControl);
     if (euControlRetVal != 0) {

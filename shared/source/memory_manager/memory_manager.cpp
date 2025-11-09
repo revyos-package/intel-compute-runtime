@@ -96,6 +96,7 @@ MemoryManager::MemoryManager(ExecutionEnvironment &executionEnvironment) : execu
         singleTemporaryAllocationsList = true;
         temporaryAllocations = std::make_unique<AllocationsList>(AllocationUsage::TEMPORARY_ALLOCATION);
     }
+    lastGpuHangCheck = std::chrono::high_resolution_clock::now();
 }
 
 void MemoryManager::storeTemporaryAllocation(std::unique_ptr<GraphicsAllocation> &&gfxAllocation, uint32_t osContextId, TaskCountType taskCount) {
@@ -530,7 +531,6 @@ bool MemoryManager::getAllocationData(AllocationData &allocationData, const Allo
     case AllocationType::bufferHostMemory:
     case AllocationType::constantSurface:
     case AllocationType::globalSurface:
-    case AllocationType::pipe:
     case AllocationType::printfSurface:
     case AllocationType::privateSurface:
     case AllocationType::scratchSurface:
@@ -570,7 +570,6 @@ bool MemoryManager::getAllocationData(AllocationData &allocationData, const Allo
     case AllocationType::globalSurface:
     case AllocationType::image:
     case AllocationType::mapAllocation:
-    case AllocationType::pipe:
     case AllocationType::sharedBuffer:
     case AllocationType::sharedImage:
     case AllocationType::sharedResourceCopy:
@@ -601,6 +600,7 @@ bool MemoryManager::getAllocationData(AllocationData &allocationData, const Allo
     case AllocationType::debugContextSaveArea:
     case AllocationType::debugSbaTrackingBuffer:
     case AllocationType::swTagBuffer:
+    case AllocationType::hostFunction:
         allocationData.flags.useSystemMemory = true;
     default:
         break;
@@ -643,6 +643,7 @@ bool MemoryManager::getAllocationData(AllocationData &allocationData, const Allo
     allocationData.forceKMDAllocation = properties.forceKMDAllocation;
     allocationData.makeGPUVaDifferentThanCPUPtr = properties.makeGPUVaDifferentThanCPUPtr;
     allocationData.flags.shareable = properties.flags.shareable;
+    allocationData.flags.shareableWithoutNTHandle = properties.flags.shareableWithoutNTHandle;
     allocationData.flags.isUSMDeviceMemory = properties.flags.isUSMDeviceAllocation;
     allocationData.flags.requiresCpuAccess = GraphicsAllocation::isCpuAccessRequired(properties.allocationType);
     allocationData.flags.allocateMemory = properties.flags.allocateMemory;
@@ -908,7 +909,6 @@ bool MemoryManager::isExternalAllocation(AllocationType allocationType) {
         allocationType == AllocationType::fillPattern ||
         allocationType == AllocationType::image ||
         allocationType == AllocationType::mapAllocation ||
-        allocationType == AllocationType::pipe ||
         allocationType == AllocationType::sharedBuffer ||
         allocationType == AllocationType::sharedImage ||
         allocationType == AllocationType::sharedResourceCopy ||
@@ -1036,7 +1036,7 @@ void MemoryManager::waitForEnginesCompletion(GraphicsAllocation &graphicsAllocat
     }
 }
 
-bool MemoryManager::allocInUse(GraphicsAllocation &graphicsAllocation) const {
+bool MemoryManager::allocInUse(GraphicsAllocation &graphicsAllocation) {
     uint32_t numEnginesChecked = 0;
     const uint32_t numContextsToCheck = graphicsAllocation.getNumRegisteredContexts();
 
@@ -1046,7 +1046,9 @@ bool MemoryManager::allocInUse(GraphicsAllocation &graphicsAllocation) const {
 
         if (graphicsAllocation.isUsedByOsContext(osContextId)) {
             numEnginesChecked++;
-
+            if (engine.commandStreamReceiver->checkGpuHangDetected(std::chrono::high_resolution_clock::now(), this->lastGpuHangCheck)) {
+                return false;
+            }
             if (engine.commandStreamReceiver->getTagAddress() && (allocationTaskCount > *engine.commandStreamReceiver->getTagAddress())) {
                 return true;
             }

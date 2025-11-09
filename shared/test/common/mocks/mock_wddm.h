@@ -82,6 +82,7 @@ class WddmMock : public Wddm {
     bool mapGpuVirtualAddress(WddmAllocation *allocation);
     bool freeGpuVirtualAddress(D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size) override;
     NTSTATUS createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResource, uint64_t *outSharedHandle) override;
+    NTSTATUS createAllocation(const void *alignedCpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResource, uint64_t *outSharedHandle, bool createNTHandle) override;
     bool createAllocation(const Gmm *gmm, D3DKMT_HANDLE &outHandle) override;
     bool destroyAllocations(const D3DKMT_HANDLE *handles, uint32_t allocationCount, D3DKMT_HANDLE resourceHandle) override;
 
@@ -97,9 +98,6 @@ class WddmMock : public Wddm {
     bool waitOnGPU(D3DKMT_HANDLE context) override;
     void *lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock, size_t size) override;
     void unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock) override;
-    void kmDafLock(D3DKMT_HANDLE handle) override;
-    bool isKmDafEnabled() const override;
-    void setKmDafEnabled(bool state);
     void setHwContextId(unsigned long hwContextId);
     void setHeap32(uint64_t base, uint64_t size);
     GMM_GFX_PARTITIONING *getGfxPartitionPtr();
@@ -175,7 +173,6 @@ class WddmMock : public Wddm {
     WddmMockHelpers::CallResult applyAdditionalContextFlagsResult;
     WddmMockHelpers::CallResult lockResult;
     WddmMockHelpers::CallResult unlockResult;
-    WddmMockHelpers::KmDafLockCall kmDafLockResult;
     WddmMockHelpers::WaitFromCpuResult waitFromCpuResult;
     WddmMockHelpers::CallResult releaseReservedAddressResult;
     WddmMockHelpers::CallResult reserveValidAddressRangeResult;
@@ -205,7 +202,6 @@ class WddmMock : public Wddm {
     bool callBaseMapGpuVa = true;
     std::unordered_multiset<void *> reservedAddresses;
     uintptr_t virtualAllocAddress = NEO::windowsMinAddress;
-    bool kmDafEnabled = false;
     uint64_t mockPagingFence = 0u;
     bool callBaseCreatePagingLogger = true;
     bool shutdownStatus = false;

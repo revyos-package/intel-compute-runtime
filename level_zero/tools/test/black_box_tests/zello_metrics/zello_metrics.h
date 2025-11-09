@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022-2025 Intel Corporation
  *
  * SPDX-License-Identifier: MIT
  *
@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "level_zero/zet_intel_gpu_metric.h"
 #include <level_zero/ze_api.h>
 #include <level_zero/zes_api.h>
 #include <level_zero/zet_api.h>
@@ -16,17 +17,18 @@
 #include <map>
 #include <vector>
 
-#define VALIDATECALL(myZeCall)                           \
-    do {                                                 \
-        if ((myZeCall) != ZE_RESULT_SUCCESS) {           \
-            std::cout << "Validate Error: "              \
-                      << static_cast<uint32_t>(myZeCall) \
-                      << " at "                          \
-                      << #myZeCall << ": "               \
-                      << __FILE__ << ": "                \
-                      << __LINE__ << std::endl;          \
-            std::terminate();                            \
-        }                                                \
+#define VALIDATECALL(myZeCall)                                                            \
+    do {                                                                                  \
+        if (((myZeCall) != ZE_RESULT_SUCCESS) &&                                          \
+            ((myZeCall) != ZE_INTEL_RESULT_WARNING_NOT_CALCULABLE_METRICS_IGNORED_EXP)) { \
+            std::cout << "Validate Error: "                                               \
+                      << static_cast<uint32_t>(myZeCall)                                  \
+                      << " at "                                                           \
+                      << #myZeCall << ": "                                                \
+                      << __FILE__ << ": "                                                 \
+                      << __LINE__ << std::endl;                                           \
+            std::terminate();                                                             \
+        }                                                                                 \
     } while (0);
 
 #define EXPECT(cond)                                                           \

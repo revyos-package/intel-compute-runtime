@@ -93,19 +93,37 @@ class MockProgram : public Program {
     }
     void setConstantSurface(GraphicsAllocation *gfxAllocation) {
         if (gfxAllocation) {
-            buildInfos[gfxAllocation->getRootDeviceIndex()].constantSurface = gfxAllocation;
+            buildInfos[gfxAllocation->getRootDeviceIndex()].constantSurface = std::make_unique<SharedPoolAllocation>(gfxAllocation);
         } else {
             for (auto &buildInfo : buildInfos) {
-                buildInfo.constantSurface = nullptr;
+                buildInfo.constantSurface.reset();
+            }
+        }
+    }
+    void setConstantSurface(std::unique_ptr<SharedPoolAllocation> constantSurface) {
+        if (constantSurface) {
+            buildInfos[constantSurface->getGraphicsAllocation()->getRootDeviceIndex()].constantSurface = std::move(constantSurface);
+        } else {
+            for (auto &buildInfo : buildInfos) {
+                buildInfo.constantSurface.reset();
             }
         }
     }
     void setGlobalSurface(GraphicsAllocation *gfxAllocation) {
         if (gfxAllocation) {
-            buildInfos[gfxAllocation->getRootDeviceIndex()].globalSurface = gfxAllocation;
+            buildInfos[gfxAllocation->getRootDeviceIndex()].globalSurface = std::make_unique<SharedPoolAllocation>(gfxAllocation);
         } else {
             for (auto &buildInfo : buildInfos) {
-                buildInfo.globalSurface = nullptr;
+                buildInfo.globalSurface.reset();
+            }
+        }
+    }
+    void setGlobalSurface(std::unique_ptr<SharedPoolAllocation> globalSurface) {
+        if (globalSurface) {
+            buildInfos[globalSurface->getGraphicsAllocation()->getRootDeviceIndex()].globalSurface = std::move(globalSurface);
+        } else {
+            for (auto &buildInfo : buildInfos) {
+                buildInfo.globalSurface.reset();
             }
         }
     }
@@ -230,14 +248,17 @@ class MockProgram : public Program {
     std::map<uint32_t, int> processGenBinaryCalledPerRootDevice;
     std::map<uint32_t, int> replaceDeviceBinaryCalledPerRootDevice;
     static int getInternalOptionsCalled;
-    bool contextSet = false;
     int isFlagOptionOverride = -1;
     int isOptionValueValidOverride = -1;
+    bool contextSet = false;
     bool wasProcessDebugDataCalled = false;
     bool wasCreateDebugZebinCalled = false;
     bool wasDebuggerNotified = false;
     bool wasPopulateZebinExtendedArgsMetadataOnceCalled = false;
     bool callBasePopulateZebinExtendedArgsMetadataOnce = false;
+    auto getIntermediateRepresentation() const { return this->intermediateRepresentation; }
+    auto getIsGeneratedByIgc() const { return this->isGeneratedByIgc; }
+    auto &getBuildInfos() { return this->buildInfos; }
 };
 
 } // namespace NEO

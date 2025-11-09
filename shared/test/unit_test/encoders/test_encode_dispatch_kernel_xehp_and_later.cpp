@@ -202,7 +202,7 @@ struct CommandEncodeStatesTestBindingTableStateMatcher {
     template <PRODUCT_FAMILY productFamily>
     static constexpr bool isMatched() {
         if constexpr (HwMapper<productFamily>::GfxProduct::supportsCmdSet(IGFX_XE_HP_CORE)) {
-            return TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::bindingTableStateSupported;
+            return TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::bindingTableStateSupported && !TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::heaplessRequired;
         }
         return false;
     }
@@ -574,11 +574,11 @@ HWTEST2_F(CommandEncodeStatesTest, givenDispatchInterfaceWhenNumRequiredGrfIsNot
     StreamProperties streamProperties{};
     auto &rootDeviceEnvironment = pDevice->getRootDeviceEnvironment();
     streamProperties.initSupport(rootDeviceEnvironment);
-    streamProperties.stateComputeMode.setPropertiesAll(false, 128, 0u, PreemptionMode::Disabled);
-    streamProperties.stateComputeMode.setPropertiesAll(false, 128, 0u, PreemptionMode::Disabled);
+    streamProperties.stateComputeMode.setPropertiesAll(false, 128, 0u, PreemptionMode::Disabled, false);
+    streamProperties.stateComputeMode.setPropertiesAll(false, 128, 0u, PreemptionMode::Disabled, false);
     EXPECT_FALSE(streamProperties.stateComputeMode.isDirty());
 
-    streamProperties.stateComputeMode.setPropertiesAll(false, 256, 0u, PreemptionMode::Disabled);
+    streamProperties.stateComputeMode.setPropertiesAll(false, 256, 0u, PreemptionMode::Disabled, false);
     if constexpr (TestTraits<FamilyType::gfxCoreFamily>::largeGrfModeInStateComputeModeSupported) {
         EXPECT_TRUE(streamProperties.stateComputeMode.isDirty());
     } else {
@@ -1111,7 +1111,6 @@ template <bool flushTaskUsedForImmediate, bool usePrimaryBuffer>
 struct CommandEncodeStatesImplicitScalingFixtureT : public CommandEncodeStatesFixture {
     void setUp() {
         debugManager.flags.CreateMultipleSubDevices.set(2);
-        osLocalMemoryBackup = std::make_unique<VariableBackup<bool>>(&OSInterface::osEnableLocalMemory, true);
         mockDeviceBackup = std::make_unique<VariableBackup<bool>>(&MockDevice::createSingleDevice, false);
         apiSupportBackup = std::make_unique<VariableBackup<bool>>(&ImplicitScaling::apiSupport, true);
 
@@ -1126,7 +1125,6 @@ struct CommandEncodeStatesImplicitScalingFixtureT : public CommandEncodeStatesFi
     }
 
     DebugManagerStateRestore restorer;
-    std::unique_ptr<VariableBackup<bool>> osLocalMemoryBackup;
     std::unique_ptr<VariableBackup<bool>> mockDeviceBackup;
     std::unique_ptr<VariableBackup<bool>> apiSupportBackup;
 };
@@ -1629,7 +1627,7 @@ HWTEST2_F(EncodeKernelScratchProgrammingTest, givenHeaplessModeDisabledWhenSetSc
     EXPECT_EQ(expectedScratchAddress, scratchAddress);
 }
 
-HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGettingInlineDataOffsetThenReturnWalkerInlineOffset, IsHeapfulSupportedAndAtLeastXeCore) {
+HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGettingInlineDataOffsetThenReturnWalkerInlineOffset, IsHeapfulRequiredAndAtLeastXeCore) {
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
 
     EncodeDispatchKernelArgs dispatchArgs = {};

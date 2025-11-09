@@ -34,6 +34,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <thread>
 #if !defined(__linux__)
 #include <regex>
@@ -86,6 +87,7 @@ void addUltListener(::testing::TestEventListeners &listener);
 void cleanTestHelpers();
 
 bool generateRandomInput = false;
+std::optional<uint32_t> blitterMaskOverride;
 
 std::string getRunPath(char *argv0) {
     std::string res(argv0);
@@ -127,7 +129,7 @@ void applyCommonWorkarounds() {
         ss >> val;
     }
 
-    // intialize rand
+    // initialize rand
     srand(static_cast<unsigned int>(time(nullptr)));
 
     // Create at least on thread to prevent false memory leaks in tests using threads
@@ -307,6 +309,11 @@ int main(int argc, char **argv) {
                 testMode = TestMode::aubTestsWithoutOutputFiles;
             }
             initialHardwareTag = 0;
+        } else if (!strcmp("--blitterMask", argv[i])) {
+            ++i;
+            if (i < argc) {
+                blitterMaskOverride = static_cast<uint32_t>(std::stoi(argv[i]));
+            }
         }
     }
 
@@ -415,8 +422,12 @@ int main(int argc, char **argv) {
         } else {
             builtInsFileName = KernelBinaryHelper::BUILT_INS;
         }
-        retrieveBinaryKernelFilename(fclDebugVars.fileName, builtInsFileName + "_", ".spv");
-        retrieveBinaryKernelFilename(igcDebugVars.fileName, builtInsFileName + "_", ".bin");
+        std::string options = "";
+        if (defaultHwInfo->featureTable.flags.ftrHeaplessMode) {
+            options = "-heapless";
+        }
+        retrieveBinaryKernelFilename(fclDebugVars.fileName, builtInsFileName + "_", ".spv", options);
+        retrieveBinaryKernelFilename(igcDebugVars.fileName, builtInsFileName + "_", ".bin", options);
 
         gEnvironment->setMockFileNames(fclDebugVars.fileName, igcDebugVars.fileName);
         gEnvironment->setDefaultDebugVars(fclDebugVars, igcDebugVars, hwInfoForTests);

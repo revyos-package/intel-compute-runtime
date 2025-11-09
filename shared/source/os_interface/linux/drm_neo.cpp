@@ -19,6 +19,7 @@
 #include "shared/source/helpers/basic_math.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/debug_helpers.h"
+#include "shared/source/helpers/device_caps_reader.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/gpu_page_fault_helper.h"
 #include "shared/source/helpers/hw_info.h"
@@ -509,7 +510,17 @@ int Drm::setupHardwareInfo(const DeviceDescriptor *device, bool setupFeatureTabl
         if (numRegions > 0) {
             hwInfo->featureTable.regionCount = numRegions;
         }
+
+        hwInfo->gtSystemInfo.NumThreadsPerEu = systemInfo->getNumThreadsPerEu();
     }
+
+    auto &productHelper = rootDeviceEnvironment.getProductHelper();
+    auto capsReader = productHelper.getDeviceCapsReader(*this);
+    if (capsReader) {
+        if (!productHelper.setupHardwareInfo(*hwInfo, *capsReader))
+            return -1;
+    }
+
     if (!queryMemoryInfo()) {
         setPerContextVMRequired(true);
         printDebugString(debugManager.flags.PrintDebugMessages.get(), stderr, "%s", "WARNING: Failed to query memory info\n");
@@ -609,14 +620,15 @@ int Drm::setupHardwareInfo(const DeviceDescriptor *device, bool setupFeatureTabl
         return -1;
     }
 
-    auto numThreadsPerEu = systemInfo ? systemInfo->getNumThreadsPerEu() : (releaseHelper ? releaseHelper->getNumThreadsPerEu() : 7u);
     if (debugManager.flags.OverrideNumThreadsPerEu.get() != -1) {
-        numThreadsPerEu = debugManager.flags.OverrideNumThreadsPerEu.get();
+        hwInfo->gtSystemInfo.NumThreadsPerEu = debugManager.flags.OverrideNumThreadsPerEu.get();
     }
 
-    hwInfo->gtSystemInfo.ThreadCount = numThreadsPerEu * hwInfo->gtSystemInfo.EUCount;
+    hwInfo->gtSystemInfo.ThreadCount = hwInfo->gtSystemInfo.NumThreadsPerEu * hwInfo->gtSystemInfo.EUCount;
 
-    hwInfo->gtSystemInfo.MaxSlicesSupported = hwInfo->gtSystemInfo.SliceCount;
+    if (ioctlHelper->overrideMaxSlicesSupported()) {
+        hwInfo->gtSystemInfo.MaxSlicesSupported = hwInfo->gtSystemInfo.SliceCount;
+    }
 
     auto calculatedMaxSubSliceCount = topologyData.maxSlices * topologyData.maxSubSlicesPerSlice;
     auto maxSubSliceCount = std::max(static_cast<uint32_t>(calculatedMaxSubSliceCount), hwInfo->gtSystemInfo.MaxSubSlicesSupported);
@@ -629,6 +641,10 @@ int Drm::setupHardwareInfo(const DeviceDescriptor *device, bool setupFeatureTabl
     }
 
     if (systemInfo) {
+        if (systemInfo->getNumL3BanksPerGroup() > 0 && systemInfo->getNumL3BankGroups() > 0) {
+            hwInfo->gtSystemInfo.L3BankCount = systemInfo->getNumL3BanksPerGroup() * systemInfo->getNumL3BankGroups();
+        }
+
         hwInfo->gtSystemInfo.L3CacheSizeInKb = systemInfo->getL3BankSizeInKb() * hwInfo->gtSystemInfo.L3BankCount;
     }
 
@@ -1482,17 +1498,17 @@ uint64_t Drm::getPatIndex(Gmm *gmm, AllocationType allocationType, CacheRegion c
     }
 
     GMM_RESOURCE_INFO *resourceInfo = nullptr;
-    bool cachable = !CacheSettingsHelper::isUncachedType(usageType);
+    bool cacheable = !CacheSettingsHelper::isUncachedType(usageType);
     bool compressed = false;
 
     if (gmm) {
         resourceInfo = gmm->gmmResourceInfo->peekGmmResourceInfo();
         usageType = gmm->resourceParams.Usage;
         compressed = gmm->isCompressionEnabled();
-        cachable = gmm->gmmResourceInfo->getResourceFlags()->Info.Cacheable;
+        cacheable = gmm->gmmResourceInfo->getResourceFlags()->Info.Cacheable;
     }
 
-    uint64_t patIndex = rootDeviceEnvironment.getGmmClientContext()->cachePolicyGetPATIndex(resourceInfo, usageType, compressed, cachable);
+    uint64_t patIndex = rootDeviceEnvironment.getGmmClientContext()->cachePolicyGetPATIndex(resourceInfo, usageType, compressed, cacheable);
     patIndex = productHelper.overridePatIndex(isUncachedType, patIndex, allocationType);
 
     UNRECOVERABLE_IF(patIndex == static_cast<uint64_t>(GMM_PAT_ERROR));
@@ -1706,12 +1722,14 @@ int Drm::createDrmVirtualMemory(uint32_t &drmVmId) {
     if (ret == 0) {
         drmVmId = ctl.vmId;
         if (isSharedSystemAllocEnabled()) {
+            auto &productHelper = rootDeviceEnvironment.getHelper<ProductHelper>();
             VmBindParams vmBind{};
             vmBind.vmId = static_cast<uint32_t>(ctl.vmId);
             vmBind.flags = DRM_XE_VM_BIND_FLAG_CPU_ADDR_MIRROR;
-            vmBind.length = (0x1ull << ((NEO::CpuInfo::getInstance().getVirtualAddressSize()) - 1));
+            vmBind.length = this->getSharedSystemAllocAddressRange();
             vmBind.sharedSystemUsmEnabled = true;
             vmBind.sharedSystemUsmBind = true;
+            vmBind.patIndex = productHelper.getSharedSystemPatIndex();
             VmBindExtUserFenceT vmBindExtUserFence{};
             ioctlHelper->fillVmBindExtUserFence(vmBindExtUserFence,
                                                 castToUint64(ioctlHelper->getPagingFenceAddress(0, nullptr)),
@@ -1899,7 +1917,21 @@ bool Drm::queryDeviceIdAndRevision() {
 }
 
 void Drm::adjustSharedSystemMemCapabilities() {
-    if (!this->isSharedSystemAllocEnabled()) {
+    if (this->isSharedSystemAllocEnabled()) {
+        uint64_t gpuAddressLength = (this->getRootDeviceEnvironment().getMutableHardwareInfo()->capabilityTable.gpuAddressSpace + 1);
+        uint64_t cpuAddressLength = (0x1ull << (NEO::CpuInfo::getInstance().getVirtualAddressSize()));
+        if ((cpuAddressLength > (maxNBitValue(48) + 1)) && !(CpuInfo::getInstance().isCpuFlagPresent("la57"))) {
+            cpuAddressLength = (maxNBitValue(48) + 1);
+        }
+        if (gpuAddressLength < cpuAddressLength) {
+            this->setSharedSystemAllocEnable(false);
+            this->getRootDeviceEnvironment().getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities = 0;
+            printDebugString(debugManager.flags.PrintDebugMessages.get(), stderr, "%s", "Shared System USM NOT allowed: CPU address range > GPU address range\n");
+        } else {
+            this->setSharedSystemAllocAddressRange(cpuAddressLength);
+            this->setPageFaultSupported(true);
+        }
+    } else {
         this->getRootDeviceEnvironment().getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities = 0;
     }
 }

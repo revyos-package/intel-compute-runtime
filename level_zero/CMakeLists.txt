@@ -199,12 +199,6 @@ if(BUILD_WITH_L0)
   endif()
 
   include_directories(${COMPUTE_RUNTIME_DIR}/third_party/opencl_headers)
-  if(UNIX AND DEFINED NEO_SPDLOG_DIR)
-    set_source_files_properties(
-                                ${CMAKE_CURRENT_SOURCE_DIR}/experimental/source/log_utility/linux/linux_logging.cpp
-                                PROPERTIES INCLUDE_DIRECTORIES ${NEO_SPDLOG_DIR}
-    )
-  endif()
 
   if(CUSTOM_L0_INCLUDE_PATH)
     include_directories(${CUSTOM_L0_INCLUDE_PATH}/../)
@@ -216,6 +210,8 @@ if(BUILD_WITH_L0)
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/core/source/cmdlist/cmdlist_extended${BRANCH_DIR_SUFFIX})
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/core/source/cmdlist/definitions${BRANCH_DIR_SUFFIX})
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/core/source/driver/definitions${BRANCH_DIR_SUFFIX})
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/experimental/source/graph/captured_apis${BRANCH_DIR_SUFFIX})
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/experimental/source/graph/definitions${BRANCH_DIR_SUFFIX})
 
   # Create our shared library/DLL
   configure_file(ze_intel_gpu_version.h.in ${NEO_BUILD_DIR}/ze_intel_gpu_version.h)
@@ -255,7 +251,6 @@ if(BUILD_WITH_L0)
                    ${NEO_SHARED_DIRECTORY}/dll/wddm/wddm_create.cpp
                    ${NEO_SHARED_DIRECTORY}/dll/windows/debugger_l0_windows.cpp
                    ${NEO_SHARED_DIRECTORY}/dll/windows${BRANCH_DIR_SUFFIX}/options_windows.cpp
-                   ${NEO_SHARED_DIRECTORY}/dll/windows/os_interface.cpp
                    ${NEO_SHARED_DIRECTORY}/gmm_helper/windows/gmm_memory_base.cpp
                    ${NEO_SHARED_DIRECTORY}/gmm_helper/windows/gmm_memory.cpp
                    ${NEO_SHARED_DIRECTORY}/os_interface/windows/gmm_interface_win.cpp
@@ -282,7 +277,6 @@ if(BUILD_WITH_L0)
                    ${NEO_SHARED_DIRECTORY}/dll/linux/debugger_l0_dll_linux.cpp
                    ${NEO_SHARED_DIRECTORY}/dll/linux/drm_neo_create.cpp
                    ${NEO_SHARED_DIRECTORY}/dll/linux${BRANCH_DIR_SUFFIX}/options_linux.cpp
-                   ${NEO_SHARED_DIRECTORY}/dll/linux/os_interface.cpp
                    ${NEO_SHARED_DIRECTORY}/os_interface/linux/gmm_interface_linux.cpp
     )
     if(NOT DISABLE_WDDM_LINUX)
@@ -341,8 +335,6 @@ if(BUILD_WITH_L0)
   )
 
   hide_subdir(api)
-  add_subdirectory_unique(source)
-
   hide_subdir(ddi)
   hide_subdir(experimental)
   hide_subdir(include)
@@ -373,12 +365,6 @@ if(BUILD_WITH_L0)
                                 COMPILE_DEFINITIONS
                                 "NEO_L0_VERSION_MAJOR=${NEO_L0_VERSION_MAJOR};NEO_L0_VERSION_MINOR=${NEO_L0_VERSION_MINOR}"
     )
-
-    if(DEFINED NEO_SPDLOG_DIR)
-      target_include_directories(${LIB_NAME} PRIVATE "experimental/source/log_utility")
-    else()
-      target_include_directories(${LIB_NAME} PRIVATE "experimental/source/log_utility_stub")
-    endif()
 
     if(${MOCKABLE})
       get_property(COMPUTE_RUNTIME_DEFINITIONS

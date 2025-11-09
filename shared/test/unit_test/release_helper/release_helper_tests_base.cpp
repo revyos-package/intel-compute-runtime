@@ -115,21 +115,6 @@ void ReleaseHelperTestsBase::whenGettingSupportedNumGrfsThenValuesUpTo256Returne
     }
 }
 
-void ReleaseHelperTestsBase::whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey() {
-    DebugManagerStateRestore restorer;
-    for (auto &revision : getRevisions()) {
-        ipVersion.revision = revision;
-        releaseHelper = ReleaseHelper::create(ipVersion);
-        ASSERT_NE(nullptr, releaseHelper);
-        debugManager.flags.OverrideNumThreadsPerEu.set(7);
-        EXPECT_EQ(7u, releaseHelper->getNumThreadsPerEu());
-        debugManager.flags.OverrideNumThreadsPerEu.set(8);
-        EXPECT_EQ(8u, releaseHelper->getNumThreadsPerEu());
-        debugManager.flags.OverrideNumThreadsPerEu.set(10);
-        EXPECT_EQ(10u, releaseHelper->getNumThreadsPerEu());
-    }
-}
-
 void ReleaseHelperTestsBase::whenGettingThreadsPerEuConfigsThenCorrectValueIsReturnedBasedOnNumThreadPerEu() {
     for (auto &revision : getRevisions()) {
         ipVersion.revision = revision;
@@ -197,5 +182,53 @@ void ReleaseHelperTestsBase::whenIsPostImageWriteFlushRequiredCalledThenFalseRet
         releaseHelper = ReleaseHelper::create(ipVersion);
         ASSERT_NE(nullptr, releaseHelper);
         EXPECT_FALSE(releaseHelper->isPostImageWriteFlushRequired());
+    }
+}
+
+void ReleaseHelperTestsBase::whenCallingAdjustMaxThreadsPerEuCountThenCorrectValueIsReturned() {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        for (auto grfCount : releaseHelper->getSupportedNumGrfs()) {
+            uint32_t maxThreadsPerEuCount = 17;
+            EXPECT_EQ(maxThreadsPerEuCount, releaseHelper->adjustMaxThreadsPerEuCount(maxThreadsPerEuCount, grfCount));
+        }
+    }
+}
+
+void ReleaseHelperTestsBase::whenShouldQueryPeerAccessCalledThenFalseReturned() {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        EXPECT_FALSE(releaseHelper->shouldQueryPeerAccess());
+    }
+}
+
+void ReleaseHelperTestsBase::whenShouldQueryPeerAccessCalledThenTrueReturned() {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        EXPECT_TRUE(releaseHelper->shouldQueryPeerAccess());
+    }
+}
+
+void ReleaseHelperTestsBase::whenIsSingleDispatchRequiredForMultiCCSCalledThenFalseReturned() {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        EXPECT_FALSE(releaseHelper->isSingleDispatchRequiredForMultiCCS());
+    }
+}
+
+void ReleaseHelperTestsBase::whenIsSingleDispatchRequiredForMultiCCSCalledThenTrueReturned() {
+    for (auto &revision : getRevisions()) {
+        ipVersion.revision = revision;
+        releaseHelper = ReleaseHelper::create(ipVersion);
+        ASSERT_NE(nullptr, releaseHelper);
+        EXPECT_TRUE(releaseHelper->isSingleDispatchRequiredForMultiCCS());
     }
 }

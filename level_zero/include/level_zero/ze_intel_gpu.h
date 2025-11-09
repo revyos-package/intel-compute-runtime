@@ -224,10 +224,10 @@ typedef enum _ze_intel_device_block_array_exp_flag_t {
 /// @brief Device 2D block array properties
 
 typedef struct _ze_intel_device_block_array_exp_properties_t {
-    ze_structure_type_ext_t stype = ZE_INTEL_DEVICE_BLOCK_ARRAY_EXP_PROPERTIES; ///< [in] type of this structure
-    void *pNext;                                                                ///< [in,out][optional] must be null or a pointer to an extension-specific
-                                                                                ///< structure (i.e. contains sType and pNext).
-    ze_intel_device_block_array_exp_flags_t flags;                              ///< [out] 0 (none) or a valid combination of ::ze_intel_device_block_array_exp_flag_t
+    ze_structure_type_ext_t stype;                 ///< [in] type of this structure
+    void *pNext;                                   ///< [in,out][optional] must be null or a pointer to an extension-specific
+                                                   ///< structure (i.e. contains sType and pNext).
+    ze_intel_device_block_array_exp_flags_t flags; ///< [out] 0 (none) or a valid combination of ::ze_intel_device_block_array_exp_flag_t
 } ze_intel_device_block_array_exp_properties_t;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -248,7 +248,7 @@ typedef enum _ze_intel_device_block_array_exp_properties_version_t {
 ///     - Major.Minor.Patch+Optional per semver guidelines https://semver.org/#spec-item-10
 /// @returns
 ///     - ::ZE_RESULT_SUCCESS
-ze_result_t ZE_APICALL
+ZE_APIEXPORT ze_result_t ZE_APICALL
 zeIntelGetDriverVersionString(
     ze_driver_handle_t hDriver, ///< [in] Driver handle whose version is being read.
     char *pDriverVersion,       ///< [in,out] pointer to driver version string.
@@ -265,6 +265,80 @@ zeIntelGetDriverVersionString(
 /// @returns
 ///     - ::ZE_RESULT_SUCCESS
 
+///////////////////////////////////////////////////////////////////////////////
+#ifndef ZEX_MEMORY_FREE_CALLBACK_EXT_NAME
+/// @brief Memory Free Callback Extension Name
+#define ZEX_MEMORY_FREE_CALLBACK_EXT_NAME "ZEX_extension_memory_free_callback"
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Memory Free Callback Extension Version(s)
+typedef enum _zex_memory_free_callback_ext_version_t {
+    ZEX_MEMORY_FREE_CALLBACK_EXT_VERSION_1_0 = ZE_MAKE_VERSION(1, 0),     ///< version 1.0
+    ZEX_MEMORY_FREE_CALLBACK_EXT_VERSION_CURRENT = ZE_MAKE_VERSION(1, 0), ///< latest known version
+    ZEX_MEMORY_FREE_CALLBACK_EXT_VERSION_FORCE_UINT32 = 0x7fffffff        ///< Value marking end of ZEX_MEMORY_FREE_CALLBACK_EXT_VERSION_* ENUMs
+
+} zex_memory_free_callback_ext_version_t;
+
+#ifndef ZEX_STRUCTURE_TYPE_MEMORY_FREE_CALLBACK_EXT_DESC
+/// @brief stype for _zex_memory_free_callback_ext_desc_t
+#endif
+
+/**
+ * @brief Callback function type for memory free events.
+ *
+ * This function is called when a memory free operation occurs.
+ *
+ * @param pUserData Pointer to user-defined data passed to the callback.
+ */
+typedef void (*zex_mem_free_callback_fn_t)(void *pUserData);
+
+/**
+ * @brief Descriptor for a memory free callback extension.
+ *
+ * This structure is used to specify a callback function that will be invoked when memory is freed.
+ *
+ * Members:
+ * - stype: Specifies the type of this structure.
+ * - pNext: Optional pointer to an extension-specific structure; must be null or point to a structure containing stype and pNext.
+ * - pfnCallback: Callback function to be called when memory is freed.
+ * - pUserData: Optional user data to be passed to the callback function.
+ */
+typedef struct _zex_memory_free_callback_ext_desc_t {
+    ze_structure_type_ext_t stype;          ///< [in] type of this structure
+    const void *pNext;                      ///< [in][optional] must be null or a pointer to an extension-specific
+                                            ///< structure (i.e. contains stype and pNext).
+    zex_mem_free_callback_fn_t pfnCallback; // [in] callback function to be called on memory free
+    void *pUserData;                        // [in][optional] user data passed to callback
+} zex_memory_free_callback_ext_desc_t;
+
+/**
+ * @brief Registers a callback to be invoked when memory is freed.
+ *
+ * This function allows the user to register a callback that will be called
+ * whenever the specified memory is freed within the given context.
+ *
+ * @param hContext
+ *        [in] Handle to the context in which the memory was allocated.
+ * @param hFreeCallbackDesc
+ *        [in] Pointer to a descriptor specifying the callback function and its parameters.
+ * @param ptr
+ *        [in] Pointer to the memory for which the free callback is to be registered.
+ *
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_UNINITIALIZED
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_INVALID_ARGUMENT
+///         + `nullptr == hFreeCallbackDesc`
+///         + `nullptr == ptr`
+ *
+ * @note The callback will be invoked when the specified memory is freed.
+ */
+ZE_APIEXPORT ze_result_t ZE_APICALL zexMemFreeRegisterCallbackExt(ze_context_handle_t hContext, zex_memory_free_callback_ext_desc_t *hFreeCallbackDesc, void *ptr);
+#endif // ZEX_MEMORY_FREE_CALLBACK_EXT_NAME
+
 #ifndef ZE_INTEL_KERNEL_GET_PROGRAM_BINARY_EXP_NAME
 /// @brief Get Kernel Program Binary experimental name
 #define ZE_INTEL_KERNEL_GET_PROGRAM_BINARY_EXP_NAME "ZE_intel_experimental_kernel_get_program_binary"
@@ -279,7 +353,7 @@ typedef enum _ze_intel_kernel_get_binary_exp_version_t {
 
 } ze_intel_kernel_get_binary_exp_version_t;
 
-ze_result_t ZE_APICALL
+ZE_APIEXPORT ze_result_t ZE_APICALL
 zeIntelKernelGetBinaryExp(
     ze_kernel_handle_t hKernel, ///< [in] Kernel handle
     size_t *pSize,              ///< [in, out] pointer to variable with size of GEN ISA binary
@@ -495,17 +569,75 @@ zeIntelMemGetFormatModifiersSupportedExp(
 ///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
 ze_result_t ZE_APICALL zeDeviceGetPriorityLevels(
     ze_device_handle_t hDevice,
-    int *lowestPriority,
-    int *highestPriority);
+    int32_t *lowestPriority,
+    int32_t *highestPriority);
 
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Descriptor used for setting priority on command queues and immediate command lists.
 /// This structure may be passed as pNext member of ::ze_command_queue_desc_t.
 typedef struct _ze_queue_priority_desc_t {
-    ze_structure_type_t stype; ///< [in] type of this structure
-    const void *pNext;         ///< [in][optional] must be null or a pointer to an extension-specific structure
-    int priority;              ///< [in] priority of the queue
+    ze_structure_type_ext_t stype; ///< [in] type of this structure
+    const void *pNext;             ///< [in][optional] must be null or a pointer to an extension-specific structure
+    int priority;                  ///< [in] priority of the queue
 } ze_queue_priority_desc_t;
+
+/// @brief Get default context associated with default driver
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - Default context contains all devices within default driver instance
+/// @returns
+///     - Context handle associated with default driver
+ZE_APIEXPORT ze_context_handle_t ZE_APICALL zerGetDefaultContext();
+
+/// @brief Get Device Identifier
+///
+/// @details
+///     - The application may call this function from simultaneous threads.
+///     - The implementation of this function should be lock-free.
+///     - Returned identifier is a 32-bit unsigned integer that is unique to the driver.
+///     - The identifier can be used then in zerTranslateIdentifierToDeviceHandle to get the device handle.
+/// @returns
+///     - 32-bit unsigned integer identifier
+ZE_APIEXPORT uint32_t ZE_APICALL zerTranslateDeviceHandleToIdentifier(ze_device_handle_t hDevice); ///< [in] handle of the device
+
+/// @brief Translate Device Identifier to Device Handle from default Driver
+///
+/// @details
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Returned device is associated to default driver handle.
+/// @returns
+///     - device handle associated with the identifier
+ZE_APIEXPORT ze_device_handle_t ZE_APICALL zerTranslateIdentifierToDeviceHandle(uint32_t identifier); ///< [in] integer identifier of the device
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Retrieves a string describing the last error code returned by the
+///        default driver in the current thread.
+///
+/// @details
+///     - String returned is thread local.
+///     - String is only updated on calls returning an error, i.e., not on calls
+///       returning ::ZE_RESULT_SUCCESS.
+///     - String may be empty if driver considers error code is already explicit
+///       enough to describe cause.
+///     - Memory pointed to by ppString is owned by the driver.
+///     - String returned is null-terminated.
+///
+/// @returns
+///     - ::ZE_RESULT_SUCCESS
+///     - ::ZE_RESULT_ERROR_UNINITIALIZED
+///     - ::ZE_RESULT_ERROR_DEVICE_LOST
+///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `nullptr == ppString`
+ZE_APIEXPORT ze_result_t ZE_APICALL
+zerGetLastErrorDescription(
+    const char **ppString ///< [in,out] pointer to a null-terminated array of characters describing
+                          ///< cause of error.
+);
 
 #if ZE_API_VERSION_CURRENT_M <= ZE_MAKE_VERSION(1, 13)
 
@@ -518,37 +650,6 @@ typedef struct _ze_queue_priority_desc_t {
 /// @returns
 ///     - Context handle associated with driver
 ze_context_handle_t ZE_APICALL zeDriverGetDefaultContext(ze_driver_handle_t hDriver); ///> [in] handle of the driver
-
-/// @brief Get default context associated with default driver
-///
-/// @details
-///     - The application may call this function from simultaneous threads.
-///     - The implementation of this function should be lock-free.
-///     - Default context contains all devices within default driver instance
-/// @returns
-///     - Context handle associated with default driver
-ze_context_handle_t ZE_APICALL zerDriverGetDefaultContext();
-
-/// @brief Get Device Identifier
-///
-/// @details
-///     - The application may call this function from simultaneous threads.
-///     - The implementation of this function should be lock-free.
-///     - Returned identifier is a 32-bit unsigned integer that is unique to the driver.
-///     - The identifier can be used then in zerIdentifierTranslateToDeviceHandle to get the device handle.
-/// @returns
-///     - 32-bit unsigned integer identifier
-uint32_t ZE_APICALL zerDeviceTranslateToIdentifier(ze_device_handle_t hDevice); ///< [in] handle of the device
-
-/// @brief Translate Device Identifier to Device Handle from default Driver
-///
-/// @details
-///    - The application may call this function from simultaneous threads.
-///    - The implementation of this function should be lock-free.
-///    - Returned device is associated to default driver handle.
-/// @returns
-///     - device handle associated with the identifier
-ze_device_handle_t ZE_APICALL zerIdentifierTranslateToDeviceHandle(uint32_t identifier); ///< [in] integer identifier of the device
 
 /// @brief Global device synchronization
 ///
@@ -602,37 +703,51 @@ ze_result_t ZE_APICALL zeCommandListAppendLaunchKernelWithArguments(
     ze_kernel_handle_t hKernel,            ///< [in] handle of the kernel object
     const ze_group_count_t groupCounts,    ///< [in] thread group counts
     const ze_group_size_t groupSizes,      ///< [in] thread group sizes
-    const void **pArguments,               ///< [in] kernel arguments; pointer to list where each argument represents a pointer to the argument value on specific index
+    void **pArguments,                     ///< [in] kernel arguments; pointer to list where each argument represents a pointer to the argument value on specific index
     const void *pNext,                     ///< [in][optional] extensions
     ze_event_handle_t hSignalEvent,        ///< [in][optional] handle of the event to signal on completion
     uint32_t numWaitEvents,                ///< [in][optional] number of events to wait on before launching
     ze_event_handle_t *phWaitEvents);      ///< [in][optional][range(0, numWaitEvents)] handle of the events to wait on before launching
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Retrieves a string describing the last error code returned by the
-///        default driver in the current thread.
+/// @brief Extension descriptor for cooperative kernel launch via pNext chain.
+/// @details
+///     - This structure can be passed through pNext to zeCommandListAppendLaunchKernelWithParameters
+typedef struct _ze_command_list_append_launch_kernel_param_cooperative_desc_t {
+    ze_structure_type_ext_t stype; ///< [in] Type of this structure (e.g. ZE_STRUCTURE_TYPE_COMMAND_LIST_APPEND_PARAM_COOPERATIVE_DESC)
+    const void *pNext;             ///< [in][optional] Pointer to the next extension-specific structure
+    ze_bool_t isCooperative;       ///< [in] Indicates if the kernel should be launched as cooperative
+} ze_command_list_append_launch_kernel_param_cooperative_desc_t;
+/// @brief Append with parameters
 ///
 /// @details
-///     - String returned is thread local.
-///     - String is only updated on calls returning an error, i.e., not on calls
-///       returning ::ZE_RESULT_SUCCESS.
-///     - String may be empty if driver considers error code is already explicit
-///       enough to describe cause.
-///     - Memory pointed to by ppString is owned by the driver.
-///     - String returned is null-terminated.
+///    - The application may call this function from simultaneous threads.
+///    - The implementation of this function should be lock-free.
+///    - Appends kernel to command list with additional parameters via pNext chain.
+///    - Allows passing core and extension descriptors (e.g. cooperative kernel).
 ///
 /// @returns
 ///     - ::ZE_RESULT_SUCCESS
-///     - ::ZE_RESULT_ERROR_UNINITIALIZED
 ///     - ::ZE_RESULT_ERROR_DEVICE_LOST
 ///     - ::ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+///     - ::ZE_RESULT_ERROR_UNSUPPORTED_FEATURE
+///     - ::ZE_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `nullptr == hCommandList`
+///         + `nullptr == hKernel`
 ///     - ::ZE_RESULT_ERROR_INVALID_NULL_POINTER
-///         + `nullptr == ppString`
-ze_result_t ZE_APICALL
-zerDriverGetLastErrorDescription(
-    const char **ppString ///< [in,out] pointer to a null-terminated array of characters describing
-                          ///< cause of error.
+///         + `nullptr == pGroupCounts`
+///     - ::ZE_RESULT_ERROR_INVALID_SYNCHRONIZATION_OBJECT
+///     - ::ZE_RESULT_ERROR_INVALID_SIZE
+///         + `(nullptr == phWaitEvents) && (0 < numWaitEvents)`
+ZE_APIEXPORT ze_result_t ZE_APICALL zeCommandListAppendLaunchKernelWithParameters(
+    ze_command_list_handle_t hCommandList, ///< [in] handle of the command list
+    ze_kernel_handle_t hKernel,            ///< [in] handle of the kernel object
+    const ze_group_count_t *pGroupCounts,  ///< [in] thread group launch arguments
+    const void *pNext,                     ///< [in][optional] additional parameters (pNext chain)
+    ze_event_handle_t hSignalEvent,        ///< [in][optional] handle of the event to signal on completion
+    uint32_t numWaitEvents,                ///< [in][optional] number of events to wait on before launching
+    ze_event_handle_t *phWaitEvents        ///< [in][optional][range(0, numWaitEvents)] handle of the events to wait on before launching
 );
 
 #endif // ZE_API_VERSION_CURRENT_M <= ZE_MAKE_VERSION(1, 13)
@@ -641,31 +756,63 @@ zerDriverGetLastErrorDescription(
 } // extern "C"
 #endif
 
+static const ze_device_mem_alloc_desc_t defaultIntelDeviceMemDesc = {
+    ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, // stype
+    nullptr,                                 // pNext
+    ZE_DEVICE_MEM_ALLOC_FLAG_BIAS_CACHED,    // flags
+    0                                        // ordinal
+};
+
+static const ze_host_mem_alloc_desc_t defaultIntelHostMemDesc = {
+    ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC,                                             // stype
+    nullptr,                                                                           // pNext
+    ZE_HOST_MEM_ALLOC_FLAG_BIAS_CACHED | ZE_HOST_MEM_ALLOC_FLAG_BIAS_INITIAL_PLACEMENT // flags
+};
+
+static const ze_command_queue_desc_t defaultIntelCommandQueueDesc = {
+    ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC,                                     // stype
+    nullptr,                                                                  // pNext
+    0,                                                                        // ordinal
+    0,                                                                        // index
+    ZE_COMMAND_QUEUE_FLAG_IN_ORDER | ZE_COMMAND_QUEUE_FLAG_COPY_OFFLOAD_HINT, // flags
+    ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS,                                       // mode
+    ZE_COMMAND_QUEUE_PRIORITY_NORMAL                                          // priority
+};
+
 #if ZE_API_VERSION_CURRENT_M <= ZE_MAKE_VERSION(1, 13)
 
-const ze_device_mem_alloc_desc_t defaultDeviceMemDesc = {
-    ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,                                        // stype
-    nullptr,                                                                        // pNext
-    static_cast<ze_device_mem_alloc_flags_t>(ZE_DEVICE_MEM_ALLOC_FLAG_BIAS_CACHED), // flags
-    0                                                                               // ordinal
-};
+///////////////////////////////////////////////////////////////////////////////
+#ifndef ZE_EXTERNAL_MEMORY_MAPPING_EXT_NAME
+/// @brief External Memory Mapping Extension Name
+#define ZE_EXTERNAL_MEMORY_MAPPING_EXT_NAME "ZE_extension_external_memmap_sysmem"
 
-const ze_host_mem_alloc_desc_t defaultHostMemDesc = {
-    ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC,                                                                                     // stype
-    nullptr,                                                                                                                   // pNext
-    static_cast<ze_host_mem_alloc_flags_t>(ZE_HOST_MEM_ALLOC_FLAG_BIAS_CACHED | ZE_HOST_MEM_ALLOC_FLAG_BIAS_INITIAL_PLACEMENT) // flags
-};
+///////////////////////////////////////////////////////////////////////////////
+/// @brief External Memory Mapping Extension Version(s)
+typedef enum _ze_external_memmap_sysmem_ext_version_t {
+    ZE_EXTERNAL_MEMMAP_SYSMEM_EXT_VERSION_1_0 = ZE_MAKE_VERSION(1, 0),     ///< version 1.0
+    ZE_EXTERNAL_MEMMAP_SYSMEM_EXT_VERSION_CURRENT = ZE_MAKE_VERSION(1, 0), ///< latest known version
+    ZE_EXTERNAL_MEMMAP_SYSMEM_EXT_VERSION_FORCE_UINT32 = 0x7fffffff        ///< Value marking end of ZE_EXTERNAL_MEMMAP_SYSMEM_EXT_VERSION_* ENUMs
 
-const ze_command_queue_desc_t defaultCommandQueueDesc = {
-    ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC,                                                                            // stype
-    nullptr,                                                                                                         // pNext
-    0,                                                                                                               // ordinal
-    0,                                                                                                               // index
-    static_cast<ze_command_queue_flags_t>(ZE_COMMAND_QUEUE_FLAG_IN_ORDER | ZE_COMMAND_QUEUE_FLAG_COPY_OFFLOAD_HINT), // flags
-    ZE_COMMAND_QUEUE_MODE_ASYNCHRONOUS,                                                                              // mode
-    ZE_COMMAND_QUEUE_PRIORITY_NORMAL                                                                                 // priority
-};
+} ze_external_memmap_sysmem_ext_version_t;
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Maps external system memory for an allocation
+///
+/// @details
+///     - This structure may be passed to ::zeMemAllocHost, via the `pNext`
+///       member of ::ze_host_mem_alloc_desc_t to map system memory for a host
+///       allocation.
+///     - The system memory pointer and size being mapped must be page aligned
+///       based on the supported page sizes on the device.
+typedef struct _ze_external_memmap_sysmem_ext_desc_t {
+    ze_structure_type_ext_t stype; ///< [in] type of this structure
+    const void *pNext;             ///< [in][optional] must be null or a pointer to an extension-specific
+                                   ///< structure (i.e. contains stype and pNext).
+    const void *pSystemMemory;     ///< [in] system memory pointer to map; must be page-aligned.
+    const uint64_t size;           ///< [in] size of the system memory to map; must be page-aligned.
+
+} ze_external_memmap_sysmem_ext_desc_t;
+#endif // ZE_EXTERNAL_MEMORY_MAPPING_EXT_NAME
 
 #endif // ZE_API_VERSION_CURRENT_M <= ZE_MAKE_VERSION(1, 13)
-
 #endif

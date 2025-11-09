@@ -9,6 +9,7 @@
 
 #include "shared/source/compiler_interface/external_functions.h"
 #include "shared/source/program/kernel_info.h"
+#include "shared/source/utilities/shared_pool_allocation.h"
 #include "shared/test/common/mocks/mock_cif.h"
 #include "shared/test/common/mocks/mock_compiler_interface.h"
 #include "shared/test/common/test_macros/mock_method_macros.h"
@@ -77,7 +78,7 @@ struct WhiteBox<::L0::Module> : public ::L0::ModuleImp {
     using BaseClass::isFullyLinked;
     using BaseClass::isFunctionSymbolExportEnabled;
     using BaseClass::isGlobalSymbolExportEnabled;
-    using BaseClass::kernelImmDatas;
+    using BaseClass::kernelImmData;
     using BaseClass::setIsaGraphicsAllocations;
     using BaseClass::symbols;
     using BaseClass::translationUnit;
@@ -91,8 +92,8 @@ struct WhiteBox<::L0::Module> : public ::L0::ModuleImp {
 
     ze_result_t initializeTranslationUnit(const ze_module_desc_t *desc, NEO::Device *neoDevice) override;
 
-    NEO::GraphicsAllocation *mockGlobalVarBuffer = nullptr;
-    NEO::GraphicsAllocation *mockGlobalConstBuffer = nullptr;
+    std::unique_ptr<NEO::SharedPoolAllocation> mockGlobalVarBuffer = nullptr;
+    std::unique_ptr<NEO::SharedPoolAllocation> mockGlobalConstBuffer = nullptr;
 };
 
 using Module = WhiteBox<::L0::Module>;
@@ -121,16 +122,16 @@ struct Mock<Module> : public Module {
 };
 
 struct MockModule : public L0::ModuleImp {
-    using ModuleImp::allocateKernelImmutableDatas;
+    using ModuleImp::allocateKernelImmutableData;
     using ModuleImp::allocateKernelsIsaMemory;
     using ModuleImp::computeKernelIsaAllocationAlignedSizeWithPadding;
     using ModuleImp::debugModuleHandle;
     using ModuleImp::getModuleAllocations;
-    using ModuleImp::initializeKernelImmutableDatas;
+    using ModuleImp::initializeKernelImmutableData;
     using ModuleImp::isaAllocationPageSize;
     using ModuleImp::isFunctionSymbolExportEnabled;
     using ModuleImp::isGlobalSymbolExportEnabled;
-    using ModuleImp::kernelImmDatas;
+    using ModuleImp::kernelImmData;
     using ModuleImp::populateHostGlobalSymbolsMap;
     using ModuleImp::setIsaGraphicsAllocations;
     using ModuleImp::symbols;
@@ -145,12 +146,12 @@ struct MockModule : public L0::ModuleImp {
     ~MockModule() override = default;
 
     const KernelImmutableData *getKernelImmutableData(const char *kernelName) const override {
-        return kernelImmData;
+        return data;
     }
 
-    std::vector<std::unique_ptr<KernelImmutableData>> &getKernelImmutableDataVectorRef() { return kernelImmDatas; }
+    std::vector<std::unique_ptr<KernelImmutableData>> &getKernelImmutableDataVectorRef() { return kernelImmData; }
 
-    KernelImmutableData *kernelImmData = nullptr;
+    KernelImmutableData *data = nullptr;
 };
 
 struct MockCompilerInterface : public NEO::CompilerInterface {

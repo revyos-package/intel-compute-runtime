@@ -13,6 +13,7 @@
 #include "shared/source/gmm_helper/client_context/gmm_handle_allocator.h"
 #include "shared/source/gmm_helper/client_context/map_gpu_va_gmm.h"
 #include "shared/source/gmm_helper/gmm.h"
+#include "shared/source/gmm_helper/gmm_callbacks.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/gmm_helper/page_table_mngr.h"
 #include "shared/source/gmm_helper/resource_info.h"
@@ -23,14 +24,12 @@
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/mt_helpers.h"
 #include "shared/source/helpers/string.h"
-#include "shared/source/helpers/windows/gmm_callbacks.h"
 #include "shared/source/memory_manager/gfx_partition.h"
 #include "shared/source/os_interface/product_helper.h"
 #include "shared/source/os_interface/sys_calls_common.h"
 #include "shared/source/os_interface/windows/driver_info_windows.h"
 #include "shared/source/os_interface/windows/dxcore_wrapper.h"
 #include "shared/source/os_interface/windows/gdi_interface.h"
-#include "shared/source/os_interface/windows/kmdaf_listener.h"
 #include "shared/source/os_interface/windows/os_context_win.h"
 #include "shared/source/os_interface/windows/os_environment_win.h"
 #include "shared/source/os_interface/windows/sharedata_wrapper.h"
@@ -67,7 +66,6 @@ Wddm::Wddm(std::unique_ptr<HwDeviceIdWddm> &&hwDeviceIdIn, RootDeviceEnvironment
     memset(gtSystemInfo.get(), 0, sizeof(*gtSystemInfo));
     memset(gfxPlatform.get(), 0, sizeof(*gfxPlatform));
     this->enablePreemptionRegValue = NEO::readEnablePreemptionRegKey();
-    kmDafListener = std::unique_ptr<KmDafListener>(new KmDafListener);
     temporaryResources = std::make_unique<WddmResidentAllocationsContainer>(this);
     osMemory = OSMemory::create();
     bool forceCheck = false;
@@ -110,6 +108,9 @@ bool Wddm::init() {
     hardwareInfo->capabilityTable.instrumentationEnabled =
         (hardwareInfo->capabilityTable.instrumentationEnabled && instrumentationEnabled);
 
+    DEBUG_BREAK_IF(hardwareInfo->gtSystemInfo.NumThreadsPerEu != hardwareInfo->gtSystemInfo.ThreadCount / hardwareInfo->gtSystemInfo.EUCount);
+    hardwareInfo->gtSystemInfo.NumThreadsPerEu = hardwareInfo->gtSystemInfo.ThreadCount / hardwareInfo->gtSystemInfo.EUCount;
+
     rootDeviceEnvironment.initProductHelper();
     rootDeviceEnvironment.initCompilerProductHelper();
     auto &productHelper = rootDeviceEnvironment.getHelper<ProductHelper>();
@@ -135,6 +136,13 @@ bool Wddm::init() {
 
     auto preemptionMode = PreemptionHelper::getDefaultPreemptionMode(*hardwareInfo);
 
+    if (!createDevice(preemptionMode)) {
+        return false;
+    }
+    if (!createPagingQueue()) {
+        return false;
+    }
+
     rootDeviceEnvironment.initGmm();
     this->rootDeviceEnvironment.getGmmClientContext()->setHandleAllocator(this->hwDeviceId->getUmKmDataTranslator()->createGmmHandleAllocator());
 
@@ -145,13 +153,6 @@ bool Wddm::init() {
         wddmInterface = std::make_unique<WddmInterface23>(*this);
     } else {
         wddmInterface = std::make_unique<WddmInterface20>(*this);
-    }
-
-    if (!createDevice(preemptionMode)) {
-        return false;
-    }
-    if (!createPagingQueue()) {
-        return false;
     }
     if (!gmmMemory) {
         gmmMemory.reset(GmmMemory::create(rootDeviceEnvironment.getGmmClientContext()));
@@ -518,8 +519,6 @@ bool Wddm::evict(const D3DKMT_HANDLE *handleList, uint32_t numOfHandles, uint64_
 
     sizeToTrim = evict.NumBytesToTrim;
 
-    kmDafListener->notifyEvict(featureTable->flags.ftrKmdDaf, getAdapter(), device, handleList, numOfHandles, getGdi()->escape);
-
     return status == STATUS_SUCCESS;
 }
 
@@ -556,7 +555,6 @@ bool Wddm::makeResident(const D3DKMT_HANDLE *handles, uint32_t count, bool cantT
         return false;
     }
 
-    kmDafListener->notifyMakeResident(featureTable->flags.ftrKmdDaf, getAdapter(), device, handles, count, getGdi()->escape);
     this->setNewResourceBoundToPageTable();
 
     return success;
@@ -606,7 +604,6 @@ bool Wddm::mapGpuVirtualAddress(Gmm *gmm, D3DKMT_HANDLE handle, D3DGPU_VIRTUAL_A
         return false;
     }
 
-    kmDafListener->notifyMapGpuVA(featureTable->flags.ftrKmdDaf, getAdapter(), device, handle, mapGPUVA.VirtualAddress, getGdi()->escape);
     bool ret = true;
     auto &productHelper = rootDeviceEnvironment.getHelper<ProductHelper>();
     if (gmm->isCompressionEnabled() && productHelper.isPageTableManagerSupported(*rootDeviceEnvironment.getHardwareInfo())) {
@@ -654,8 +651,6 @@ bool Wddm::freeGpuVirtualAddress(D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size) 
     status = getGdi()->freeGpuVirtualAddress(&freeGpuva);
     gpuPtr = static_cast<D3DGPU_VIRTUAL_ADDRESS>(0);
 
-    kmDafListener->notifyUnmapGpuVA(featureTable->flags.ftrKmdDaf, getAdapter(), device, freeGpuva.BaseAddress, getGdi()->escape);
-
     return status == STATUS_SUCCESS;
 }
 
@@ -664,6 +659,10 @@ bool Wddm::isReadOnlyFlagFallbackAvailable(const D3DKMT_CREATEALLOCATION &create
 }
 
 NTSTATUS Wddm::createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle) {
+    return createAllocation(cpuPtr, gmm, outHandle, outResourceHandle, outSharedHandle, true);
+}
+
+NTSTATUS Wddm::createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle, bool createNTHandle) {
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     D3DDDI_ALLOCATIONINFO2 allocationInfo = {};
     D3DKMT_CREATEALLOCATION createAllocation = {};
@@ -704,7 +703,7 @@ NTSTATUS Wddm::createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDL
 
     outHandle = allocationInfo.hAllocation;
     outResourceHandle = createAllocation.hResource;
-    if (outSharedHandle) {
+    if (outSharedHandle && createNTHandle) {
         HANDLE ntSharedHandle = NULL;
         status = this->createNTHandle(&outResourceHandle, &ntSharedHandle);
         if (status != STATUS_SUCCESS) {
@@ -717,7 +716,6 @@ NTSTATUS Wddm::createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDL
         }
         *outSharedHandle = castToUint64(ntSharedHandle);
     }
-    kmDafListener->notifyWriteTarget(featureTable->flags.ftrKmdDaf, getAdapter(), device, outHandle, getGdi()->escape);
 
     return status;
 }
@@ -821,8 +819,6 @@ NTSTATUS Wddm::createAllocationsAndMapGpuVa(OsHandleStorage &osHandles) {
             }
 
             allocationIndex++;
-
-            kmDafListener->notifyWriteTarget(featureTable->flags.ftrKmdDaf, getAdapter(), device, allocationInfo[i].hAllocation, getGdi()->escape);
         }
 
         status = STATUS_SUCCESS;
@@ -922,7 +918,8 @@ bool Wddm::verifyNTHandle(HANDLE handle) {
 bool Wddm::openNTHandle(const MemoryManager::OsHandleData &osHandleData, WddmAllocation *alloc) {
     D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE queryResourceInfoFromNtHandle = {};
     queryResourceInfoFromNtHandle.hDevice = device;
-    queryResourceInfoFromNtHandle.hNtHandle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(osHandleData.handle));
+    HANDLE sharedNtHandle = this->getSharedHandle(osHandleData);
+    queryResourceInfoFromNtHandle.hNtHandle = sharedNtHandle;
     [[maybe_unused]] auto status = getGdi()->queryResourceInfoFromNtHandle(&queryResourceInfoFromNtHandle);
     DEBUG_BREAK_IF(status != STATUS_SUCCESS);
 
@@ -938,7 +935,7 @@ bool Wddm::openNTHandle(const MemoryManager::OsHandleData &osHandleData, WddmAll
     D3DKMT_OPENRESOURCEFROMNTHANDLE openResourceFromNtHandle = {};
 
     openResourceFromNtHandle.hDevice = device;
-    openResourceFromNtHandle.hNtHandle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(osHandleData.handle));
+    openResourceFromNtHandle.hNtHandle = sharedNtHandle;
     openResourceFromNtHandle.NumAllocations = queryResourceInfoFromNtHandle.NumAllocations;
     openResourceFromNtHandle.pOpenAllocationInfo2 = allocationInfo2.get();
     openResourceFromNtHandle.pTotalPrivateDriverDataBuffer = allocPrivateData.get();
@@ -978,7 +975,6 @@ void *Wddm::lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPrio
         return nullptr;
     }
 
-    kmDafLock(handle);
     return lock2.pData;
 }
 
@@ -988,25 +984,11 @@ void Wddm::unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPri
     unlock2.hAllocation = handle;
     unlock2.hDevice = this->device;
 
-    NTSTATUS status = getGdi()->unlock2(&unlock2);
+    getGdi()->unlock2(&unlock2);
 
     if (applyMakeResidentPriorToLock) {
         this->temporaryResources->evictResource(handle);
     }
-
-    if (status != STATUS_SUCCESS) {
-        return;
-    }
-
-    kmDafListener->notifyUnlock(featureTable->flags.ftrKmdDaf, getAdapter(), device, &handle, 1, getGdi()->escape);
-}
-
-void Wddm::kmDafLock(D3DKMT_HANDLE handle) {
-    kmDafListener->notifyLock(featureTable->flags.ftrKmdDaf, getAdapter(), device, handle, 0, getGdi()->escape);
-}
-
-bool Wddm::isKmDafEnabled() const {
-    return featureTable->flags.ftrKmdDaf;
 }
 
 bool Wddm::setLowPriorityContextParam(D3DKMT_HANDLE contextHandle) {
@@ -1029,6 +1011,11 @@ bool Wddm::setLowPriorityContextParam(D3DKMT_HANDLE contextHandle) {
 }
 
 bool Wddm::createContext(OsContextWin &osContext) {
+    if (osContext.isPartOfContextGroup() && osContext.getPrimaryContext() != nullptr && wddmInterface->hwQueuesSupported()) {
+        osContext.setWddmContextHandle(static_cast<const OsContextWin *>(osContext.getPrimaryContext())->getWddmContextHandle());
+        return true;
+    }
+
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     D3DKMT_CREATECONTEXTVIRTUAL createContext = {};
 
@@ -1274,8 +1261,8 @@ void Wddm::initGfxPartition(GfxPartition &outGfxPartition, uint32_t rootDeviceIn
             outGfxPartition.heapInitExternalWithFrontWindow(heap, gfxPartition.Heap32[static_cast<uint32_t>(heap)].Base,
                                                             gfxPartition.Heap32[static_cast<uint32_t>(heap)].Limit - gfxPartition.Heap32[static_cast<uint32_t>(heap)].Base + 1);
             size_t externalFrontWindowSize = GfxPartition::externalFrontWindowPoolSize;
-            outGfxPartition.heapInitExternalWithFrontWindow(HeapAssigner::mapExternalWindowIndex(heap), outGfxPartition.heapAllocate(heap, externalFrontWindowSize),
-                                                            externalFrontWindowSize);
+            auto address = outGfxPartition.heapAllocate(heap, externalFrontWindowSize);
+            outGfxPartition.heapInitExternalWithFrontWindow(HeapAssigner::mapExternalWindowIndex(heap), address, externalFrontWindowSize);
         } else if (HeapAssigner::isInternalHeap(heap)) {
             auto baseAddress = gfxPartition.Heap32[static_cast<uint32_t>(heap)].Base >= minAddress ? gfxPartition.Heap32[static_cast<uint32_t>(heap)].Base : minAddress;
 
@@ -1449,5 +1436,9 @@ void Wddm::setNewResourceBoundToPageTable() {
         return;
     }
     this->forEachContextWithinWddm([](const EngineControl &engine) { engine.osContext->setNewResourceBound(); });
+}
+
+bool Wddm::needsNotifyAubCaptureCallback() const {
+    return obtainCsrTypeFromIntegerValue(debugManager.flags.SetCommandStreamReceiver.get(), CommandStreamReceiverType::hardware) == CommandStreamReceiverType::hardwareWithAub;
 }
 } // namespace NEO

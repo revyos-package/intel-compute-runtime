@@ -49,7 +49,7 @@ TEST(HashGeneration, givenMisalignedBufferWhenPassedToUpdateFunctionThenProperPt
     misalignedPtr[2] = 3;
     misalignedPtr[3] = 4;
     misalignedPtr[4] = 5;
-    // values not used should be ommitted
+    // values not used should be omitted
     misalignedPtr[5] = 6;
     misalignedPtr[6] = 7;
 
@@ -91,7 +91,7 @@ TEST(HashGeneration, givenMisalignedBufferWithSizeOneWhenPassedToUpdateFunctionT
 
     // values really used
     misalignedPtr[0] = 1;
-    // values not used should be ommitted
+    // values not used should be omitted
     misalignedPtr[1] = 2;
     misalignedPtr[2] = 3;
     misalignedPtr[3] = 4;
@@ -853,7 +853,7 @@ class CompilerCacheHelperWhitelistedTest : public ::testing::Test, public Compil
   public:
     using CompilerCacheHelper::whitelistedIncludes;
 
-    bool isValidIncludeFormat(const std::string_view &entry) {
+    bool isValidIncludeFormat(std::string_view entry) {
         size_t spacePos = entry.find(' ');
         if (spacePos == std::string_view::npos) {
             return false;

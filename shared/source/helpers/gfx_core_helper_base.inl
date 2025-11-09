@@ -11,10 +11,12 @@
 #include "shared/source/execution_environment/root_device_environment.h"
 #include "shared/source/gmm_helper/gmm.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
+#include "shared/source/gmm_helper/resource_info.h"
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/basic_math.h"
 #include "shared/source/helpers/bit_helpers.h"
 #include "shared/source/helpers/constants.h"
+#include "shared/source/helpers/debug_helpers.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/local_id_gen.h"
@@ -172,7 +174,7 @@ bool GfxCoreHelperHw<Family>::getEnableLocalMemory(const HardwareInfo &hwInfo) c
         return true;
     }
 
-    return OSInterface::osEnableLocalMemory && isLocalMemoryEnabled(hwInfo);
+    return isLocalMemoryEnabled(hwInfo);
 }
 
 template <typename Family>
@@ -283,6 +285,7 @@ void MemorySynchronizationCommands<GfxFamily>::setSingleBarrier(void *commandsBu
     pipeControl.setDepthCacheFlushEnable(args.depthCacheFlushEnable);
     pipeControl.setDepthStallEnable(args.depthStallEnable);
     pipeControl.setProtectedMemoryDisable(args.protectedMemoryDisable);
+    pipeControl.setCommandCacheInvalidateEnable(args.commandCacheInvalidateEnable);
 
     if constexpr (GfxFamily::isUsingGenericMediaStateClear) {
         pipeControl.setGenericMediaStateClear(args.genericMediaStateClear);
@@ -578,21 +581,6 @@ size_t GfxCoreHelperHw<GfxFamily>::getSingleTimestampPacketSizeHw() {
 }
 
 template <typename GfxFamily>
-void MemorySynchronizationCommands<GfxFamily>::addFullCacheFlush(LinearStream &commandStream, const RootDeviceEnvironment &rootDeviceEnvironment) {
-    PipeControlArgs args;
-    args.dcFlushEnable = MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, rootDeviceEnvironment);
-    args.renderTargetCacheFlushEnable = true;
-    args.instructionCacheInvalidateEnable = true;
-    args.textureCacheInvalidationEnable = true;
-    args.pipeControlFlushEnable = true;
-    args.constantCacheInvalidationEnable = true;
-    args.stateCacheInvalidationEnable = true;
-    args.tlbInvalidation = true;
-    MemorySynchronizationCommands<GfxFamily>::setCacheFlushExtraProperties(args);
-    MemorySynchronizationCommands<GfxFamily>::addSingleBarrier(commandStream, args);
-}
-
-template <typename GfxFamily>
 void MemorySynchronizationCommands<GfxFamily>::addStateCacheFlush(LinearStream &commandStream, const RootDeviceEnvironment &rootDeviceEnvironment) {
     using PIPE_CONTROL = typename GfxFamily::PIPE_CONTROL;
 
@@ -661,6 +649,17 @@ size_t GfxCoreHelperHw<GfxFamily>::getPreemptionAllocationAlignment() const {
 
 template <typename GfxFamily>
 void GfxCoreHelperHw<GfxFamily>::applyAdditionalCompressionSettings(Gmm &gmm, bool isNotCompressed) const {}
+
+template <typename GfxFamily>
+bool GfxCoreHelperHw<GfxFamily>::isCompressionAppliedForImportedResource(Gmm &gmm) const {
+    auto gmmFlags = gmm.gmmResourceInfo->getResourceFlags();
+    auto isResourceDenyCompressionEnabled = gmm.gmmResourceInfo->isResourceDenyCompressionEnabled();
+    if (((gmmFlags->Info.MediaCompressed == 1) || (gmmFlags->Info.RenderCompressed == 1)) && (!isResourceDenyCompressionEnabled)) {
+        return true;
+    }
+
+    return false;
+}
 
 template <typename GfxFamily>
 void GfxCoreHelperHw<GfxFamily>::applyRenderCompressionFlag(Gmm &gmm, uint32_t isCompressed) const {
@@ -765,6 +764,7 @@ DeviceHierarchyMode GfxCoreHelperHw<GfxFamily>::getDefaultDeviceHierarchy() cons
 template <typename GfxFamily>
 uint64_t GfxCoreHelperHw<GfxFamily>::getGpuTimeStampInNS(uint64_t timeStamp, double resolution) const {
     auto numBitsForResolution = Math::log2(static_cast<uint64_t>(resolution)) + 1u;
+    UNRECOVERABLE_IF(numBitsForResolution > 64U);
     auto timestampMask = maxNBitValue(64 - numBitsForResolution);
     return static_cast<uint64_t>(static_cast<uint64_t>(timeStamp & timestampMask) * resolution);
 }
@@ -882,7 +882,7 @@ bool GfxCoreHelperHw<GfxFamily>::usmCompressionSupported(const NEO::HardwareInfo
 }
 
 template <typename GfxFamily>
-uint32_t GfxCoreHelperHw<GfxFamily>::calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount) const {
+uint32_t GfxCoreHelperHw<GfxFamily>::calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount, const RootDeviceEnvironment &rootDeviceEnvironment) const {
     auto maxThreadsPerEuCount = 8u;
     if (grfCount == GrfConfig::largeGrfNumber) {
         maxThreadsPerEuCount = 4;
@@ -940,6 +940,11 @@ uintptr_t GfxCoreHelperHw<Family>::getSurfaceBaseAddressAlignmentMask() const {
 template <typename Family>
 uintptr_t GfxCoreHelperHw<Family>::getSurfaceBaseAddressAlignment() const {
     return EncodeSurfaceState<Family>::getSurfaceBaseAddressAlignment();
+}
+
+template <typename Family>
+bool GfxCoreHelperHw<Family>::isExtendedUsmPoolSizeEnabled() const {
+    return false;
 }
 
 } // namespace NEO

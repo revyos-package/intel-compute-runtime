@@ -69,7 +69,9 @@ cl_int Program::build(
 
             TranslationInput inputArgs = {IGC::CodeType::oclC, IGC::CodeType::oclGenBin};
             if (createdFrom != CreatedFrom::source) {
-                inputArgs.srcType = isSpirV ? IGC::CodeType::spirV : IGC::CodeType::llvmBc;
+                inputArgs.srcType = (intermediateRepresentation != IGC::CodeType::invalid)
+                                        ? intermediateRepresentation
+                                        : (isSpirV ? IGC::CodeType::spirV : IGC::CodeType::llvmBc);
                 inputArgs.src = ArrayRef<const char>(irBinary.get(), irBinarySize);
             } else {
                 inputArgs.src = ArrayRef<const char>(sourceCode.c_str(), sourceCode.size());
@@ -93,13 +95,6 @@ cl_int Program::build(
 
             if (!this->getIsBuiltIn() && debugManager.flags.InjectInternalBuildOptions.get() != "unk") {
                 NEO::CompilerOptions::concatenateAppend(internalOptions, NEO::debugManager.flags.InjectInternalBuildOptions.get());
-            }
-
-            if (nullptr != this->getContextPtr()) {
-                if (this->getContext().checkIfContextIsNonZebin()) {
-                    const auto &rootDevice = defaultDevice.getRootDevice();
-                    rootDevice->getCompilerInterface()->addOptionDisableZebin(options, internalOptions);
-                }
             }
 
             inputArgs.apiOptions = ArrayRef<const char>(options.c_str(), options.length());

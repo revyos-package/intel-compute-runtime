@@ -579,6 +579,9 @@ struct Xe2BcsTests : public UltCommandStreamReceiverTest {
 
 XE2_HPG_CORETEST_F(Xe2BcsTests, givenBufferInDeviceMemoryWhenStatelessCompressionIsEnabledThenBlitterForBufferUsesStatelessCompressedSettings) {
     using MEM_COPY = typename Xe2HpgCoreFamily::MEM_COPY;
+
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(0x1);
+
     char buff[1024] = {0};
     LinearStream stream(buff, 1024);
     MockGraphicsAllocation clearColorAlloc;
@@ -589,24 +592,24 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenBufferInDeviceMemoryWhenStatelessCompressio
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     EXPECT_TRUE(!MemoryPoolHelper::isSystemMemoryPool(allocation->getMemoryPool()));
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation,
-                                                                     0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<MEM_COPY>();
     *bltCmd = Xe2HpgCoreFamily::cmdInitXyCopyBlt;
 
     debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(true);
-    platformsImpl->clear();
-    EXPECT_EQ(platform(), nullptr);
 
     BlitCommandsHelper<Xe2HpgCoreFamily>::appendBlitCommandsForBuffer<MEM_COPY>(blitProperties, *bltCmd, context->getDevice(0)->getRootDeviceEnvironment());
 
-    EXPECT_EQ(static_cast<uint32_t>(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get()), bltCmd->getCompressionFormat());
+    EXPECT_EQ(static_cast<uint32_t>(debugManager.flags.BcsCompressionFormatForXe2Plus.get()), bltCmd->getCompressionFormat());
 }
 
 XE2_HPG_CORETEST_F(Xe2BcsTests, givenDstBufferInDeviceAndSrcInSystemMemoryWhenStatelessCompressionIsEnabledThenBlitterForBufferUsesStatelessCompressedSettings) {
     using MEM_COPY = typename Xe2HpgCoreFamily::MEM_COPY;
 
-    debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.set(0x1);
+    debugManager.flags.BcsCompressionFormatForXe2Plus.set(0x1);
 
     char buff[1024] = {0};
     LinearStream stream(buff, 1024);
@@ -621,8 +624,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenDstBufferInDeviceAndSrcInSystemMemoryWhenSt
     EXPECT_FALSE(MemoryPoolHelper::isSystemMemoryPool(allocationDst->getMemoryPool()));
     EXPECT_TRUE(MemoryPoolHelper::isSystemMemoryPool(allocationSrc->getMemoryPool()));
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocationDst, allocationSrc,
-                                                                     0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocationDst, 0,
+        allocationSrc, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<MEM_COPY>();
     *bltCmd = Xe2HpgCoreFamily::cmdInitXyCopyBlt;
 
@@ -630,33 +635,7 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenDstBufferInDeviceAndSrcInSystemMemoryWhenSt
 
     BlitCommandsHelper<Xe2HpgCoreFamily>::appendBlitCommandsForBuffer(blitProperties, *bltCmd, context->getDevice(0)->getRootDeviceEnvironment());
 
-    EXPECT_EQ(static_cast<uint32_t>(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get()), bltCmd->getCompressionFormat());
-}
-
-XE2_HPG_CORETEST_F(Xe2BcsTests, givenBufferInSystemMemoryWhenStatelessCompressionIsEnabledThenBlitterForBufferDoesntUseStatelessCompressedSettings) {
-    using MEM_COPY = typename Xe2HpgCoreFamily::MEM_COPY;
-    char buff[1024] = {0};
-    LinearStream stream(buff, 1024);
-    MockGraphicsAllocation clearColorAlloc;
-
-    auto buffer = clUniquePtr<Buffer>(Buffer::create(context.get(), CL_MEM_FORCE_HOST_MEMORY_INTEL, MemoryConstants::pageSize64k, nullptr, retVal));
-    EXPECT_EQ(CL_SUCCESS, retVal);
-
-    auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
-    EXPECT_TRUE(MemoryPoolHelper::isSystemMemoryPool(allocation->getMemoryPool()));
-
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation,
-                                                                     0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
-    auto bltCmd = stream.getSpaceForCmd<MEM_COPY>();
-    *bltCmd = Xe2HpgCoreFamily::cmdInitXyCopyBlt;
-
-    debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.set(true);
-    platformsImpl->clear();
-    EXPECT_EQ(platform(), nullptr);
-
-    BlitCommandsHelper<Xe2HpgCoreFamily>::appendBlitCommandsForBuffer(blitProperties, *bltCmd, context->getDevice(0)->getRootDeviceEnvironment());
-
-    EXPECT_EQ(0u, bltCmd->getCompressionFormat());
+    EXPECT_EQ(static_cast<uint32_t>(debugManager.flags.BcsCompressionFormatForXe2Plus.get()), bltCmd->getCompressionFormat());
 }
 
 XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleDstBuffersWhenAppendBlitCommandsForBufferCalledThenSetCompressionFormat) {
@@ -679,8 +658,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleDstBuffersWhenAppendBlitCommand
     auto dstAllocation = dstBuffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     EXPECT_TRUE(dstAllocation->getDefaultGmm()->isCompressionEnabled());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(dstAllocation, srcAllocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        dstAllocation, 0,
+        srcAllocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<MEM_COPY>();
     *bltCmd = FamilyType::cmdInitXyCopyBlt;
 
@@ -712,8 +693,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleSrcBuffersWhenAppendBlitCommand
     auto dstAllocation = dstBuffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     dstAllocation->getDefaultGmm()->setCompressionEnabled(false);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(dstAllocation, srcAllocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        dstAllocation, 0,
+        srcAllocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<MEM_COPY>();
     *bltCmd = FamilyType::cmdInitXyCopyBlt;
 
@@ -745,8 +728,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleSrcBuffersWhenAppendBlitCommand
     auto dstAllocation = dstBuffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     dstAllocation->getDefaultGmm()->setCompressionEnabled(false);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(dstAllocation, srcAllocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        dstAllocation, 0,
+        srcAllocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -781,8 +766,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleDstBuffersWhenAppendBlitCommand
     auto dstAllocation = dstBuffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     EXPECT_TRUE(dstAllocation->getDefaultGmm()->isCompressionEnabled());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(dstAllocation, srcAllocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        dstAllocation, 0,
+        srcAllocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -811,8 +798,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenCompressibleBuffersWhenBufferCompressionFor
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     EXPECT_TRUE(allocation->getDefaultGmm()->isCompressionEnabled());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -842,8 +831,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenNotCompressibleBuffersWhenBufferCompression
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
     allocation->getDefaultGmm()->setCompressionEnabled(false);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -872,8 +863,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenOverriddenBlitterTargetToZeroWhenAppendBlit
 
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -899,8 +892,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenOverriddenBlitterTargetToOneWhenAppendBlitC
 
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -926,8 +921,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenOverriddenBlitterTargetToTwoWhenAppendBlitC
 
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);
@@ -951,8 +948,10 @@ XE2_HPG_CORETEST_F(Xe2BcsTests, givenOverriddenMocksValueWhenAppendBlitCommandsB
 
     auto allocation = buffer->getGraphicsAllocation(pClDevice->getRootDeviceIndex());
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(allocation, allocation, 0, 0,
-                                                                     {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        allocation, 0,
+        allocation, 0,
+        0, 0, {BlitterConstants::maxBlitWidth - 1, 1, 1}, 0, 0, 0, 0, &clearColorAlloc);
     auto bltCmd = stream.getSpaceForCmd<XY_BLOCK_COPY_BLT>();
     *bltCmd = FamilyType::cmdInitXyBlockCopyBlt;
     bltCmd->setDestinationX2CoordinateRight(1);

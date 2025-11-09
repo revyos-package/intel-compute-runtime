@@ -9,6 +9,7 @@
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/libult/ult_command_stream_receiver.h"
 #include "shared/test/common/mocks/mock_device.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/mocks/ult_device_factory.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
@@ -306,7 +307,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSignalEventWhenAppendLaunchCooperat
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     ze_group_count_t groupCount{1, 1, 1};
 
@@ -335,7 +336,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSignalEventWhenAppendLaunchMultiple
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
@@ -360,7 +361,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSignalEventWhenAppendLaunchIndirect
 
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();
-    kernel.state.groupSize[0] = 2;
+    kernel.privateState.groupSize[0] = 2;
     kernel.descriptor.payloadMappings.dispatchTraits.numWorkGroups[0] = 2;
     kernel.descriptor.payloadMappings.dispatchTraits.globalWorkSize[0] = 2;
     kernel.descriptor.payloadMappings.dispatchTraits.workDim = 4;
@@ -376,7 +377,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSignalEventWhenAppendLaunchIndirect
 
     ze_result_t returnValue;
     std::unique_ptr<L0::EventPool> eventPool = std::unique_ptr<L0::EventPool>(EventPool::create(driverHandle.get(), context, 0, nullptr, &eventPoolDesc, returnValue));
-    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event = std::unique_ptr<L0::Event>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
 
     auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     commandList->initialize(device, NEO::EngineGroupType::renderCompute, 0u);
@@ -393,7 +394,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenSignalEventWhenAppendLaunchIndirect
     context->freeMem(alloc);
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, GivenComputeModePropertiesWhenUpdateStreamPropertiesIsCalledTwiceThenChangedFieldsAreDirty, IsHeapfulSupported) {
+HWTEST2_F(CommandListAppendLaunchKernel, GivenComputeModePropertiesWhenUpdateStreamPropertiesIsCalledTwiceThenChangedFieldsAreDirty, IsHeapfulRequired) {
     DebugManagerStateRestore restorer;
     auto &productHelper = device->getProductHelper();
 
@@ -490,7 +491,7 @@ HWTEST2_F(CommandListAppendLaunchKernel,
     }
 }
 
-HWTEST2_F(CommandListAppendLaunchKernel, GivenComputeModePropertiesWhenPropertesNotChangedThenAllFieldsAreNotDirty, IsHeapfulSupported) {
+HWTEST2_F(CommandListAppendLaunchKernel, GivenComputeModePropertiesWhenPropertesNotChangedThenAllFieldsAreNotDirty, IsHeapfulRequired) {
     DebugManagerStateRestore restorer;
     auto &productHelper = device->getProductHelper();
 
@@ -1124,7 +1125,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1146,7 +1147,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+            EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1184,7 +1185,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1208,7 +1209,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+            EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1249,7 +1250,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1375,7 +1376,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1398,7 +1399,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
+            EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1422,7 +1423,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1474,7 +1475,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
+            EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1502,7 +1503,7 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest,
             auto feStateIt = find<FrontEndStateCommand *>(nextIt, cmdList.end());
             ASSERT_NE(cmdList.end(), feStateIt);
             auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateIt);
-            EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
+            EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getComputeDispatchAllWalkerFromFrontEndCommand(feState));
 
             nextIt = feStateIt;
         }
@@ -1615,9 +1616,9 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest, givenCmdQueueAndImmediateCmdListUs
     ASSERT_EQ(1u, feStateCmds.size());
     auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateCmds[0]);
     if (fePropertiesSupport.disableEuFusion) {
-        EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+        EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
     } else {
-        EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+        EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
     }
 
     auto &immediateCmdListStream = *commandListImmediate->getCmdContainer().getCommandStream();
@@ -1734,9 +1735,9 @@ HWTEST2_F(FrontEndMultiReturnCommandListTest, givenCmdQueueAndImmediateCmdListUs
     ASSERT_EQ(1u, feStateCmds.size());
     auto &feState = *genCmdCast<FrontEndStateCommand *>(*feStateCmds[0]);
     if (fePropertiesSupport.disableEuFusion) {
-        EXPECT_TRUE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+        EXPECT_TRUE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
     } else {
-        EXPECT_FALSE(NEO::UnitTestHelper<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
+        EXPECT_FALSE(NEO::UnitTestHelperWithHeap<FamilyType>::getDisableFusionStateFromFrontEndCommand(feState));
     }
 
     auto &regularCmdListStream = *commandList->getCmdContainer().getCommandStream();
@@ -2064,7 +2065,7 @@ TEST(CommandList, givenContextGroupEnabledWhenCreatingImmediateCommandListWithIn
             newOsContext->incRefInternal();
 
             newOsContext->setIsPrimaryEngine(engine.osContext->getIsPrimaryEngine());
-            newOsContext->setContextGroup(engine.osContext->isPartOfContextGroup());
+            newOsContext->setContextGroupCount(engine.osContext->isPartOfContextGroup() ? 5 : 0);
 
             engine.osContext = newOsContext;
             engine.commandStreamReceiver->setupContext(*newOsContext);
@@ -2074,10 +2075,14 @@ TEST(CommandList, givenContextGroupEnabledWhenCreatingImmediateCommandListWithIn
         allocateMsix.stype = ZEX_INTEL_STRUCTURE_TYPE_QUEUE_ALLOCATE_MSIX_HINT_EXP_PROPERTIES;
         allocateMsix.uniqueMsix = true;
 
+        auto mockProductHelper = new MockProductHelper;
+        mockProductHelper->isInterruptSupportedResult = true;
+        device->getNEODevice()->getExecutionEnvironment()->rootDeviceEnvironments[0]->productHelper.reset(mockProductHelper);
+
         ze_command_queue_desc_t desc = {};
         desc.pNext = &allocateMsix;
 
-        ze_command_list_handle_t commandListHandle1, commandListHandle2, commandListHandle3;
+        ze_command_list_handle_t commandListHandle1, commandListHandle2, commandListHandle3, commandListHandle4;
 
         auto result = device->createCommandListImmediate(&desc, &commandListHandle1);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
@@ -2088,6 +2093,11 @@ TEST(CommandList, givenContextGroupEnabledWhenCreatingImmediateCommandListWithIn
         allocateMsix.uniqueMsix = false;
         result = device->createCommandListImmediate(&desc, &commandListHandle3);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
+
+        allocateMsix.uniqueMsix = true;
+        mockProductHelper->isInterruptSupportedResult = false;
+        result = device->createCommandListImmediate(&desc, &commandListHandle4);
+        EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, result);
 
         auto commandList1 = static_cast<CommandListImp *>(L0::CommandList::fromHandle(commandListHandle1));
         auto commandList2 = static_cast<CommandListImp *>(L0::CommandList::fromHandle(commandListHandle2));

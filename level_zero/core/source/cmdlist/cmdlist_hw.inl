@@ -20,6 +20,7 @@
 #include "shared/source/helpers/blit_commands_helper.h"
 #include "shared/source/helpers/blit_properties.h"
 #include "shared/source/helpers/compiler_product_helper.h"
+#include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/definitions/command_encoder_args.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/hw_info.h"
@@ -32,6 +33,7 @@
 #include "shared/source/helpers/register_offsets.h"
 #include "shared/source/helpers/state_base_address_helper.h"
 #include "shared/source/helpers/surface_format_info.h"
+#include "shared/source/helpers/validators.h"
 #include "shared/source/indirect_heap/indirect_heap.h"
 #include "shared/source/memory_manager/allocation_properties.h"
 #include "shared/source/memory_manager/graphics_allocation.h"
@@ -55,6 +57,7 @@
 #include "level_zero/core/source/driver/driver_handle_imp.h"
 #include "level_zero/core/source/event/event.h"
 #include "level_zero/core/source/gfx_core_helpers/l0_gfx_core_helper.h"
+#include "level_zero/core/source/helpers/sw_tag_scope.h"
 #include "level_zero/core/source/image/image.h"
 #include "level_zero/core/source/kernel/kernel.h"
 #include "level_zero/core/source/kernel/kernel_imp.h"
@@ -67,17 +70,6 @@
 #include <unordered_map>
 
 namespace L0 {
-
-inline ze_result_t parseErrorCode(NEO::CommandContainer::ErrorCode returnValue) {
-    switch (returnValue) {
-    case NEO::CommandContainer::ErrorCode::outOfDeviceMemory:
-        return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
-    default:
-        return ZE_RESULT_SUCCESS;
-    }
-
-    return ZE_RESULT_SUCCESS;
-}
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 CommandListCoreFamily<gfxCoreFamily>::~CommandListCoreFamily() {
@@ -162,6 +154,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::reset() {
     isWalkerWithProfilingEnqueued = false;
 
     this->inOrderPatchCmds.clear();
+    this->totalNoopSpace = 0;
+    this->latesTagGpuAllocation = nullptr;
+    this->latestTaskCount = 0;
 
     return ZE_RESULT_SUCCESS;
 }
@@ -176,7 +171,7 @@ void CommandListCoreFamily<gfxCoreFamily>::handleInOrderDependencyCounter(Event 
     if (!isInOrderExecutionEnabled()) {
         if (signalEvent && signalEvent->getInOrderExecInfo().get()) {
             UNRECOVERABLE_IF(signalEvent->isCounterBased());
-            signalEvent->unsetInOrderExecInfo(); // unset temporary asignment from previous append calls
+            signalEvent->unsetInOrderExecInfo(); // unset temporary assignment from previous append calls
         }
 
         return;
@@ -186,10 +181,9 @@ void CommandListCoreFamily<gfxCoreFamily>::handleInOrderDependencyCounter(Event 
 
     inOrderExecInfo->addCounterValue(getInOrderIncrementValue());
 
-    this->commandContainer.addToResidencyContainer(inOrderExecInfo->getDeviceCounterAllocation());
-    this->commandContainer.addToResidencyContainer(inOrderExecInfo->getHostCounterAllocation());
+    this->addResidency(inOrderExecInfo->getDeviceCounterAllocation(), inOrderExecInfo->getHostCounterAllocation());
 
-    if (signalEvent && signalEvent->getInOrderIncrementValue() == 0) {
+    if (signalEvent && signalEvent->getInOrderIncrementValue(this->partitionCount) == 0) {
         if (signalEvent->isCounterBased() || nonWalkerInOrderCmdsChaining || (isImmediateType() && this->duplicatedInOrderCounterStorageEnabled)) {
             assignInOrderExecInfoToEvent(signalEvent);
         } else {
@@ -217,7 +211,7 @@ void CommandListCoreFamily<gfxCoreFamily>::handleInOrderCounterOverflow(bool cop
         inOrderExecInfo->setAllocationOffset(newOffset);
         inOrderExecInfo->initializeAllocationsFromHost();
 
-        CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(nullptr, copyOffloadOperation, false, false); // signal counter on new offset
+        CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(nullptr, copyOffloadOperation, false, false, false); // signal counter on new offset
     }
 }
 
@@ -260,7 +254,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::initialize(Device *device, NEO
     this->dummyBlitWa.rootDeviceEnvironment = &(neoDevice->getRootDeviceEnvironmentRef());
     this->dispatchCmdListBatchBufferAsPrimary = L0GfxCoreHelper::dispatchCmdListBatchBufferAsPrimary(rootDeviceEnvironment, !(this->internalUsage && isImmediateType()));
     this->useOnlyGlobalTimestamps = gfxCoreHelper.useOnlyGlobalTimestamps();
-    this->maxFillPaternSizeForCopyEngine = productHelper.getMaxFillPaternSizeForCopyEngine();
+    this->maxFillPatternSizeForCopyEngine = productHelper.getMaxFillPatternSizeForCopyEngine();
     this->heaplessModeEnabled = compilerProductHelper.isHeaplessModeEnabled(hwInfo);
     this->heaplessStateInitEnabled = compilerProductHelper.isHeaplessStateInitEnabled(this->heaplessModeEnabled);
     this->requiredStreamState.initSupport(rootDeviceEnvironment);
@@ -272,8 +266,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::initialize(Device *device, NEO
     this->defaultPipelinedThreadArbitrationPolicy = gfxCoreHelper.getDefaultThreadArbitrationPolicy();
     this->implicitSynchronizedDispatchForCooperativeKernelsAllowed = l0GfxCoreHelper.implicitSynchronizedDispatchForCooperativeKernelsAllowed();
     this->maxLocalSubRegionSize = productHelper.getMaxLocalSubRegionSize(hwInfo);
-    this->l3FlushAfterPostSyncRequired = productHelper.isL3FlushAfterPostSyncRequired(heaplessModeEnabled);
-    this->compactL3FlushEventPacket = L0GfxCoreHelper::useCompactL3FlushEventPacket(hwInfo, this->l3FlushAfterPostSyncRequired);
+    this->l3FlushAfterPostSyncEnabled = productHelper.isL3FlushAfterPostSyncSupported(heaplessModeEnabled);
+    this->compactL3FlushEventPacket = L0GfxCoreHelper::useCompactL3FlushEventPacket(hwInfo, this->l3FlushAfterPostSyncEnabled);
     this->useAdditionalBlitProperties = productHelper.useAdditionalBlitProperties();
     this->isPostImageWriteFlushRequired = releaseHelper ? releaseHelper->isPostImageWriteFlushRequired() : false;
     this->shouldRegisterEnqueuedWalkerWithProfiling = this->device->getNEODevice()->getProductHelper().shouldRegisterEnqueuedWalkerWithProfiling();
@@ -282,6 +276,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::initialize(Device *device, NEO
         this->defaultPipelinedThreadArbitrationPolicy = NEO::debugManager.flags.OverrideThreadArbitrationPolicy.get();
     }
     this->statelessBuiltinsEnabled = compilerProductHelper.isForceToStatelessRequired();
+    this->swTagsEnabled = NEO::debugManager.flags.EnableSWTags.get();
 
     this->commandContainer.doubleSbaWaRef() = this->doubleSbaWa;
     this->commandContainer.l1CachePolicyDataRef() = &this->l1CachePolicyData;
@@ -331,7 +326,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::initialize(Device *device, NEO
         commandContainer.systolicModeSupportRef() = this->systolicModeSupport;
     }
 
-    ze_result_t returnType = parseErrorCode(returnValue);
+    ze_result_t returnType = (returnValue == NEO::CommandContainer::ErrorCode::outOfDeviceMemory)
+                                 ? ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY
+                                 : ZE_RESULT_SUCCESS;
     if (returnType == ZE_RESULT_SUCCESS) {
         if (!isCopyOnly(false)) {
             postInitComputeSetup();
@@ -351,6 +348,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::initialize(Device *device, NEO
     if (copyOffloadSupported && !this->internalUsage && !isCopyOffloadEnabled()) {
         enableCopyOperationOffload();
     }
+
+    enableImmediateBcsSplit();
 
     return returnType;
 }
@@ -385,8 +384,11 @@ void CommandListCoreFamily<gfxCoreFamily>::prefetchKernelMemory(NEO::LinearStrea
     NEO::EncodeMemoryPrefetch<GfxFamily>::programMemoryPrefetch(cmdStream, *iohAllocation, kernel.getIndirectSize(), iohOffset, rootExecEnv);
     addKernelIndirectDataMemoryPrefetchPadding(cmdStream, kernel, cmdId);
 
-    NEO::EncodeMemoryPrefetch<GfxFamily>::programMemoryPrefetch(cmdStream, *kernel.getIsaAllocation(), kernel.getImmutableData()->getIsaSize(), kernel.getIsaOffsetInParentAllocation(), rootExecEnv);
-    addKernelIsaMemoryPrefetchPadding(cmdStream, kernel, cmdId);
+    uint32_t isaPrefetchSizeLimit = NEO::debugManager.flags.LimitIsaPrefetchSize.getIfNotDefault(static_cast<uint32_t>(MemoryConstants::kiloByte));
+    auto isaSizeToPrefetch = std::min(kernel.getImmutableData()->getIsaSize(), isaPrefetchSizeLimit);
+
+    NEO::EncodeMemoryPrefetch<GfxFamily>::programMemoryPrefetch(cmdStream, *kernel.getIsaAllocation(), isaSizeToPrefetch, kernel.getIsaOffsetInParentAllocation(), rootExecEnv);
+    addKernelIsaMemoryPrefetchPadding(cmdStream, kernel, isaPrefetchSizeLimit, cmdId);
 
     if (outListCommands) {
         auto &prefetchToPatch = outListCommands->emplace_back();
@@ -395,6 +397,18 @@ void CommandListCoreFamily<gfxCoreFamily>::prefetchKernelMemory(NEO::LinearStrea
         prefetchToPatch.patchSize = cmdStream.getUsed() - cmdStreamOffset;
         prefetchToPatch.offset = iohOffset;
     }
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+std::optional<SWTagScope<typename NEO::GfxFamilyMapper<gfxCoreFamily>::GfxFamily>>
+CommandListCoreFamily<gfxCoreFamily>::emplaceSWTagScope(const char *callName) {
+    if (this->swTagsEnabled) {
+        return std::make_optional<SWTagScope<GfxFamily>>(
+            *device->getNEODevice(),
+            *commandContainer.getCommandStream(),
+            callName);
+    }
+    return std::nullopt;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -410,16 +424,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(ze_kernel_h
                                                                      ze_event_handle_t *phWaitEvents,
                                                                      CmdListKernelLaunchParams &launchParams) {
 
-    NEO::Device *neoDevice = device->getNEODevice();
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            launchParams.isCooperative ? "zeCommandListAppendLaunchCooperativeKernel" : "zeCommandListAppendLaunchKernel",
-            callId);
-    }
+    auto swTagScope = emplaceSWTagScope(launchParams.isCooperative ? "zeCommandListAppendLaunchCooperativeKernel" : "zeCommandListAppendLaunchKernel");
 
     auto kernel = Kernel::fromHandle(kernelHandle);
 
@@ -441,9 +446,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(ze_kernel_h
     if (launchParams.isCooperative && this->implicitSynchronizedDispatchForCooperativeKernelsAllowed) {
         enableSynchronizedDispatch(NEO::SynchronizedDispatchMode::full);
     }
-    if (this->synchronizedDispatchMode != NEO::SynchronizedDispatchMode::disabled) {
-        appendSynchronizedDispatchInitializationSection();
-    }
+
+    appendSynchronizedDispatchInitializationSection();
 
     Event *event = nullptr;
     if (hEvent) {
@@ -470,13 +474,6 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(ze_kernel_h
     }
 
     addToMappedEventList(event);
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            launchParams.isCooperative ? "zeCommandListAppendLaunchCooperativeKernel" : "zeCommandListAppendLaunchKernel",
-            callId);
-    }
 
     return res;
 }
@@ -587,65 +584,54 @@ template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithArguments(ze_kernel_handle_t hKernel,
                                                                                   const ze_group_count_t groupCounts,
                                                                                   const ze_group_size_t groupSizes,
-
-                                                                                  const void **pArguments,
+                                                                                  void **pArguments,
                                                                                   const void *pNext,
                                                                                   ze_event_handle_t hSignalEvent,
                                                                                   uint32_t numWaitEvents,
                                                                                   ze_event_handle_t *phWaitEvents) {
 
     auto kernel = L0::Kernel::fromHandle(hKernel);
+    auto result = CommandList::setKernelState(kernel, groupSizes, pArguments);
+    if (result != ZE_RESULT_SUCCESS) {
+        return result;
+    }
+    return this->appendLaunchKernelWithParameters(hKernel, &groupCounts, pNext, hSignalEvent, numWaitEvents, phWaitEvents);
+}
 
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernelWithParameters(
+    ze_kernel_handle_t hKernel,
+    const ze_group_count_t *pGroupCounts,
+    const void *pNext,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+
+    if (hKernel == nullptr) {
+        return ZE_RESULT_ERROR_INVALID_NULL_HANDLE;
+    }
+
+    auto kernel = L0::Kernel::fromHandle(hKernel);
     if (kernel == nullptr) {
         return ZE_RESULT_ERROR_INVALID_NULL_HANDLE;
     }
 
-    auto result = kernel->setGroupSize(groupSizes.groupSizeX, groupSizes.groupSizeY, groupSizes.groupSizeZ);
-
-    if (result != ZE_RESULT_SUCCESS) {
-        return result;
-    }
-
-    auto &args = kernel->getImmutableData()->getDescriptor().payloadMappings.explicitArgs;
-
-    if (args.size() > 0 && !pArguments) {
+    if (pGroupCounts == nullptr) {
         return ZE_RESULT_ERROR_INVALID_NULL_POINTER;
     }
-    for (auto i = 0u; i < args.size(); i++) {
-
-        auto &arg = args[i];
-        auto argSize = sizeof(void *);
-        auto argValue = pArguments[i];
-
-        switch (arg.type) {
-        case NEO::ArgDescriptor::argTPointer:
-            if (arg.getTraits().getAddressQualifier() == NEO::KernelArgMetadata::AddrLocal) {
-                argSize = *reinterpret_cast<const size_t *>(argValue);
-                argValue = nullptr;
-            }
-            break;
-        case NEO::ArgDescriptor::argTValue:
-            argSize = std::numeric_limits<size_t>::max();
-
-        default:
-            break;
-        }
-        result = kernel->setArgumentValue(i, argSize, argValue);
-        if (result != ZE_RESULT_SUCCESS) {
-            return result;
-        }
+    if ((phWaitEvents == nullptr) && (numWaitEvents > 0)) {
+        return ZE_RESULT_ERROR_INVALID_SIZE;
     }
 
     L0::CmdListKernelLaunchParams launchParams = {};
     launchParams.skipInOrderNonWalkerSignaling = this->skipInOrderNonWalkerSignalingAllowed(hSignalEvent);
 
-    result = this->obtainLaunchParamsFromExtensions(reinterpret_cast<const ze_base_desc_t *>(pNext), launchParams, hKernel);
-
+    auto result = this->obtainLaunchParamsFromExtensions(reinterpret_cast<const ze_base_desc_t *>(pNext), launchParams, hKernel);
     if (result != ZE_RESULT_SUCCESS) {
         return result;
     }
 
-    return this->appendLaunchKernel(hKernel, groupCounts, hSignalEvent, numWaitEvents, phWaitEvents, launchParams);
+    return this->appendLaunchKernel(hKernel, *pGroupCounts, hSignalEvent, numWaitEvents, phWaitEvents, launchParams);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -659,15 +645,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendEventReset(ze_event_hand
     }
 
     NEO::Device *neoDevice = device->getNEODevice();
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendEventReset",
-            callId);
-    }
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendEventReset");
 
     if (this->isInOrderExecutionEnabled()) {
         handleInOrderImplicitDependencies(isRelaxedOrderingDispatchAllowed(0, false), false);
@@ -692,20 +670,12 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendEventReset(ze_event_hand
     }
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(event, false, false, false);
+        appendSignalInOrderDependencyCounter(event, false, false, false, false);
     }
     handleInOrderDependencyCounter(event, false, false);
     event->unsetInOrderExecInfo();
 
     appendSynchronizedDispatchCleanupSection();
-
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendEventReset",
-            callId);
-    }
 
     return ZE_RESULT_SUCCESS;
 }
@@ -740,7 +710,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryRangesBarrier(uint
     addToMappedEventList(signalEvent);
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+        appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
     }
     handleInOrderDependencyCounter(signalEvent, false, false);
 
@@ -788,6 +758,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
         return ZE_RESULT_ERROR_INVALID_NULL_POINTER;
     }
 
+    bool sharedSystemEnabled = isSharedSystemEnabled();
+
     auto image = Image::fromHandle(hDstImage);
     auto bytesPerPixel = static_cast<uint32_t>(image->getImageInfo().surfaceFormat->imageElementSizeInBytes);
     Vec3<size_t> imgSize = {image->getImageDesc().width,
@@ -831,10 +803,14 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
 
     uint64_t bufferSize = getInputBufferSize(image->getImageInfo().imgDesc.imageType, srcRowPitch, srcSlicePitch, pDstRegion);
 
-    auto allocationStruct = getAlignedAllocationData(this->device, false, srcPtr, bufferSize, true, false);
-    if (allocationStruct.alloc == nullptr) {
+    auto allocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, srcPtr, bufferSize, true, false);
+    if (allocationStruct.alloc == nullptr && sharedSystemEnabled == false) {
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
+
+    memoryCopyParams.taskCountUpdateRequired |= CommandList::isExternalHostPtrAlloc(allocationStruct.alloc);
+
+    emitMemAdviseForSystemCopy(allocationStruct, bufferSize);
 
     DriverHandleImp *driverHandle = static_cast<DriverHandleImp *>(device->getDriverHandle());
     if (driverHandle->isRemoteImageNeeded(image, device)) {
@@ -847,7 +823,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
         image = peerImage;
     }
 
-    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(*allocationStruct.alloc, *image->getAllocation());
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(allocationStruct.alloc, image->getAllocation());
 
     if (isCopyOnly(memoryCopyParams.copyOffloadAllowed)) {
         if ((bytesPerPixel == 3) || (bytesPerPixel == 6) || image->isMimickedImage()) {
@@ -855,7 +831,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
         }
         size_t imgRowPitch = image->getImageInfo().rowPitch;
         size_t imgSlicePitch = image->getImageInfo().slicePitch;
-        auto status = appendCopyImageBlit(allocationStruct.alloc, image->getAllocation(),
+        this->commandContainer.addToResidencyContainer(allocationStruct.alloc);
+        auto ptr = ptrOffset(allocationStruct.alignedAllocationPtr, allocationStruct.offset);
+        auto status = appendCopyImageBlit(ptr, nullptr, image->getAllocation()->getGpuAddress(), image->getAllocation(),
                                           {0, 0, 0}, {pDstRegion->originX, pDstRegion->originY, pDstRegion->originZ}, srcRowPitch, srcSlicePitch,
                                           imgRowPitch, imgSlicePitch, bytesPerPixel, {pDstRegion->width, pDstRegion->height, pDstRegion->depth}, {pDstRegion->width, pDstRegion->height, pDstRegion->depth}, imgSize,
                                           event, numWaitEvents, phWaitEvents, memoryCopyParams);
@@ -863,32 +841,33 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
         return status;
     }
 
+    const auto isStateless = this->forceStateless(bufferSize);
     bool isHeaplessEnabled = this->heaplessModeEnabled;
     ImageBuiltin builtInType = ImageBuiltin::copyBufferToImage3dBytes;
 
     switch (bytesPerPixel) {
     case 1u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3dBytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3dBytes>(isStateless, isHeaplessEnabled);
         break;
     case 2u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d2Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d2Bytes>(isStateless, isHeaplessEnabled);
         break;
     case 4u:
         if (image->isMimickedImage()) {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d3To4Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d3To4Bytes>(isStateless, isHeaplessEnabled);
         } else {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d4Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d4Bytes>(isStateless, isHeaplessEnabled);
         }
         break;
     case 8u:
         if (image->isMimickedImage()) {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d6To8Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d6To8Bytes>(isStateless, isHeaplessEnabled);
         } else {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d8Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d8Bytes>(isStateless, isHeaplessEnabled);
         }
         break;
     case 16u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d16Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyBufferToImage3d16Bytes>(isStateless, isHeaplessEnabled);
         break;
     default:
         UNRECOVERABLE_IF(true);
@@ -898,9 +877,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
     auto lock = device->getBuiltinFunctionsLib()->obtainUniqueOwnership();
     Kernel *builtinKernel = device->getBuiltinFunctionsLib()->getImageFunction(builtInType);
 
-    builtinKernel->setArgBufferWithAlloc(0u, allocationStruct.alignedAllocationPtr,
-                                         allocationStruct.alloc,
-                                         nullptr);
+    builtinSetArg(builtinKernel, 0, allocationStruct.alignedAllocationPtr, allocationStruct.alloc);
     builtinKernel->setArgRedescribedImage(1u, image->toHandle(), false);
     builtinKernel->setArgumentValue(2u, sizeof(size_t), &allocationStruct.offset);
 
@@ -910,7 +887,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyFromMemoryExt(z
                          0};
     builtinKernel->setArgumentValue(3u, sizeof(origin), &origin);
 
-    if (this->heaplessModeEnabled) {
+    if (this->heaplessModeEnabled || isStateless) {
         uint64_t pitch[] = {srcRowPitch, srcSlicePitch};
         builtinKernel->setArgumentValue(4u, sizeof(pitch), &pitch);
     } else {
@@ -986,6 +963,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
         return ZE_RESULT_ERROR_INVALID_NULL_HANDLE;
     }
 
+    bool sharedSystemEnabled = isSharedSystemEnabled();
+
     auto image = Image::fromHandle(hSrcImage);
     auto bytesPerPixel = static_cast<uint32_t>(image->getImageInfo().surfaceFormat->imageElementSizeInBytes);
     Vec3<size_t> imgSize = {image->getImageDesc().width,
@@ -1029,10 +1008,14 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
 
     uint64_t bufferSize = getInputBufferSize(image->getImageInfo().imgDesc.imageType, destRowPitch, destSlicePitch, pSrcRegion);
 
-    auto allocationStruct = getAlignedAllocationData(this->device, false, dstPtr, bufferSize, false, false);
-    if (allocationStruct.alloc == nullptr) {
+    auto allocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, dstPtr, bufferSize, false, false);
+    if (allocationStruct.alloc == nullptr && sharedSystemEnabled == false) {
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
+
+    memoryCopyParams.taskCountUpdateRequired |= CommandList::isExternalHostPtrAlloc(allocationStruct.alloc);
+
+    emitMemAdviseForSystemCopy(allocationStruct, bufferSize);
 
     DriverHandleImp *driverHandle = static_cast<DriverHandleImp *>(device->getDriverHandle());
     if (driverHandle->isRemoteImageNeeded(image, device)) {
@@ -1045,7 +1028,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
         image = peerImage;
     }
 
-    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(*image->getAllocation(), *allocationStruct.alloc);
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(image->getAllocation(), allocationStruct.alloc);
 
     if (isCopyOnly(memoryCopyParams.copyOffloadAllowed)) {
         if ((bytesPerPixel == 3) || (bytesPerPixel == 6) || image->isMimickedImage()) {
@@ -1053,7 +1036,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
         }
         size_t imgRowPitch = image->getImageInfo().rowPitch;
         size_t imgSlicePitch = image->getImageInfo().slicePitch;
-        auto status = appendCopyImageBlit(image->getAllocation(), allocationStruct.alloc,
+        this->commandContainer.addToResidencyContainer(allocationStruct.alloc);
+        auto ptr = ptrOffset(allocationStruct.alignedAllocationPtr, allocationStruct.offset);
+        auto status = appendCopyImageBlit(image->getAllocation()->getGpuAddress(), image->getAllocation(), ptr, nullptr,
                                           {pSrcRegion->originX, pSrcRegion->originY, pSrcRegion->originZ}, {0, 0, 0}, imgRowPitch, imgSlicePitch,
                                           destRowPitch, destSlicePitch, bytesPerPixel, {pSrcRegion->width, pSrcRegion->height, pSrcRegion->depth},
                                           imgSize, {pSrcRegion->width, pSrcRegion->height, pSrcRegion->depth}, event, numWaitEvents, phWaitEvents, memoryCopyParams);
@@ -1061,38 +1046,39 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
         return status;
     }
 
+    const auto isStateless = this->forceStateless(bufferSize);
     bool isHeaplessEnabled = this->heaplessModeEnabled;
     ImageBuiltin builtInType = ImageBuiltin::copyBufferToImage3dBytes;
 
     switch (bytesPerPixel) {
     case 1u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBufferBytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBufferBytes>(isStateless, isHeaplessEnabled);
         break;
     case 2u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer2Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer2Bytes>(isStateless, isHeaplessEnabled);
         break;
     case 3u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer3Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer3Bytes>(isStateless, isHeaplessEnabled);
         break;
     case 4u:
         if (image->isMimickedImage()) {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer4To3Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer4To3Bytes>(isStateless, isHeaplessEnabled);
         } else {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer4Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer4Bytes>(isStateless, isHeaplessEnabled);
         }
         break;
     case 6u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer6Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer6Bytes>(isStateless, isHeaplessEnabled);
         break;
     case 8u:
         if (image->isMimickedImage()) {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer8To6Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer8To6Bytes>(isStateless, isHeaplessEnabled);
         } else {
-            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer8Bytes>(isHeaplessEnabled);
+            builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer8Bytes>(isStateless, isHeaplessEnabled);
         }
         break;
     case 16u:
-        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer16Bytes>(isHeaplessEnabled);
+        builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImage3dToBuffer16Bytes>(isStateless, isHeaplessEnabled);
         break;
     default: {
         CREATE_DEBUG_STRING(str, "Invalid bytesPerPixel of size: %u\n", bytesPerPixel);
@@ -1107,9 +1093,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
     Kernel *builtinKernel = device->getBuiltinFunctionsLib()->getImageFunction(builtInType);
 
     builtinKernel->setArgRedescribedImage(0u, image->toHandle(), false);
-    builtinKernel->setArgBufferWithAlloc(1u, allocationStruct.alignedAllocationPtr,
-                                         allocationStruct.alloc,
-                                         nullptr);
+    builtinSetArg(builtinKernel, 1, allocationStruct.alignedAllocationPtr, allocationStruct.alloc);
     uint32_t origin[] = {pSrcRegion->originX,
                          pSrcRegion->originY,
                          pSrcRegion->originZ,
@@ -1117,7 +1101,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
     builtinKernel->setArgumentValue(2u, sizeof(origin), &origin);
     builtinKernel->setArgumentValue(3u, sizeof(size_t), &allocationStruct.offset);
 
-    if (this->heaplessModeEnabled) {
+    if (this->heaplessModeEnabled || isStateless) {
         uint64_t pitch[] = {destRowPitch, destSlicePitch};
         builtinKernel->setArgumentValue(4u, sizeof(pitch), &pitch);
     } else {
@@ -1160,15 +1144,20 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyToMemoryExt(voi
     ze_group_count_t kernelArgs{pSrcRegion->width / groupSizeX, pSrcRegion->height / groupSizeY,
                                 pSrcRegion->depth / groupSizeZ};
 
-    auto dstAllocationType = allocationStruct.alloc->getAllocationType();
     CmdListKernelLaunchParams launchParams = {};
     launchParams.isBuiltInKernel = true;
-    launchParams.isDestinationAllocationInSystemMemory =
-        (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
-        (dstAllocationType == NEO::AllocationType::externalHostPtr);
+    if (allocationStruct.alloc == nullptr) {
+        launchParams.isDestinationAllocationInSystemMemory = true;
+        launchParams.isDestinationAllocationImported = false;
+    } else {
+        auto dstAllocationType = allocationStruct.alloc->getAllocationType();
+        launchParams.isDestinationAllocationInSystemMemory =
+            (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
+            (dstAllocationType == NEO::AllocationType::externalHostPtr);
 
-    if constexpr (checkIfAllocationImportedRequired()) {
-        launchParams.isDestinationAllocationImported = this->isAllocationImported(allocationStruct.alloc, device->getDriverHandle()->getSvmAllocsManager());
+        if constexpr (checkIfAllocationImportedRequired()) {
+            launchParams.isDestinationAllocationImported = allocationStruct.alloc->getIsImported();
+        }
     }
     launchParams.relaxedOrderingDispatch = memoryCopyParams.relaxedOrderingDispatch;
     ret = CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(builtinKernel->toHandle(), kernelArgs,
@@ -1251,7 +1240,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyRegion(ze_image
         srcImage = peerImage;
     }
 
-    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(*srcImage->getAllocation(), *dstImage->getAllocation());
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(srcImage->getAllocation(), dstImage->getAllocation());
 
     if (isCopyOnly(memoryCopyParams.copyOffloadAllowed)) {
         auto bytesPerPixel = static_cast<uint32_t>(srcImage->getImageInfo().surfaceFormat->imageElementSizeInBytes);
@@ -1270,7 +1259,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyRegion(ze_image
         auto dstSlicePitch =
             (dstImage->getImageInfo().imgDesc.imageType == NEO::ImageType::image1DArray ? 1 : dstRegion.height) * dstRowPitch;
 
-        auto status = appendCopyImageBlit(srcImage->getAllocation(), dstImage->getAllocation(),
+        auto status = appendCopyImageBlit(srcImage->getAllocation()->getGpuAddress(), srcImage->getAllocation(), dstImage->getAllocation()->getGpuAddress(), dstImage->getAllocation(),
                                           {srcRegion.originX, srcRegion.originY, srcRegion.originZ}, {dstRegion.originX, dstRegion.originY, dstRegion.originZ}, srcRowPitch, srcSlicePitch,
                                           dstRowPitch, dstSlicePitch, bytesPerPixel, {srcRegion.width, srcRegion.height, srcRegion.depth}, srcImgSize, dstImgSize,
                                           event, numWaitEvents, phWaitEvents, memoryCopyParams);
@@ -1278,7 +1267,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendImageCopyRegion(ze_image
         return status;
     }
 
-    ImageBuiltin builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImageRegion>(this->heaplessModeEnabled);
+    ImageBuiltin builtInType = BuiltinTypeHelper::adjustImageBuiltinType<ImageBuiltin::copyImageRegion>(false, this->heaplessModeEnabled);
 
     auto lock = device->getBuiltinFunctionsLib()->obtainUniqueOwnership();
     auto kernel = device->getBuiltinFunctionsLib()->getImageFunction(builtInType);
@@ -1343,10 +1332,6 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemAdvise(ze_device_hand
                                                                   const void *ptr, size_t size,
                                                                   ze_memory_advice_t advice) {
 
-    if (ptr == nullptr) {
-        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-
     this->memAdviseOperations.push_back(MemAdviseOperation(hDevice, ptr, size, advice));
 
     return ZE_RESULT_SUCCESS;
@@ -1405,6 +1390,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::executeMemAdvise(ze_device_han
         flags = deviceImp->memAdviseSharedAllocations[allocData];
     }
 
+    const auto currentFlags = flags;
+
     switch (advice) {
     case ZE_MEMORY_ADVICE_SET_READ_MOSTLY:
         flags.readOnly = 1;
@@ -1451,6 +1438,10 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::executeMemAdvise(ze_device_han
         pageFaultManager->setGpuDomainHandler(L0::transferAndUnprotectMemoryWithHints);
     }
 
+    if (currentFlags.allFlags == flags.allFlags) {
+        return ZE_RESULT_SUCCESS;
+    }
+
     auto alloc = allocData->gpuAllocations.getGraphicsAllocation(deviceImp->getRootDeviceIndex());
     memoryManager->setMemAdvise(alloc, flags, deviceImp->getRootDeviceIndex());
 
@@ -1459,19 +1450,19 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::executeMemAdvise(ze_device_han
     return ZE_RESULT_SUCCESS;
 }
 
-static inline void builtinSetArgCopy(Kernel *builtinKernel, uint32_t argIndex, void *argPtr, NEO::GraphicsAllocation *allocation) {
+static inline void builtinSetArg(Kernel *builtinKernel, uint32_t argIndex, uintptr_t argPtr, NEO::GraphicsAllocation *allocation) {
     if (allocation) {
-        builtinKernel->setArgBufferWithAlloc(argIndex, *reinterpret_cast<uintptr_t *>(argPtr), allocation, nullptr);
+        builtinKernel->setArgBufferWithAlloc(argIndex, argPtr, allocation, nullptr);
     } else {
-        builtinKernel->setArgumentValue(argIndex, sizeof(uintptr_t *), argPtr);
+        builtinKernel->setArgumentValue(argIndex, sizeof(argPtr), &argPtr);
     }
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernelWithGA(void *dstPtr,
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernelWithGA(uintptr_t dstPtr,
                                                                                NEO::GraphicsAllocation *dstPtrAlloc,
                                                                                uint64_t dstOffset,
-                                                                               void *srcPtr,
+                                                                               uintptr_t srcPtr,
                                                                                NEO::GraphicsAllocation *srcPtrAlloc,
                                                                                uint64_t srcOffset,
                                                                                uint64_t size,
@@ -1503,8 +1494,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernelWithGA(v
         return ret;
     }
 
-    builtinSetArgCopy(builtinKernel, 0, dstPtr, dstPtrAlloc);
-    builtinSetArgCopy(builtinKernel, 1, srcPtr, srcPtrAlloc);
+    builtinSetArg(builtinKernel, 0, dstPtr, dstPtrAlloc);
+    builtinSetArg(builtinKernel, 1, srcPtr, srcPtrAlloc);
 
     uint64_t elems = size / elementSize;
     builtinKernel->setArgumentValue(2, sizeof(elems), &elems);
@@ -1519,7 +1510,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernelWithGA(v
         auto dstAllocationType = dstPtrAlloc->getAllocationType();
         launchParams.isDestinationAllocationInSystemMemory = this->isUsingSystemAllocation(dstAllocationType);
         if constexpr (checkIfAllocationImportedRequired()) {
-            launchParams.isDestinationAllocationImported = this->isAllocationImported(dstPtrAlloc, device->getDriverHandle()->getSvmAllocsManager());
+            launchParams.isDestinationAllocationImported = dstPtrAlloc->getIsImported();
         }
     } else {
         launchParams.isDestinationAllocationInSystemMemory = true;
@@ -1539,7 +1530,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlit(uintptr_t
                                                                        NEO::GraphicsAllocation *srcPtrAlloc,
                                                                        uint64_t srcOffset,
                                                                        uint64_t size,
-                                                                       Event *signalEvent) {
+                                                                       Event *signalEvent,
+                                                                       CmdListMemoryCopyParams &memoryCopyParams) {
     if (dstPtrAlloc) {
         dstOffset += ptrDiff<uintptr_t>(dstPtr, dstPtrAlloc->getGpuAddress());
     }
@@ -1548,21 +1540,22 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlit(uintptr_t
     }
 
     auto clearColorAllocation = device->getNEODevice()->getDefaultEngine().commandStreamReceiver->getClearColorAllocation();
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForSystemCopy(dstPtrAlloc, srcPtrAlloc, dstPtr, srcPtr, {dstOffset, 0, 0}, {srcOffset, 0, 0}, {size, 0, 0}, 0, 0, 0, 0, clearColorAllocation);
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(
+        dstPtrAlloc, dstPtr,
+        srcPtrAlloc, srcPtr,
+        {dstOffset, 0, 0}, {srcOffset, 0, 0}, {size, 0, 0},
+        0, 0, 0, 0, clearColorAllocation);
     blitProperties.computeStreamPartitionCount = this->partitionCount;
     blitProperties.highPriority = isHighPriorityImmediateCmdList();
-    if (dstPtrAlloc) {
-        commandContainer.addToResidencyContainer(dstPtrAlloc);
-    }
-    if (srcPtrAlloc) {
-        commandContainer.addToResidencyContainer(srcPtrAlloc);
-    }
-    commandContainer.addToResidencyContainer(clearColorAllocation);
+
+    setAdditionalBlitPropertiesFromMemoryCopyParams(blitProperties, memoryCopyParams);
+
+    addResidency(dstPtrAlloc, srcPtrAlloc, clearColorAllocation);
 
     size_t nBlitsPerRow = NEO::BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForCopyPerRow(blitProperties.copySize, device->getNEODevice()->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
     bool useAdditionalTimestamp = nBlitsPerRow > 1;
     if (useAdditionalBlitProperties) {
-        setAdditionalBlitProperties(blitProperties, signalEvent, useAdditionalTimestamp);
+        setAdditionalBlitProperties(blitProperties, signalEvent, memoryCopyParams.forceAggregatedEventIncValue, useAdditionalTimestamp);
     }
 
     NEO::BlitPropertiesContainer blitPropertiesContainer{blitProperties};
@@ -1585,22 +1578,26 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(Ali
                                                                              const Vec3<size_t> &srcSize, const Vec3<size_t> &dstSize,
                                                                              Event *signalEvent,
                                                                              uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents,
-                                                                             bool relaxedOrderingDispatch, bool dualStreamCopyOffload) {
-    srcRegion.originX += getRegionOffsetForAppendMemoryCopyBlitRegion(srcAllocationData);
-    dstRegion.originX += getRegionOffsetForAppendMemoryCopyBlitRegion(dstAllocationData);
-
+                                                                             CmdListMemoryCopyParams &memoryCopyParams, bool dualStreamCopyOffload) {
+    if (srcAllocationData->alloc) {
+        srcRegion.originX += getRegionOffsetForAppendMemoryCopyBlitRegion(srcAllocationData);
+    }
+    if (dstAllocationData->alloc) {
+        dstRegion.originX += getRegionOffsetForAppendMemoryCopyBlitRegion(dstAllocationData);
+    }
     uint32_t bytesPerPixel = NEO::BlitCommandsHelper<GfxFamily>::getAvailableBytesPerPixel(copySize.x, srcRegion.originX, dstRegion.originX, srcSize.x, dstSize.x);
     Vec3<size_t> srcPtrOffset = {srcRegion.originX / bytesPerPixel, srcRegion.originY, srcRegion.originZ};
     Vec3<size_t> dstPtrOffset = {dstRegion.originX / bytesPerPixel, dstRegion.originY, dstRegion.originZ};
     auto clearColorAllocation = device->getNEODevice()->getDefaultEngine().commandStreamReceiver->getClearColorAllocation();
 
     Vec3<size_t> copySizeModified = {copySize.x / bytesPerPixel, copySize.y, copySize.z};
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dstAllocationData->alloc, srcAllocationData->alloc,
-                                                                          dstPtrOffset, srcPtrOffset, copySizeModified, srcRowPitch, srcSlicePitch,
-                                                                          dstRowPitch, dstSlicePitch, clearColorAllocation);
-    commandContainer.addToResidencyContainer(dstAllocationData->alloc);
-    commandContainer.addToResidencyContainer(srcAllocationData->alloc);
-    commandContainer.addToResidencyContainer(clearColorAllocation);
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(
+        dstAllocationData->alloc, dstAllocationData->alignedAllocationPtr,
+        srcAllocationData->alloc, srcAllocationData->alignedAllocationPtr,
+        dstPtrOffset, srcPtrOffset, copySizeModified,
+        srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch, clearColorAllocation);
+
+    this->addResidency(dstAllocationData->alloc, srcAllocationData->alloc, clearColorAllocation);
 
     blitProperties.computeStreamPartitionCount = this->partitionCount;
     blitProperties.highPriority = isHighPriorityImmediateCmdList();
@@ -1608,7 +1605,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(Ali
     blitProperties.srcSize = srcSize;
     blitProperties.dstSize = dstSize;
 
-    ze_result_t ret = addEventsToCmdList(numWaitEvents, phWaitEvents, nullptr, relaxedOrderingDispatch, false, true, false, dualStreamCopyOffload);
+    ze_result_t ret = addEventsToCmdList(numWaitEvents, phWaitEvents, nullptr, memoryCopyParams.relaxedOrderingDispatch, false, true, false, dualStreamCopyOffload);
     if (ret) {
         return ret;
     }
@@ -1622,7 +1619,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(Ali
     size_t nBlits = copyRegionPreferred ? NEO::BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForCopyRegion(blitProperties.copySize, rootDeviceEnvironment, blitProperties.isSystemMemoryPoolUsed) : NEO::BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForCopyPerRow(blitProperties.copySize, rootDeviceEnvironment, blitProperties.isSystemMemoryPoolUsed);
     bool useAdditionalTimestamp = nBlits > 1;
     if (useAdditionalBlitProperties) {
-        setAdditionalBlitProperties(blitProperties, signalEvent, useAdditionalTimestamp);
+        setAdditionalBlitProperties(blitProperties, signalEvent, memoryCopyParams.forceAggregatedEventIncValue, useAdditionalTimestamp);
     } else {
         appendEventForProfiling(signalEvent, nullptr, true, false, false, true);
     }
@@ -1646,7 +1643,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyBlitRegion(Ali
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendCopyImageBlit(NEO::GraphicsAllocation *src,
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendCopyImageBlit(uintptr_t srcPtr,
+                                                                      NEO::GraphicsAllocation *src,
+                                                                      uintptr_t dstPtr,
                                                                       NEO::GraphicsAllocation *dst,
                                                                       const Vec3<size_t> &srcOffsets, const Vec3<size_t> &dstOffsets,
                                                                       size_t srcRowPitch, size_t srcSlicePitch,
@@ -1668,22 +1667,22 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendCopyImageBlit(NEO::Graph
 
     auto clearColorAllocation = device->getNEODevice()->getDefaultEngine().commandStreamReceiver->getClearColorAllocation();
 
-    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(dst, src,
-                                                                          dstOffsets, srcOffsets, copySize, srcRowPitch, srcSlicePitch,
-                                                                          dstRowPitch, dstSlicePitch, clearColorAllocation);
+    auto blitProperties = NEO::BlitProperties::constructPropertiesForCopy(
+        dst, dstPtr,
+        src, srcPtr,
+        dstOffsets, srcOffsets, copySize,
+        srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch, clearColorAllocation);
     blitProperties.computeStreamPartitionCount = this->partitionCount;
     blitProperties.highPriority = isHighPriorityImmediateCmdList();
     blitProperties.bytesPerPixel = bytesPerPixel;
     blitProperties.srcSize = srcSize;
     blitProperties.dstSize = dstSize;
 
-    commandContainer.addToResidencyContainer(dst);
-    commandContainer.addToResidencyContainer(src);
-    commandContainer.addToResidencyContainer(clearColorAllocation);
+    this->addResidency(dst, src, clearColorAllocation);
 
     bool useAdditionalTimestamp = blitProperties.copySize.z > 1;
     if (useAdditionalBlitProperties) {
-        setAdditionalBlitProperties(blitProperties, signalEvent, useAdditionalTimestamp);
+        setAdditionalBlitProperties(blitProperties, signalEvent, 0, useAdditionalTimestamp);
     } else {
         appendEventForProfiling(signalEvent, nullptr, true, false, false, true);
     }
@@ -1699,7 +1698,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendCopyImageBlit(NEO::Graph
     if (!useAdditionalBlitProperties) {
         appendSignalEventPostWalker(signalEvent, nullptr, nullptr, false, false, true);
         if (this->isInOrderExecutionEnabled()) {
-            appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+            appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
         }
     }
     handleInOrderDependencyCounter(signalEvent, false, false);
@@ -1714,25 +1713,23 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendPageFaultCopy(NEO::Graph
 
     size_t middleElSize = sizeof(uint32_t) * 4;
     uintptr_t rightSize = size % middleElSize;
-    bool isStateless = (this->cmdListHeapAddressModel == NEO::HeapAddressModel::globalStateless) || this->isStatelessBuiltinsEnabled();
-    if (size >= 4ull * MemoryConstants::gigaByte) {
-        isStateless = true;
-    }
+    const auto isStateless = this->forceStateless(size);
 
     uintptr_t dstAddress = static_cast<uintptr_t>(dstAllocation->getGpuAddress());
     uintptr_t srcAddress = static_cast<uintptr_t>(srcAllocation->getGpuAddress());
     ze_result_t ret = ZE_RESULT_ERROR_UNKNOWN;
     if (isCopyOnly(false)) {
+        CmdListMemoryCopyParams memoryCopyParams{};
         return appendMemoryCopyBlit(dstAddress, dstAllocation, 0u,
                                     srcAddress, srcAllocation, 0u,
-                                    size, nullptr);
+                                    size, nullptr, memoryCopyParams);
     } else {
         CmdListKernelLaunchParams launchParams = {};
         launchParams.isKernelSplitOperation = rightSize > 0;
         launchParams.numKernelsInSplitLaunch = 2;
-        ret = appendMemoryCopyKernelWithGA(reinterpret_cast<void *>(&dstAddress),
+        ret = appendMemoryCopyKernelWithGA(reinterpret_cast<uintptr_t>(&dstAddress),
                                            dstAllocation, 0,
-                                           reinterpret_cast<void *>(&srcAddress),
+                                           reinterpret_cast<uintptr_t>(&srcAddress),
                                            srcAllocation, 0,
                                            size - rightSize,
                                            middleElSize,
@@ -1742,9 +1739,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendPageFaultCopy(NEO::Graph
                                            launchParams);
         launchParams.numKernelsExecutedInSplitLaunch++;
         if (ret == ZE_RESULT_SUCCESS && rightSize) {
-            ret = appendMemoryCopyKernelWithGA(reinterpret_cast<void *>(&dstAddress),
+            ret = appendMemoryCopyKernelWithGA(reinterpret_cast<uintptr_t>(&dstAddress),
                                                dstAllocation, size - rightSize,
-                                               reinterpret_cast<void *>(&srcAddress),
+                                               reinterpret_cast<uintptr_t>(&srcAddress),
                                                srcAllocation, size - rightSize,
                                                rightSize, 1UL,
                                                Builtin::copyBufferToBufferSide,
@@ -1766,8 +1763,78 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendPageFaultCopy(NEO::Graph
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-bool CommandListCoreFamily<gfxCoreFamily>::isCopyOffloadAllowed(const NEO::GraphicsAllocation &srcAllocation, const NEO::GraphicsAllocation &dstAllocation) const {
-    return !(srcAllocation.isAllocatedInLocalMemoryPool() && dstAllocation.isAllocatedInLocalMemoryPool()) && isCopyOffloadEnabled();
+bool CommandListCoreFamily<gfxCoreFamily>::isCopyOffloadAllowed(const NEO::GraphicsAllocation *srcAllocation, const NEO::GraphicsAllocation *dstAllocation) const {
+    if (srcAllocation == nullptr || dstAllocation == nullptr) {
+        return isCopyOffloadEnabled();
+    }
+    return !(srcAllocation->isAllocatedInLocalMemoryPool() && dstAllocation->isAllocatedInLocalMemoryPool()) && isCopyOffloadEnabled();
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+bool CommandListCoreFamily<gfxCoreFamily>::isSharedSystemEnabled() const {
+    NEO::Device *neoDevice = device->getNEODevice();
+    return neoDevice->areSharedSystemAllocationsAllowed() && (NEO::debugManager.flags.TreatNonUsmForTransfersAsSharedSystem.get() == 1);
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+void CommandListCoreFamily<gfxCoreFamily>::emitMemAdviseForSystemCopy(const AlignedAllocationData &allocationStruct, size_t size) {
+    if ((allocationStruct.alloc == nullptr) && (NEO::debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.get() == 1)) {
+        appendMemAdvise(device, reinterpret_cast<void *>(allocationStruct.alignedAllocationPtr), size,
+                        static_cast<ze_memory_advice_t>(ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION));
+    }
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendHostFunction(
+    void *pHostFunction,
+    void *pUserData,
+    void *pNext,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+void CommandListCoreFamily<gfxCoreFamily>::dispatchHostFunction(
+    void *pHostFunction,
+    void *pUserData) {
+
+    uint64_t userHostFunctionAddress = reinterpret_cast<uint64_t>(pHostFunction);
+    uint64_t userDataAddress = reinterpret_cast<uint64_t>(pUserData);
+
+    if (isImmediateType()) {
+        auto csr = getCsr(false);
+        csr->ensureHostFunctionDataInitialization();
+        this->commandContainer.addToResidencyContainer(csr->getHostFunctionDataAllocation());
+        NEO::HostFunctionHelper::programHostFunction<GfxFamily>(*this->commandContainer.getCommandStream(), csr->getHostFunctionData(), userHostFunctionAddress, userDataAddress);
+    } else {
+        addHostFunctionToPatchCommands(userHostFunctionAddress, userDataAddress);
+    }
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+void CommandListCoreFamily<gfxCoreFamily>::addHostFunctionToPatchCommands(uint64_t userHostFunctionAddress, uint64_t userDataAddress) {
+
+    using MI_STORE_DATA_IMM = typename GfxFamily::MI_STORE_DATA_IMM;
+    using MI_SEMAPHORE_WAIT = typename GfxFamily::MI_SEMAPHORE_WAIT;
+
+    commandsToPatch.reserve(commandsToPatch.size() + 4);
+
+    commandsToPatch.push_back({.pCommand = commandContainer.getCommandStream()->getSpace(sizeof(MI_STORE_DATA_IMM)),
+                               .baseAddress = userHostFunctionAddress,
+                               .type = CommandToPatch::HostFunctionEntry});
+
+    commandsToPatch.push_back({.pCommand = commandContainer.getCommandStream()->getSpace(sizeof(MI_STORE_DATA_IMM)),
+                               .baseAddress = userDataAddress,
+                               .type = CommandToPatch::HostFunctionUserData});
+
+    commandsToPatch.push_back({.pCommand = commandContainer.getCommandStream()->getSpace(sizeof(MI_STORE_DATA_IMM)),
+                               .type = CommandToPatch::HostFunctionSignalInternalTag});
+
+    commandsToPatch.push_back({.pCommand = commandContainer.getCommandStream()->getSpace(sizeof(MI_SEMAPHORE_WAIT)),
+                               .type = CommandToPatch::HostFunctionWaitInternalTag});
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -1779,39 +1846,33 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
                                                                    ze_event_handle_t *phWaitEvents,
                                                                    CmdListMemoryCopyParams &memoryCopyParams) {
 
-    NEO::Device *neoDevice = device->getNEODevice();
-    bool sharedSystemEnabled = ((neoDevice->areSharedSystemAllocationsAllowed()) && (NEO::debugManager.flags.TreatNonUsmForTransfersAsSharedSystem.get() == 1));
+    bool sharedSystemEnabled = isSharedSystemEnabled();
 
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryCopy",
-            callId);
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendMemoryCopy");
+
+    auto allocSize = NEO::getIfValid(memoryCopyParams.bcsSplitTotalDstSize, size);
+    auto dstAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, NEO::getIfValid(memoryCopyParams.bcsSplitBaseDstPtr, dstptr), allocSize, false, isCopyOffloadEnabled());
+    auto srcAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, NEO::getIfValid(memoryCopyParams.bcsSplitBaseSrcPtr, srcptr), allocSize, true, isCopyOffloadEnabled());
+
+    if (memoryCopyParams.bscSplitEnabled) {
+        dstAllocationStruct.offset += ptrDiff(dstptr, memoryCopyParams.bcsSplitBaseDstPtr);
+        srcAllocationStruct.offset += ptrDiff(srcptr, memoryCopyParams.bcsSplitBaseSrcPtr);
     }
-
-    auto dstAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, dstptr, size, false, isCopyOffloadEnabled());
-    auto srcAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, srcptr, size, true, isCopyOffloadEnabled());
 
     if ((dstAllocationStruct.alloc == nullptr || srcAllocationStruct.alloc == nullptr) && (sharedSystemEnabled == false)) {
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
 
-    if ((dstAllocationStruct.alloc == nullptr) && (NEO::debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.get() == 1)) {
-        appendMemAdvise(device, reinterpret_cast<void *>(dstAllocationStruct.alignedAllocationPtr), size, static_cast<ze_memory_advice_t>(ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION));
+    if (this->isImmediateType()) {
+        memoryCopyParams.taskCountUpdateRequired |= CommandList::isExternalHostPtrAlloc(dstAllocationStruct.alloc) ||
+                                                    CommandList::isExternalHostPtrAlloc(srcAllocationStruct.alloc);
     }
 
-    if ((srcAllocationStruct.alloc == nullptr) && (NEO::debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.get() == 1)) {
-        appendMemAdvise(device, reinterpret_cast<void *>(srcAllocationStruct.alignedAllocationPtr), size, static_cast<ze_memory_advice_t>(ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION));
-    }
+    emitMemAdviseForSystemCopy(dstAllocationStruct, size);
+    emitMemAdviseForSystemCopy(srcAllocationStruct, size);
 
-    if (dstAllocationStruct.alloc == nullptr || srcAllocationStruct.alloc == nullptr) {
-        memoryCopyParams.copyOffloadAllowed = true;
-    } else {
-        memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(*srcAllocationStruct.alloc, *dstAllocationStruct.alloc);
-    }
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(srcAllocationStruct.alloc, dstAllocationStruct.alloc);
+
     const bool isCopyOnlyEnabled = isCopyOnly(memoryCopyParams.copyOffloadAllowed);
     const bool inOrderCopyOnlySignalingAllowed = this->isInOrderExecutionEnabled() && !memoryCopyParams.forceDisableCopyOnlyInOrderSignaling && isCopyOnlyEnabled;
 
@@ -1820,10 +1881,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
     uintptr_t leftSize = 0;
     uintptr_t rightSize = 0;
     uintptr_t middleSizeBytes = 0;
-    bool isStateless = (this->cmdListHeapAddressModel == NEO::HeapAddressModel::globalStateless) || this->isStatelessBuiltinsEnabled();
-    if (size >= 4ull * MemoryConstants::gigaByte) {
-        isStateless = true;
-    }
+    const auto isStateless = this->forceStateless(size);
 
     const bool isHeapless = this->isHeaplessModeEnabled();
 
@@ -1906,7 +1964,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
         ret = appendMemoryCopyBlit(dstAllocationStruct.alignedAllocationPtr,
                                    dstAllocationStruct.alloc, dstAllocationStruct.offset,
                                    srcAllocationStruct.alignedAllocationPtr,
-                                   srcAllocationStruct.alloc, srcAllocationStruct.offset, size, signalEvent);
+                                   srcAllocationStruct.alloc, srcAllocationStruct.offset, size, signalEvent, memoryCopyParams);
     } else {
         if (NEO::debugManager.flags.FlushTlbBeforeCopy.get() == 1) {
             NEO::PipeControlArgs args;
@@ -1919,9 +1977,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
 
             Builtin copyKernel = BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferSide>(isStateless, isHeapless);
 
-            ret = appendMemoryCopyKernelWithGA(reinterpret_cast<void *>(&dstAllocationStruct.alignedAllocationPtr),
+            ret = appendMemoryCopyKernelWithGA(dstAllocationStruct.alignedAllocationPtr,
                                                dstAllocationStruct.alloc, dstAllocationStruct.offset,
-                                               reinterpret_cast<void *>(&srcAllocationStruct.alignedAllocationPtr),
+                                               srcAllocationStruct.alignedAllocationPtr,
                                                srcAllocationStruct.alloc, srcAllocationStruct.offset,
                                                leftSize, 1UL,
                                                copyKernel,
@@ -1935,9 +1993,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
 
             Builtin copyKernel = BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferMiddle>(isStateless, isHeapless);
 
-            ret = appendMemoryCopyKernelWithGA(reinterpret_cast<void *>(&dstAllocationStruct.alignedAllocationPtr),
+            ret = appendMemoryCopyKernelWithGA(dstAllocationStruct.alignedAllocationPtr,
                                                dstAllocationStruct.alloc, leftSize + dstAllocationStruct.offset,
-                                               reinterpret_cast<void *>(&srcAllocationStruct.alignedAllocationPtr),
+                                               srcAllocationStruct.alignedAllocationPtr,
                                                srcAllocationStruct.alloc, leftSize + srcAllocationStruct.offset,
                                                middleSizeBytes,
                                                middleElSize,
@@ -1952,9 +2010,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
 
             Builtin copyKernel = BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferToBufferSide>(isStateless, isHeapless);
 
-            ret = appendMemoryCopyKernelWithGA(reinterpret_cast<void *>(&dstAllocationStruct.alignedAllocationPtr),
+            ret = appendMemoryCopyKernelWithGA(dstAllocationStruct.alignedAllocationPtr,
                                                dstAllocationStruct.alloc, leftSize + middleSizeBytes + dstAllocationStruct.offset,
-                                               reinterpret_cast<void *>(&srcAllocationStruct.alignedAllocationPtr),
+                                               srcAllocationStruct.alignedAllocationPtr,
                                                srcAllocationStruct.alloc, leftSize + middleSizeBytes + srcAllocationStruct.offset,
                                                rightSize, 1UL,
                                                copyKernel,
@@ -1979,7 +2037,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
         if ((!useAdditionalBlitProperties || !isCopyOnlyEnabled) &&
             (launchParams.isKernelSplitOperation || inOrderCopyOnlySignalingAllowed || emitPipeControl)) {
             dispatchInOrderPostOperationBarrier(signalEvent, dcFlush, isCopyOnlyEnabled);
-            appendSignalInOrderDependencyCounter(signalEvent, memoryCopyParams.copyOffloadAllowed, false, false);
+            appendSignalInOrderDependencyCounter(signalEvent, memoryCopyParams.copyOffloadAllowed, false, false, false);
         } else if (!useAdditionalBlitProperties && isCopyOnlyEnabled && Event::isAggregatedEvent(signalEvent)) {
             appendSignalAggregatedEventAtomic(*signalEvent);
         }
@@ -1993,15 +2051,21 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(void *dstptr,
     }
     appendSynchronizedDispatchCleanupSection();
 
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryCopy",
-            callId);
-    }
-
     return ret;
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyWithParameters(void *dstptr,
+                                                                                 const void *srcptr,
+                                                                                 size_t size,
+                                                                                 const void *pNext,
+                                                                                 ze_event_handle_t hSignalEvent,
+                                                                                 uint32_t numWaitEvents,
+                                                                                 ze_event_handle_t *phWaitEvents) {
+    CmdListMemoryCopyParams memoryCopyParams{};
+    obtainMemoryCopyParamsFromExtensions(static_cast<const ze_base_desc_t *>(pNext), memoryCopyParams);
+
+    return appendMemoryCopy(dstptr, srcptr, size, hSignalEvent, numWaitEvents, phWaitEvents, memoryCopyParams);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -2017,22 +2081,18 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(void *d
                                                                          uint32_t numWaitEvents,
                                                                          ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) {
 
-    NEO::Device *neoDevice = device->getNEODevice();
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryCopyRegion",
-            callId);
-    }
+    bool sharedSystemEnabled = isSharedSystemEnabled();
 
-    size_t dstSize = this->getTotalSizeForCopyRegion(dstRegion, dstPitch, dstSlicePitch);
-    size_t srcSize = this->getTotalSizeForCopyRegion(srcRegion, srcPitch, srcSlicePitch);
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendMemoryCopyRegion");
 
-    auto dstAllocationStruct = getAlignedAllocationData(this->device, false, dstPtr, dstSize, false, isCopyOffloadEnabled());
-    auto srcAllocationStruct = getAlignedAllocationData(this->device, false, srcPtr, srcSize, true, isCopyOffloadEnabled());
+    auto dstSize = this->getTotalSizeForCopyRegion(dstRegion, dstPitch, dstSlicePitch);
+    auto srcSize = this->getTotalSizeForCopyRegion(srcRegion, srcPitch, srcSlicePitch);
+
+    size_t dstAllocSize = NEO::getIfValid(memoryCopyParams.bcsSplitTotalDstSize, dstSize);
+    size_t srcAllocSize = NEO::getIfValid(memoryCopyParams.bcsSplitTotalSrcSize, srcSize);
+
+    auto dstAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, NEO::getIfValid(memoryCopyParams.bcsSplitBaseDstPtr, dstPtr), dstAllocSize, false, isCopyOffloadEnabled());
+    auto srcAllocationStruct = getAlignedAllocationData(this->device, sharedSystemEnabled, NEO::getIfValid(memoryCopyParams.bcsSplitBaseSrcPtr, srcPtr), srcAllocSize, true, isCopyOffloadEnabled());
 
     UNRECOVERABLE_IF(srcSlicePitch && srcPitch == 0);
     Vec3<size_t> srcSize3 = {srcPitch ? srcPitch : srcRegion->width + srcRegion->originX,
@@ -2048,30 +2108,44 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(void *d
         signalEvent = Event::fromHandle(hSignalEvent);
     }
 
-    if (dstAllocationStruct.alloc == nullptr || srcAllocationStruct.alloc == nullptr) {
+    if ((dstAllocationStruct.alloc == nullptr || srcAllocationStruct.alloc == nullptr) && (sharedSystemEnabled == false)) {
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
 
-    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(*srcAllocationStruct.alloc, *dstAllocationStruct.alloc);
+    if (this->isImmediateType()) {
+        memoryCopyParams.taskCountUpdateRequired |= CommandList::isExternalHostPtrAlloc(dstAllocationStruct.alloc) ||
+                                                    CommandList::isExternalHostPtrAlloc(srcAllocationStruct.alloc);
+    }
+
+    emitMemAdviseForSystemCopy(dstAllocationStruct, dstSize);
+    emitMemAdviseForSystemCopy(srcAllocationStruct, srcSize);
+
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadAllowed(srcAllocationStruct.alloc, dstAllocationStruct.alloc);
     const bool isCopyOnlyEnabled = isCopyOnly(memoryCopyParams.copyOffloadAllowed);
     const bool inOrderCopyOnlySignalingAllowed = this->isInOrderExecutionEnabled() && !memoryCopyParams.forceDisableCopyOnlyInOrderSignaling && isCopyOnlyEnabled;
+
+    const auto isStateless = this->forceStateless(std::max(srcSize, dstSize));
 
     ze_result_t result = ZE_RESULT_SUCCESS;
     if (isCopyOnlyEnabled) {
         result = appendMemoryCopyBlitRegion(&srcAllocationStruct, &dstAllocationStruct, *srcRegion, *dstRegion,
                                             {srcRegion->width, srcRegion->height, srcRegion->depth},
                                             srcPitch, srcSlicePitch, dstPitch, dstSlicePitch, srcSize3, dstSize3,
-                                            signalEvent, numWaitEvents, phWaitEvents, memoryCopyParams.relaxedOrderingDispatch, isDualStreamCopyOffloadOperation(memoryCopyParams.copyOffloadAllowed));
+                                            signalEvent, numWaitEvents, phWaitEvents, memoryCopyParams, isDualStreamCopyOffloadOperation(memoryCopyParams.copyOffloadAllowed));
     } else if ((srcRegion->depth > 1) || (srcRegion->originZ != 0) || (dstRegion->originZ != 0)) {
-        result = this->appendMemoryCopyKernel3d(&dstAllocationStruct, &srcAllocationStruct, Builtin::copyBufferRectBytes3d,
+        Builtin builtInType = BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes3d>(isStateless, false);
+        result = this->appendMemoryCopyKernel3d(&dstAllocationStruct, &srcAllocationStruct, builtInType,
                                                 dstRegion, dstPitch, dstSlicePitch, dstAllocationStruct.offset,
                                                 srcRegion, srcPitch, srcSlicePitch, srcAllocationStruct.offset,
-                                                signalEvent, numWaitEvents, phWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
+                                                signalEvent, numWaitEvents, phWaitEvents,
+                                                memoryCopyParams.relaxedOrderingDispatch, isStateless);
     } else {
-        result = this->appendMemoryCopyKernel2d(&dstAllocationStruct, &srcAllocationStruct, Builtin::copyBufferRectBytes2d,
+        Builtin builtInType = BuiltinTypeHelper::adjustBuiltinType<Builtin::copyBufferRectBytes2d>(isStateless, false);
+        result = this->appendMemoryCopyKernel2d(&dstAllocationStruct, &srcAllocationStruct, builtInType,
                                                 dstRegion, dstPitch, dstAllocationStruct.offset,
                                                 srcRegion, srcPitch, srcAllocationStruct.offset,
-                                                signalEvent, numWaitEvents, phWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
+                                                signalEvent, numWaitEvents, phWaitEvents,
+                                                memoryCopyParams.relaxedOrderingDispatch, isStateless);
     }
 
     if (result) {
@@ -2085,7 +2159,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(void *d
     if (this->isInOrderExecutionEnabled()) {
         if (inOrderCopyOnlySignalingAllowed) {
             if (!useAdditionalBlitProperties) {
-                appendSignalInOrderDependencyCounter(signalEvent, memoryCopyParams.copyOffloadAllowed, false, false);
+                appendSignalInOrderDependencyCounter(signalEvent, memoryCopyParams.copyOffloadAllowed, false, false, false);
             }
             handleInOrderDependencyCounter(signalEvent, false, isCopyOnlyEnabled);
         } else if (!useAdditionalBlitProperties && isCopyOnlyEnabled && Event::isAggregatedEvent(signalEvent)) {
@@ -2093,14 +2167,6 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(void *d
         }
     } else {
         handleInOrderDependencyCounter(signalEvent, false, isCopyOnlyEnabled);
-    }
-
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryCopyRegion",
-            callId);
     }
 
     return ZE_RESULT_SUCCESS;
@@ -2120,7 +2186,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernel3d(Align
                                                                            size_t srcOffset,
                                                                            Event *signalEvent,
                                                                            uint32_t numWaitEvents,
-                                                                           ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) {
+                                                                           ze_event_handle_t *phWaitEvents,
+                                                                           bool relaxedOrderingDispatch, const bool isStateless) {
 
     auto lock = device->getBuiltinFunctionsLib()->obtainUniqueOwnership();
     const auto driverHandle = static_cast<DriverHandleImp *>(device->getDriverHandle());
@@ -2156,27 +2223,44 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernel3d(Align
     ze_group_count_t dispatchKernelArgs{srcRegion->width / groupSizeX, srcRegion->height / groupSizeY,
                                         srcRegion->depth / groupSizeZ};
 
-    uint32_t srcOrigin[3] = {(srcRegion->originX + static_cast<uint32_t>(srcOffset)), (srcRegion->originY), (srcRegion->originZ)};
-    uint32_t dstOrigin[3] = {(dstRegion->originX + static_cast<uint32_t>(dstOffset)), (dstRegion->originY), (dstRegion->originZ)};
-    uint32_t srcPitches[2] = {(srcPitch), (srcSlicePitch)};
-    uint32_t dstPitches[2] = {(dstPitch), (dstSlicePitch)};
+    builtinSetArg(builtinKernel, 0u, srcAlignedAllocation->alignedAllocationPtr, srcAlignedAllocation->alloc);
+    builtinSetArg(builtinKernel, 1u, dstAlignedAllocation->alignedAllocationPtr, dstAlignedAllocation->alloc);
 
-    builtinKernel->setArgBufferWithAlloc(0, srcAlignedAllocation->alignedAllocationPtr, srcAlignedAllocation->alloc, nullptr);
-    builtinKernel->setArgBufferWithAlloc(1, dstAlignedAllocation->alignedAllocationPtr, dstAlignedAllocation->alloc, nullptr);
-    builtinKernel->setArgumentValue(2, sizeof(srcOrigin), &srcOrigin);
-    builtinKernel->setArgumentValue(3, sizeof(dstOrigin), &dstOrigin);
-    builtinKernel->setArgumentValue(4, sizeof(srcPitches), &srcPitches);
-    builtinKernel->setArgumentValue(5, sizeof(dstPitches), &dstPitches);
+    if (isStateless) {
+        uint64_t srcOrigin64[3] = {static_cast<uint64_t>(srcRegion->originX) + static_cast<uint64_t>(srcOffset),
+                                   static_cast<uint64_t>(srcRegion->originY), static_cast<uint64_t>(srcRegion->originZ)};
+        uint64_t dstOrigin64[3] = {static_cast<uint64_t>(dstRegion->originX) + static_cast<uint64_t>(dstOffset),
+                                   static_cast<uint64_t>(dstRegion->originY), static_cast<uint64_t>(dstRegion->originZ)};
+        uint64_t srcPitches64[2] = {static_cast<uint64_t>(srcPitch), static_cast<uint64_t>(srcSlicePitch)};
+        uint64_t dstPitches64[2] = {static_cast<uint64_t>(dstPitch), static_cast<uint64_t>(dstSlicePitch)};
+        builtinKernel->setArgumentValue(2, sizeof(srcOrigin64), &srcOrigin64);
+        builtinKernel->setArgumentValue(3, sizeof(dstOrigin64), &dstOrigin64);
+        builtinKernel->setArgumentValue(4, sizeof(srcPitches64), &srcPitches64);
+        builtinKernel->setArgumentValue(5, sizeof(dstPitches64), &dstPitches64);
+    } else {
+        uint32_t srcOrigin32[3] = {(srcRegion->originX + static_cast<uint32_t>(srcOffset)), (srcRegion->originY), (srcRegion->originZ)};
+        uint32_t dstOrigin32[3] = {(dstRegion->originX + static_cast<uint32_t>(dstOffset)), (dstRegion->originY), (dstRegion->originZ)};
+        uint32_t srcPitches32[2] = {srcPitch, srcSlicePitch};
+        uint32_t dstPitches32[2] = {dstPitch, dstSlicePitch};
+        builtinKernel->setArgumentValue(2, sizeof(srcOrigin32), &srcOrigin32);
+        builtinKernel->setArgumentValue(3, sizeof(dstOrigin32), &dstOrigin32);
+        builtinKernel->setArgumentValue(4, sizeof(srcPitches32), &srcPitches32);
+        builtinKernel->setArgumentValue(5, sizeof(dstPitches32), &dstPitches32);
+    }
 
-    auto dstAllocationType = dstAlignedAllocation->alloc->getAllocationType();
     CmdListKernelLaunchParams launchParams = {};
     launchParams.isBuiltInKernel = true;
-    launchParams.isDestinationAllocationInSystemMemory =
-        (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
-        (dstAllocationType == NEO::AllocationType::externalHostPtr);
+    if (dstAlignedAllocation->alloc) {
+        auto dstAllocationType = dstAlignedAllocation->alloc->getAllocationType();
+        launchParams.isDestinationAllocationInSystemMemory =
+            (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
+            (dstAllocationType == NEO::AllocationType::externalHostPtr);
 
-    if constexpr (checkIfAllocationImportedRequired()) {
-        launchParams.isDestinationAllocationImported = this->isAllocationImported(dstAlignedAllocation->alloc, device->getDriverHandle()->getSvmAllocsManager());
+        if constexpr (checkIfAllocationImportedRequired()) {
+            launchParams.isDestinationAllocationImported = dstAlignedAllocation->alloc->getIsImported();
+        }
+    } else {
+        launchParams.isDestinationAllocationInSystemMemory = true;
     }
     launchParams.relaxedOrderingDispatch = relaxedOrderingDispatch;
     return CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(builtinKernel->toHandle(), dispatchKernelArgs, signalEvent, numWaitEvents,
@@ -2195,7 +2279,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernel2d(Align
                                                                            size_t srcOffset,
                                                                            Event *signalEvent,
                                                                            uint32_t numWaitEvents,
-                                                                           ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) {
+                                                                           ze_event_handle_t *phWaitEvents,
+                                                                           bool relaxedOrderingDispatch, const bool isStateless) {
 
     auto lock = device->getBuiltinFunctionsLib()->obtainUniqueOwnership();
     const auto driverHandle = static_cast<DriverHandleImp *>(device->getDriverHandle());
@@ -2230,25 +2315,44 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyKernel2d(Align
 
     ze_group_count_t dispatchKernelArgs{srcRegion->width / groupSizeX, srcRegion->height / groupSizeY, 1u};
 
-    uint32_t srcOrigin[2] = {(srcRegion->originX + static_cast<uint32_t>(srcOffset)), (srcRegion->originY)};
-    uint32_t dstOrigin[2] = {(dstRegion->originX + static_cast<uint32_t>(dstOffset)), (dstRegion->originY)};
+    builtinSetArg(builtinKernel, 0u, srcAlignedAllocation->alignedAllocationPtr, srcAlignedAllocation->alloc);
+    builtinSetArg(builtinKernel, 1u, dstAlignedAllocation->alignedAllocationPtr, dstAlignedAllocation->alloc);
 
-    builtinKernel->setArgBufferWithAlloc(0, srcAlignedAllocation->alignedAllocationPtr, srcAlignedAllocation->alloc, nullptr);
-    builtinKernel->setArgBufferWithAlloc(1, dstAlignedAllocation->alignedAllocationPtr, dstAlignedAllocation->alloc, nullptr);
-    builtinKernel->setArgumentValue(2, sizeof(srcOrigin), &srcOrigin);
-    builtinKernel->setArgumentValue(3, sizeof(dstOrigin), &dstOrigin);
-    builtinKernel->setArgumentValue(4, sizeof(srcPitch), &srcPitch);
-    builtinKernel->setArgumentValue(5, sizeof(dstPitch), &dstPitch);
+    if (isStateless) {
+        uint64_t srcOrigin64[2] = {static_cast<uint64_t>(srcRegion->originX) + static_cast<uint64_t>(srcOffset),
+                                   static_cast<uint64_t>(srcRegion->originY)};
+        uint64_t dstOrigin64[2] = {static_cast<uint64_t>(dstRegion->originX) + static_cast<uint64_t>(dstOffset),
+                                   static_cast<uint64_t>(dstRegion->originY)};
+        uint64_t srcPitch64 = static_cast<uint64_t>(srcPitch);
+        uint64_t dstPitch64 = static_cast<uint64_t>(dstPitch);
+        builtinKernel->setArgumentValue(2, sizeof(srcOrigin64), &srcOrigin64);
+        builtinKernel->setArgumentValue(3, sizeof(dstOrigin64), &dstOrigin64);
+        builtinKernel->setArgumentValue(4, sizeof(srcPitch64), &srcPitch64);
+        builtinKernel->setArgumentValue(5, sizeof(dstPitch64), &dstPitch64);
+    } else {
+        uint32_t srcOrigin32[2] = {(srcRegion->originX + static_cast<uint32_t>(srcOffset)), (srcRegion->originY)};
+        uint32_t dstOrigin32[2] = {(dstRegion->originX + static_cast<uint32_t>(dstOffset)), (dstRegion->originY)};
+        uint32_t srcPitch32 = static_cast<uint32_t>(srcPitch);
+        uint32_t dstPitch32 = static_cast<uint32_t>(dstPitch);
+        builtinKernel->setArgumentValue(2, sizeof(srcOrigin32), &srcOrigin32);
+        builtinKernel->setArgumentValue(3, sizeof(dstOrigin32), &dstOrigin32);
+        builtinKernel->setArgumentValue(4, sizeof(srcPitch32), &srcPitch32);
+        builtinKernel->setArgumentValue(5, sizeof(dstPitch32), &dstPitch32);
+    }
 
-    auto dstAllocationType = dstAlignedAllocation->alloc->getAllocationType();
     CmdListKernelLaunchParams launchParams = {};
     launchParams.isBuiltInKernel = true;
-    launchParams.isDestinationAllocationInSystemMemory =
-        (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
-        (dstAllocationType == NEO::AllocationType::externalHostPtr);
+    if (dstAlignedAllocation->alloc) {
+        auto dstAllocationType = dstAlignedAllocation->alloc->getAllocationType();
+        launchParams.isDestinationAllocationInSystemMemory =
+            (dstAllocationType == NEO::AllocationType::bufferHostMemory) ||
+            (dstAllocationType == NEO::AllocationType::externalHostPtr);
 
-    if constexpr (CommandListCoreFamily<gfxCoreFamily>::checkIfAllocationImportedRequired()) {
-        launchParams.isDestinationAllocationImported = this->isAllocationImported(dstAlignedAllocation->alloc, device->getDriverHandle()->getSvmAllocsManager());
+        if constexpr (CommandListCoreFamily<gfxCoreFamily>::checkIfAllocationImportedRequired()) {
+            launchParams.isDestinationAllocationImported = dstAlignedAllocation->alloc->getIsImported();
+        }
+    } else {
+        launchParams.isDestinationAllocationInSystemMemory = true;
     }
     launchParams.relaxedOrderingDispatch = relaxedOrderingDispatch;
     return CommandListCoreFamily<gfxCoreFamily>::appendLaunchKernel(builtinKernel->toHandle(),
@@ -2287,14 +2391,6 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryPrefetch(const voi
     return ZE_RESULT_SUCCESS;
 }
 
-static inline void builtinSetArgFill(Kernel *builtinKernel, uint32_t argIndex, uintptr_t argPtr, NEO::GraphicsAllocation *allocation) {
-    if (allocation) {
-        builtinKernel->setArgBufferWithAlloc(argIndex, argPtr, allocation, nullptr);
-    } else {
-        builtinKernel->setArgumentValue(argIndex, sizeof(argPtr), &argPtr);
-    }
-}
-
 template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendUnalignedFillKernel(bool isStateless, uint32_t unalignedSize, const AlignedAllocationData &dstAllocation, const void *pattern, Event *signalEvent, CmdListKernelLaunchParams &launchParams) {
 
@@ -2308,7 +2404,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendUnalignedFillKernel(bool
     builtinKernel->setGroupSize(groupSizeX, groupSizeY, groupSizeZ);
     ze_group_count_t dispatchKernelRemainderArgs{static_cast<uint32_t>(unalignedSize / groupSizeX), 1u, 1u};
     uint32_t value = *(reinterpret_cast<const unsigned char *>(pattern));
-    builtinSetArgFill(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
+    builtinSetArg(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
     builtinKernel->setArgumentValue(1, sizeof(dstAllocation.offset), &dstAllocation.offset);
     builtinKernel->setArgumentValue(2, sizeof(value), &value);
 
@@ -2334,25 +2430,13 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
                                                                    ze_event_handle_t hSignalEvent,
                                                                    uint32_t numWaitEvents,
                                                                    ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) {
-    bool isStateless = (this->cmdListHeapAddressModel == NEO::HeapAddressModel::globalStateless) || this->isStatelessBuiltinsEnabled();
-    if (size >= 4ull * MemoryConstants::gigaByte) {
-        isStateless = true;
-    }
-
+    const auto isStateless = this->forceStateless(size);
     const bool isHeapless = this->isHeaplessModeEnabled();
-    memoryCopyParams.copyOffloadAllowed = isCopyOffloadEnabled();
+    memoryCopyParams.copyOffloadAllowed = isCopyOffloadEnabled() && (patternSize <= this->maxFillPatternSizeForCopyEngine);
 
     NEO::Device *neoDevice = device->getNEODevice();
-    bool sharedSystemEnabled = ((neoDevice->areSharedSystemAllocationsAllowed()) && (NEO::debugManager.flags.TreatNonUsmForTransfersAsSharedSystem.get() == 1));
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryFill",
-            callId);
-    }
+    bool sharedSystemEnabled = isSharedSystemEnabled();
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendMemoryFill");
 
     CmdListKernelLaunchParams launchParams = {};
 
@@ -2405,9 +2489,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
 
-    if ((dstAllocation.alloc == nullptr) && (NEO::debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.get() == 1)) {
-        appendMemAdvise(device, reinterpret_cast<void *>(dstAllocation.alignedAllocationPtr), size, static_cast<ze_memory_advice_t>(ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION));
-    }
+    emitMemAdviseForSystemCopy(dstAllocation, size);
 
     auto lock = device->getBuiltinFunctionsLib()->obtainUniqueOwnership();
 
@@ -2422,7 +2504,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
     launchParams.isDestinationAllocationInSystemMemory = hostPointerNeedsFlush;
     if (dstAllocation.alloc) {
         if constexpr (checkIfAllocationImportedRequired()) {
-            launchParams.isDestinationAllocationImported = this->isAllocationImported(dstAllocation.alloc, device->getDriverHandle()->getSvmAllocsManager());
+            launchParams.isDestinationAllocationImported = dstAllocation.alloc->getIsImported();
         }
     }
     CmdListFillKernelArguments fillArguments = {};
@@ -2478,7 +2560,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
             UNRECOVERABLE_IF(true);
         }
 
-        builtinSetArgFill(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
+        builtinSetArg(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
         builtinKernel->setArgumentValue(1, sizeof(fillArguments.mainOffset), &fillArguments.mainOffset);
         builtinKernel->setArgumentValue(2, sizeof(value), &value);
 
@@ -2507,10 +2589,10 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
         if (patternAllocationSize > MemoryConstants::cacheLineSize) {
             patternGfxAlloc = device->obtainReusableAllocation(patternAllocationSize, NEO::AllocationType::fillPattern);
             if (patternGfxAlloc == nullptr) {
-                NEO::AllocationProperties allocationProperties{device->getNEODevice()->getRootDeviceIndex(),
+                NEO::AllocationProperties allocationProperties{neoDevice->getRootDeviceIndex(),
                                                                patternAllocationSize,
                                                                NEO::AllocationType::fillPattern,
-                                                               device->getNEODevice()->getDeviceBitfield()};
+                                                               neoDevice->getDeviceBitfield()};
                 allocationProperties.alignment = MemoryConstants::pageSize;
                 patternGfxAlloc = device->getDriverHandle()->getMemoryManager()->allocateGraphicsMemoryWithProperties(allocationProperties);
             }
@@ -2538,7 +2620,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
             patternAllocOffset += patternSizeToCopy;
         } while (patternAllocOffset < patternAllocationSize);
         if (fillArguments.leftRemainingBytes == 0) {
-            builtinSetArgFill(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
+            builtinSetArg(builtinKernel, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
             builtinKernel->setArgumentValue(1, sizeof(dstAllocation.offset), &dstAllocation.offset);
             builtinKernel->setArgBufferWithAlloc(2, reinterpret_cast<uintptr_t>(patternGfxAllocPtr), patternGfxAlloc, nullptr);
             builtinKernel->setArgumentValue(3, sizeof(fillArguments.patternSizeInEls), &fillArguments.patternSizeInEls);
@@ -2559,7 +2641,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
             builtinKernelRemainder->setGroupSize(static_cast<uint32_t>(fillArguments.mainGroupSize), 1, 1);
             ze_group_count_t dispatchKernelArgs{static_cast<uint32_t>(fillArguments.groups), 1u, 1u};
 
-            builtinSetArgFill(builtinKernelRemainder, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
+            builtinSetArg(builtinKernelRemainder, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
             builtinKernelRemainder->setArgumentValue(1,
                                                      sizeof(dstOffsetRemainder),
                                                      &dstOffsetRemainder);
@@ -2585,7 +2667,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
             builtinKernelRemainder->setGroupSize(fillArguments.rightRemainingBytes, 1u, 1u);
             ze_group_count_t dispatchKernelArgs{1u, 1u, 1u};
 
-            builtinSetArgFill(builtinKernelRemainder, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
+            builtinSetArg(builtinKernelRemainder, 0, dstAllocation.alignedAllocationPtr, dstAllocation.alloc);
             builtinKernelRemainder->setArgumentValue(1,
                                                      sizeof(dstOffsetRemainder),
                                                      &dstOffsetRemainder);
@@ -2609,7 +2691,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
     if (this->isInOrderExecutionEnabled()) {
         if (launchParams.isKernelSplitOperation || launchParams.pipeControlSignalling) {
             dispatchInOrderPostOperationBarrier(signalEvent, dcFlush, isCopyOnly(false));
-            appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+            appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
         } else {
             nonWalkerInOrderCmdChaining = isInOrderNonWalkerSignalingRequired(signalEvent);
         }
@@ -2618,15 +2700,22 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFill(void *ptr,
 
     appendSynchronizedDispatchCleanupSection();
 
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendMemoryFill",
-            callId);
-    }
-
     return res;
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendMemoryFillWithParameters(void *ptr,
+                                                                                 const void *pattern,
+                                                                                 size_t patternSize,
+                                                                                 size_t size,
+                                                                                 const void *pNext,
+                                                                                 ze_event_handle_t hSignalEvent,
+                                                                                 uint32_t numWaitEvents,
+                                                                                 ze_event_handle_t *phWaitEvents) {
+    CmdListMemoryCopyParams memoryCopyParams{};
+    obtainMemoryCopyParamsFromExtensions(static_cast<const ze_base_desc_t *>(pNext), memoryCopyParams);
+
+    return appendMemoryFill(ptr, pattern, patternSize, size, hSignalEvent, numWaitEvents, phWaitEvents, memoryCopyParams);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -2636,7 +2725,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBlitFill(void *ptr, cons
     NEO::Device *neoDevice = device->getNEODevice();
     bool sharedSystemEnabled = neoDevice->areSharedSystemAllocationsAllowed();
 
-    if (this->maxFillPaternSizeForCopyEngine < patternSize) {
+    if (this->maxFillPatternSizeForCopyEngine < patternSize) {
         return ZE_RESULT_ERROR_INVALID_SIZE;
     } else {
         const bool dualStreamCopyOffloadOperation = isDualStreamCopyOffloadOperation(memoryCopyParams.copyOffloadAllowed);
@@ -2651,7 +2740,6 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBlitFill(void *ptr, cons
             return ZE_RESULT_ERROR_INVALID_ARGUMENT;
         }
 
-        auto neoDevice = device->getNEODevice();
         if (isCopyOnlySignaling) {
             appendEventForProfiling(signalEvent, nullptr, true, false, false, true);
         }
@@ -2681,20 +2769,22 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBlitFill(void *ptr, cons
 
             commandContainer.addToResidencyContainer(gpuAllocation);
 
-            blitProperties = NEO::BlitProperties::constructPropertiesForMemoryFill(gpuAllocation, size, patternToCommand, patternSize, offset);
-            size_t nBlits = NEO::BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForColorFill(blitProperties.copySize, patternSize, device->getNEODevice()->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
+            blitProperties = NEO::BlitProperties::constructPropertiesForMemoryFill(gpuAllocation, 0, size, patternToCommand, patternSize, offset);
+            size_t nBlits = NEO::BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForColorFill(blitProperties.copySize, patternSize, neoDevice->getRootDeviceEnvironmentRef(), blitProperties.isSystemMemoryPoolUsed);
             useAdditionalTimestamp = nBlits > 1;
         } else if (sharedSystemEnabled == true) {
             if (NEO::debugManager.flags.EmitMemAdvisePriorToCopyForNonUsm.get() == 1) {
                 appendMemAdvise(device, ptr, size, static_cast<ze_memory_advice_t>(ZE_MEMORY_ADVICE_SET_SYSTEM_MEMORY_PREFERRED_LOCATION));
             }
-            blitProperties = NEO::BlitProperties::constructPropertiesForSystemMemoryFill(reinterpret_cast<uint64_t>(ptr), size, patternToCommand, patternSize, 0ul);
+            blitProperties = NEO::BlitProperties::constructPropertiesForMemoryFill(nullptr, reinterpret_cast<uint64_t>(ptr), size, patternToCommand, patternSize, 0ul);
         } else {
             return ZE_RESULT_ERROR_INVALID_ARGUMENT;
         }
 
+        setAdditionalBlitPropertiesFromMemoryCopyParams(blitProperties, memoryCopyParams);
+
         if (useAdditionalBlitProperties) {
-            setAdditionalBlitProperties(blitProperties, signalEvent, useAdditionalTimestamp);
+            setAdditionalBlitProperties(blitProperties, signalEvent, 0, useAdditionalTimestamp);
         }
         blitProperties.computeStreamPartitionCount = this->partitionCount;
         blitProperties.highPriority = isHighPriorityImmediateCmdList();
@@ -2712,7 +2802,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBlitFill(void *ptr, cons
         }
 
         if (isInOrderExecutionEnabled() && isCopyOnlySignaling) {
-            appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+            appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
         }
         handleInOrderDependencyCounter(signalEvent, false, memoryCopyParams.copyOffloadAllowed);
     }
@@ -2902,9 +2992,10 @@ bool CommandListCoreFamily<gfxCoreFamily>::handleInOrderImplicitDependencies(boo
 template <GFXCORE_FAMILY gfxCoreFamily>
 inline ze_result_t CommandListCoreFamily<gfxCoreFamily>::addEventsToCmdList(uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, CommandToPatchContainer *outWaitCmds,
                                                                             bool relaxedOrderingAllowed, bool trackDependencies, bool waitForImplicitInOrderDependency, bool skipAddingWaitEventsToResidency, bool dualStreamCopyOffloadOperation) {
+    bool copyOnly = isCopyOnly(dualStreamCopyOffloadOperation);
     bool inOrderDependenciesSent = false;
 
-    if (this->latestOperationRequiredNonWalkerInOrderCmdsChaining && !relaxedOrderingAllowed) {
+    if (this->latestOperationRequiredNonWalkerInOrderCmdsChaining && !relaxedOrderingAllowed && !copyOnly) {
         waitForImplicitInOrderDependency = false;
     }
 
@@ -2913,7 +3004,7 @@ inline ze_result_t CommandListCoreFamily<gfxCoreFamily>::addEventsToCmdList(uint
     }
 
     if (relaxedOrderingAllowed && numWaitEvents > 0 && !inOrderDependenciesSent) {
-        NEO::RelaxedOrderingHelper::encodeRegistersBeforeDependencyCheckers<GfxFamily>(*commandContainer.getCommandStream(), isCopyOnly(dualStreamCopyOffloadOperation));
+        NEO::RelaxedOrderingHelper::encodeRegistersBeforeDependencyCheckers<GfxFamily>(*commandContainer.getCommandStream(), copyOnly);
     }
 
     if (numWaitEvents > 0) {
@@ -2929,11 +3020,16 @@ inline ze_result_t CommandListCoreFamily<gfxCoreFamily>::addEventsToCmdList(uint
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendSignalEvent(ze_event_handle_t hEvent, bool relaxedOrderingDispatch) {
+    auto event = Event::fromHandle(hEvent);
+
+    if (event->isCounterBased()) {
+        return appendBarrier(hEvent, 0, nullptr, relaxedOrderingDispatch);
+    }
+
     if (this->isInOrderExecutionEnabled()) {
         handleInOrderImplicitDependencies(relaxedOrderingDispatch, false);
     }
 
-    auto event = Event::fromHandle(hEvent);
     event->resetKernelCountAndPacketUsedCount();
 
     if (!handleCounterBasedEventOperations(event, false)) {
@@ -2941,16 +3037,8 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendSignalEvent(ze_event_han
     }
 
     commandContainer.addToResidencyContainer(event->getAllocation(this->device));
-    NEO::Device *neoDevice = device->getNEODevice();
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendSignalEvent",
-            callId);
-    }
+
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendSignalEvent");
 
     event->setPacketsInUse(this->partitionCount);
     bool appendPipeControlWithPostSync = (!isCopyOnly(false)) && (event->isSignalScope() || event->isEventTimestampFlagSet());
@@ -2964,17 +3052,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendSignalEvent(ze_event_han
     }
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(event, false, false, false);
+        appendSignalInOrderDependencyCounter(event, false, false, false, false);
     }
     handleInOrderDependencyCounter(event, false, false);
-
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendSignalEvent",
-            callId);
-    }
 
     return ZE_RESULT_SUCCESS;
 }
@@ -3017,7 +3097,8 @@ void CommandListCoreFamily<gfxCoreFamily>::appendWaitOnInOrderDependency(std::sh
                                                                                                    isQwordInOrderCounter(), copyOnlyWait);
 
         } else {
-            auto resolveDependenciesViaPipeControls = !copyOnlyWait && implicitDependency && (this->dcFlushSupport || (!this->heaplessModeEnabled && this->latestOperationHasOptimizedCbEvent));
+            bool crossEngineDependency = (latestFlushIsDualCopyOffload != dualStreamCopyOffloadOperation);
+            auto resolveDependenciesViaPipeControls = !crossEngineDependency && !copyOnlyWait && implicitDependency && (this->dcFlushSupport || (!this->heaplessModeEnabled && this->latestOperationHasOptimizedCbEvent));
 
             if (NEO::debugManager.flags.ResolveDependenciesViaPipeControls.get() != -1) {
                 resolveDependenciesViaPipeControls = NEO::debugManager.flags.ResolveDependenciesViaPipeControls.get();
@@ -3125,16 +3206,8 @@ bool CommandListCoreFamily<gfxCoreFamily>::canSkipInOrderEventWait(Event &event,
 template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWaitOnEvents(uint32_t numEvents, ze_event_handle_t *phEvent, CommandToPatchContainer *outWaitCmds,
                                                                      bool relaxedOrderingAllowed, bool trackDependencies, bool apiRequest, bool skipAddingWaitEventsToResidency, bool skipFlush, bool copyOffloadOperation) {
-    NEO::Device *neoDevice = device->getNEODevice();
-    uint32_t callId = 0;
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        callId = neoDevice->getRootDeviceEnvironment().tagsManager->incrementAndGetCurrentCallCount();
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameBeginTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendWaitOnEvents",
-            callId);
-    }
+
+    auto swTagScope = emplaceSWTagScope("zeCommandListAppendWaitOnEvents");
 
     const bool dualStreamCopyOffload = isDualStreamCopyOffloadOperation(copyOffloadOperation);
 
@@ -3155,7 +3228,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWaitOnEvents(uint32_t nu
         if (isCopyOnly(copyOffloadOperation)) {
             NEO::MiFlushArgs args{this->dummyBlitWa};
             encodeMiFlush(0, 0, args);
-        } else if (!this->l3FlushAfterPostSyncRequired) {
+        } else if (!this->l3FlushAfterPostSyncEnabled) {
             NEO::PipeControlArgs args;
             args.dcFlushEnable = true;
             args.textureCacheInvalidationEnable = this->consumeTextureCacheFlushPending();
@@ -3209,17 +3282,9 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWaitOnEvents(uint32_t nu
 
     if (apiRequest) {
         if (this->isInOrderExecutionEnabled()) {
-            appendSignalInOrderDependencyCounter(nullptr, false, false, false);
+            appendSignalInOrderDependencyCounter(nullptr, false, false, false, false);
         }
         handleInOrderDependencyCounter(nullptr, false, false);
-    }
-
-    if (NEO::debugManager.flags.EnableSWTags.get()) {
-        neoDevice->getRootDeviceEnvironment().tagsManager->insertTag<GfxFamily, NEO::SWTags::CallNameEndTag>(
-            *commandContainer.getCommandStream(),
-            *neoDevice,
-            "zeCommandListAppendWaitOnEvents",
-            callId);
     }
 
     return ZE_RESULT_SUCCESS;
@@ -3258,12 +3323,14 @@ void CommandListCoreFamily<gfxCoreFamily>::appendSignalAggregatedEventAtomic(Eve
     using ATOMIC_OPCODES = typename GfxFamily::MI_ATOMIC::ATOMIC_OPCODES;
     using DATA_SIZE = typename GfxFamily::MI_ATOMIC::DATA_SIZE;
 
+    auto incValue = event.getInOrderIncrementValue(this->partitionCount);
+
     NEO::EncodeAtomic<GfxFamily>::programMiAtomic(*commandContainer.getCommandStream(), event.getInOrderExecInfo()->getBaseDeviceAddress(), ATOMIC_OPCODES::ATOMIC_8B_ADD,
-                                                  DATA_SIZE::DATA_SIZE_QWORD, 0, 0, event.getInOrderIncrementValue(), 0);
+                                                  DATA_SIZE::DATA_SIZE_QWORD, 0, 0, incValue, 0);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-void CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(Event *signalEvent, bool copyOffloadOperation, bool stall, bool textureFlushRequired) {
+void CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(Event *signalEvent, bool copyOffloadOperation, bool stall, bool textureFlushRequired, bool skipAggregatedEventSignaling) {
     using ATOMIC_OPCODES = typename GfxFamily::MI_ATOMIC::ATOMIC_OPCODES;
     using DATA_SIZE = typename GfxFamily::MI_ATOMIC::DATA_SIZE;
 
@@ -3273,6 +3340,11 @@ void CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(
     uint64_t signalValue = inOrderExecInfo->getCounterValue() + getInOrderIncrementValue();
 
     auto cmdStream = commandContainer.getCommandStream();
+
+    if (isCopyOnly(copyOffloadOperation) && !this->useAdditionalBlitProperties && NEO::debugManager.flags.InOrderCopyMiFlushSync.get() != 0) {
+        NEO::MiFlushArgs args{this->dummyBlitWa};
+        encodeMiFlush(0, 0, args);
+    }
 
     if (stall) {
         NEO::PipeControlArgs args;
@@ -3309,7 +3381,7 @@ void CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(
         appendSdiInOrderCounterSignalling(inOrderExecInfo->getBaseHostGpuAddress(), signalValue, copyOffloadOperation);
     }
 
-    if (Event::isAggregatedEvent(signalEvent)) {
+    if (!skipAggregatedEventSignaling && Event::isAggregatedEvent(signalEvent)) {
         appendSignalAggregatedEventAtomic(*signalEvent);
     }
 
@@ -3339,8 +3411,11 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::programSyncBuffer(Kernel &kern
         syncBufferSpace.offset = patchData.second;
         syncBufferSpace.pDestination = ptrOffset(patchData.first->getUnderlyingBuffer(), patchData.second);
         syncBufferSpace.patchSize = NEO::KernelHelper::getSyncBufferSize(requestedNumberOfWorkgroups);
+        syncBufferSpace.gpuAddress = patchData.first->getGpuAddressToPatch() + patchData.second;
 
         commandsToPatch.push_back(syncBufferSpace);
+
+        this->totalNoopSpace += syncBufferSpace.patchSize;
     }
 
     return ZE_RESULT_SUCCESS;
@@ -3363,8 +3438,11 @@ void CommandListCoreFamily<gfxCoreFamily>::programRegionGroupBarrier(Kernel &ker
         regionBarrierSpace.offset = patchData.second;
         regionBarrierSpace.pDestination = ptrOffset(patchData.first->getUnderlyingBuffer(), patchData.second);
         regionBarrierSpace.patchSize = NEO::KernelHelper::getRegionGroupBarrierSize(threadGroupCount, localRegionSize);
+        regionBarrierSpace.gpuAddress = patchData.first->getGpuAddressToPatch() + patchData.second;
 
         commandsToPatch.push_back(regionBarrierSpace);
+
+        this->totalNoopSpace += regionBarrierSpace.patchSize;
     }
 }
 
@@ -3511,7 +3589,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWriteGlobalTimestamp(
     appendSignalEventPostWalker(signalEvent, nullptr, nullptr, false, false, isCopyOnly(false));
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+        appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
     }
     handleInOrderDependencyCounter(signalEvent, false, false);
 
@@ -3634,7 +3712,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendQueryKernelTimestamps(
         (dstAllocationType == NEO::AllocationType::externalHostPtr);
 
     if constexpr (checkIfAllocationImportedRequired()) {
-        launchParams.isDestinationAllocationImported = this->isAllocationImported(dstPtrAllocationStruct.alloc, device->getDriverHandle()->getSvmAllocsManager());
+        launchParams.isDestinationAllocationImported = dstPtrAllocationStruct.alloc->getIsImported();
     }
     auto appendResult = appendLaunchKernel(builtinKernel->toHandle(), dispatchKernelArgs, hSignalEvent, numWaitEvents,
                                            phWaitEvents, launchParams);
@@ -3741,12 +3819,15 @@ void CommandListCoreFamily<gfxCoreFamily>::appendVfeStateCmdToPatch() {
     if constexpr (GfxFamily::isHeaplessRequired() == false) {
         auto &rootDeviceEnvironment = device->getNEODevice()->getRootDeviceEnvironment();
         using FrontEndStateCommand = typename GfxFamily::FrontEndStateCommand;
-        auto frontEndStateAddress = NEO::PreambleHelper<GfxFamily>::getSpaceForVfeState(commandContainer.getCommandStream(), device->getHwInfo(), engineGroupType);
+        uint64_t gpuAddress = 0;
+        auto frontEndStateAddress = NEO::PreambleHelper<GfxFamily>::getSpaceForVfeState(commandContainer.getCommandStream(), device->getHwInfo(), engineGroupType, &gpuAddress);
         auto frontEndStateCmd = new FrontEndStateCommand;
         NEO::PreambleHelper<GfxFamily>::programVfeState(frontEndStateCmd, rootDeviceEnvironment, 0, 0, device->getMaxNumHwThreads(), finalStreamState);
         commandsToPatch.push_back({.pDestination = frontEndStateAddress,
                                    .pCommand = frontEndStateCmd,
+                                   .gpuAddress = gpuAddress,
                                    .type = CommandToPatch::FrontEndState});
+        this->frontEndPatchListCount++;
     }
 }
 
@@ -3825,7 +3906,7 @@ void CommandListCoreFamily<gfxCoreFamily>::updateStreamPropertiesForRegularComma
             finalStreamState = requiredStreamState;
         } else {
             finalStreamState = requiredStreamState;
-            requiredStreamState.stateComputeMode.setPropertiesAll(cmdListDefaultCoherency, kernelAttributes.numGrfRequired, kernelAttributes.threadArbitrationPolicy, device->getDevicePreemptionMode());
+            requiredStreamState.stateComputeMode.setPropertiesAll(cmdListDefaultCoherency, kernelAttributes.numGrfRequired, kernelAttributes.threadArbitrationPolicy, device->getDevicePreemptionMode(), device->getNEODevice()->hasAnyPeerAccess());
         }
         containsAnyKernel = true;
     }
@@ -3864,7 +3945,7 @@ void CommandListCoreFamily<gfxCoreFamily>::updateStreamPropertiesForRegularComma
     if (this->stateComputeModeTracking) {
         finalStreamState.stateComputeMode.setPropertiesGrfNumberThreadArbitration(kernelAttributes.numGrfRequired, kernelAttributes.threadArbitrationPolicy);
     } else {
-        finalStreamState.stateComputeMode.setPropertiesAll(cmdListDefaultCoherency, kernelAttributes.numGrfRequired, kernelAttributes.threadArbitrationPolicy, device->getDevicePreemptionMode());
+        finalStreamState.stateComputeMode.setPropertiesAll(cmdListDefaultCoherency, kernelAttributes.numGrfRequired, kernelAttributes.threadArbitrationPolicy, device->getDevicePreemptionMode(), device->getNEODevice()->hasAnyPeerAccess());
     }
     if (finalStreamState.stateComputeMode.isDirty()) {
         bool isRcs = (this->engineGroupType == NEO::EngineGroupType::renderCompute);
@@ -3904,6 +3985,10 @@ void CommandListCoreFamily<gfxCoreFamily>::clearCommandsToPatch() {
             case CommandToPatch::PauseOnEnqueueSemaphoreEnd:
             case CommandToPatch::PauseOnEnqueuePipeControlStart:
             case CommandToPatch::PauseOnEnqueuePipeControlEnd:
+            case CommandToPatch::HostFunctionEntry:
+            case CommandToPatch::HostFunctionUserData:
+            case CommandToPatch::HostFunctionSignalInternalTag:
+            case CommandToPatch::HostFunctionWaitInternalTag:
                 UNRECOVERABLE_IF(commandToPatch.pCommand == nullptr);
                 break;
             case CommandToPatch::ComputeWalkerInlineDataScratch:
@@ -3928,6 +4013,10 @@ void CommandListCoreFamily<gfxCoreFamily>::clearCommandsToPatch() {
             case CommandToPatch::PauseOnEnqueueSemaphoreEnd:
             case CommandToPatch::PauseOnEnqueuePipeControlStart:
             case CommandToPatch::PauseOnEnqueuePipeControlEnd:
+            case CommandToPatch::HostFunctionEntry:
+            case CommandToPatch::HostFunctionUserData:
+            case CommandToPatch::HostFunctionSignalInternalTag:
+            case CommandToPatch::HostFunctionWaitInternalTag:
                 UNRECOVERABLE_IF(commandToPatch.pCommand == nullptr);
                 break;
             case CommandToPatch::ComputeWalkerInlineDataScratch:
@@ -3940,17 +4029,25 @@ void CommandListCoreFamily<gfxCoreFamily>::clearCommandsToPatch() {
         }
         commandsToPatch.clear();
     }
+    this->frontEndPatchListCount = 0;
+    this->activeScratchPatchElements = 0;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 inline size_t CommandListCoreFamily<gfxCoreFamily>::getTotalSizeForCopyRegion(const ze_copy_region_t *region, uint32_t pitch, uint32_t slicePitch) {
+    const size_t originX = region->originX;
+    const size_t originY = region->originY;
+    const size_t originZ = region->originZ;
+    const size_t width = region->width;
+    const size_t height = region->height;
+    const size_t depth = region->depth;
+
     if (region->depth > 1) {
-        uint32_t offset = region->originX + ((region->originY) * pitch) + ((region->originZ) * slicePitch);
-        return (region->width * region->height * region->depth) + offset;
-    } else {
-        uint32_t offset = region->originX + ((region->originY) * pitch);
-        return (region->width * region->height) + offset;
+        size_t offset = originX + (originY * pitch) + (originZ * slicePitch);
+        return (width * height * depth) + offset;
     }
+    size_t offset = originX + (originY * pitch);
+    return (width * height) + offset;
 }
 
 inline NEO::MemoryPool getMemoryPoolFromAllocDataForSplit(bool allocFound, const NEO::SvmAllocationData *allocData) {
@@ -4091,8 +4188,10 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBarrier(ze_event_handle_
     appendSynchronizedDispatchInitializationSection();
 
     Event *signalEvent = nullptr;
+    bool hostVisibleEvent = false;
     if (hSignalEvent) {
         signalEvent = Event::fromHandle(hSignalEvent);
+        hostVisibleEvent = signalEvent->isSignalScope(ZE_EVENT_SCOPE_FLAG_HOST);
     }
 
     if (!handleCounterBasedEventOperations(signalEvent, false)) {
@@ -4121,10 +4220,13 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendBarrier(ze_event_handle_
     }
 
     addToMappedEventList(signalEvent);
-    appendSignalEventPostWalker(signalEvent, nullptr, nullptr, this->isInOrderExecutionEnabled(), false, isCopyOnly(false));
+
+    bool skipPipeControl = this->isInOrderExecutionEnabled() && !getDcFlushRequired(hostVisibleEvent);
+
+    appendSignalEventPostWalker(signalEvent, nullptr, nullptr, skipPipeControl, false, isCopyOnly(false));
 
     if (isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+        appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
     }
     handleInOrderDependencyCounter(signalEvent, false, false);
 
@@ -4277,7 +4379,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWaitOnMemory(void *desc,
     appendSignalEventPostWalker(signalEvent, nullptr, nullptr, false, false, isCopyOnly(false));
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(signalEvent, false, false, false);
+        appendSignalInOrderDependencyCounter(signalEvent, false, false, false, false);
     }
     handleInOrderDependencyCounter(signalEvent, false, false);
 
@@ -4288,6 +4390,14 @@ template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(void *desc,
                                                                       void *ptr,
                                                                       uint64_t data) {
+    return this->appendWriteToMemory(desc, ptr, data, nullptr);
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(void *desc,
+                                                                      void *ptr,
+                                                                      uint64_t data,
+                                                                      bool *requireTaskCountUpdate) {
     auto descriptor = reinterpret_cast<zex_write_to_mem_desc_t *>(desc);
 
     size_t bufSize = sizeof(uint64_t);
@@ -4295,6 +4405,11 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(void *desc
     if (dstAllocationStruct.alloc == nullptr) {
         return ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY;
     }
+
+    if (requireTaskCountUpdate) {
+        *requireTaskCountUpdate = CommandList::isExternalHostPtrAlloc(dstAllocationStruct.alloc);
+    }
+
     UNRECOVERABLE_IF(dstAllocationStruct.alloc == nullptr);
     commandContainer.addToResidencyContainer(dstAllocationStruct.alloc);
 
@@ -4325,7 +4440,7 @@ ze_result_t CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(void *desc
     }
 
     if (this->isInOrderExecutionEnabled()) {
-        appendSignalInOrderDependencyCounter(nullptr, false, false, false);
+        appendSignalInOrderDependencyCounter(nullptr, false, false, false, false);
     }
     handleInOrderDependencyCounter(nullptr, false, false);
 
@@ -4604,6 +4719,8 @@ bool CommandListCoreFamily<gfxCoreFamily>::handleCounterBasedEventOperations(Eve
         }
     }
 
+    signalEvent->setOptimizedCbEvent(false);
+
     if (signalEvent->isCounterBased()) {
         if (!isInOrderExecutionEnabled() || signalEvent->isIpcImported()) {
             return false;
@@ -4771,10 +4888,6 @@ void CommandListCoreFamily<gfxCoreFamily>::appendFullSynchronizedDispatchInit() 
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-void CommandListCoreFamily<gfxCoreFamily>::addPatchScratchAddressInImplicitArgs(CommandsToPatch &commandsToPatch, NEO::EncodeDispatchKernelArgs &args, const NEO::KernelDescriptor &kernelDescriptor, bool kernelNeedsImplicitArgs) {
-}
-
-template <GFXCORE_FAMILY gfxCoreFamily>
 void CommandListCoreFamily<gfxCoreFamily>::appendSynchronizedDispatchCleanupSection() {
     if (getSynchronizedDispatchMode() != NEO::SynchronizedDispatchMode::full) {
         return;
@@ -4912,19 +5025,6 @@ void CommandListCoreFamily<gfxCoreFamily>::dispatchInOrderPostOperationBarrier(E
         NEO::MemorySynchronizationCommands<GfxFamily>::setPostSyncExtraProperties(args);
         NEO::MemorySynchronizationCommands<GfxFamily>::addSingleBarrier(*commandContainer.getCommandStream(), args);
     }
-}
-
-template <GFXCORE_FAMILY gfxCoreFamily>
-bool CommandListCoreFamily<gfxCoreFamily>::isAllocationImported(NEO::GraphicsAllocation *gpuAllocation, NEO::SVMAllocsManager *svmManager) const {
-
-    if (svmManager) {
-        NEO::SvmAllocationData *allocData = svmManager->getSVMAlloc(reinterpret_cast<void *>(gpuAllocation->getGpuAddress()));
-        if (allocData && allocData->isImportedAllocation) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>

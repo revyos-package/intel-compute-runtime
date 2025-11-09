@@ -45,7 +45,7 @@ struct AllocationInfo {
     bool zeroCopyAllowed = true;
     bool isHostPtrSVM = false;
 
-    bool alignementSatisfied = true;
+    bool alignmentSatisfied = true;
     bool allocateMemory = true;
     bool copyMemoryFromHostPtr = false;
 
@@ -84,7 +84,7 @@ class MemObj : public BaseObject<_cl_mem> {
     void *getCpuAddress() const;
     void *getHostPtr() const;
     bool getIsObjectRedescribed() const { return isObjectRedescribed; };
-    size_t getSize() const;
+    MOCKABLE_VIRTUAL size_t getSize() const;
 
     MapOperationsHandler &getMapOperationsHandler();
     MapOperationsHandler *getMapOperationsHandlerIfExists();

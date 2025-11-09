@@ -58,6 +58,7 @@ static std::map<std::string, std::map<std::string, uint64_t>> guidToKeyOffsetMap
       {"reg_PCIESS_tx_pktcount_lsb", 304},
       {"reg_PCIESS_tx_pktcount_msb", 300},
       {"MSU_BITMASK", 3688},
+      {"NUM_OF_MEM_CHANNEL", 3660},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 372},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 368},
       {"GDDR0_CH0_GT_32B_RD_REQ_UPPER", 376},
@@ -314,6 +315,7 @@ static std::map<std::string, std::map<std::string, uint64_t>> guidToKeyOffsetMap
       {"reg_PCIESS_tx_pktcount_lsb", 304},
       {"reg_PCIESS_tx_pktcount_msb", 308},
       {"MSU_BITMASK", 3688},
+      {"NUM_OF_MEM_CHANNEL", 3660},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 372},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 368},
       {"GDDR0_CH0_GT_32B_RD_REQ_UPPER", 380},
@@ -586,6 +588,7 @@ static std::map<std::string, std::map<std::string, uint64_t>> guidToKeyOffsetMap
       {"reg_PCIESS_tx_pktcount_lsb", 304},
       {"reg_PCIESS_tx_pktcount_msb", 300},
       {"MSU_BITMASK", 3688},
+      {"NUM_OF_MEM_CHANNEL", 3660},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 372},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 368},
       {"GDDR0_CH0_GT_32B_RD_REQ_UPPER", 376},
@@ -922,6 +925,7 @@ static std::map<std::string, std::map<std::string, uint64_t>> guidToKeyOffsetMap
       {"reg_PCIESS_tx_pktcount_lsb", 304},
       {"reg_PCIESS_tx_pktcount_msb", 308},
       {"MSU_BITMASK", 3688},
+      {"NUM_OF_MEM_CHANNEL", 3660},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_UPPER", 372},
       {"GDDR_TELEM_CAPTURE_TIMESTAMP_LOWER", 368},
       {"GDDR0_CH0_GT_32B_RD_REQ_UPPER", 380},
@@ -1248,16 +1252,6 @@ static std::map<std::string, std::map<std::string, uint64_t>> guidToKeyOffsetMap
 template <>
 const std::map<std::string, std::map<std::string, uint64_t>> *SysmanProductHelperHw<gfxProduct>::getGuidToKeyOffsetMap() {
     return &guidToKeyOffsetMap;
-}
-
-template <>
-RasInterfaceType SysmanProductHelperHw<gfxProduct>::getGtRasUtilInterface() {
-    return RasInterfaceType::netlink;
-}
-
-template <>
-RasInterfaceType SysmanProductHelperHw<gfxProduct>::getHbmRasUtilInterface() {
-    return RasInterfaceType::netlink;
 }
 
 template <>
@@ -1606,6 +1600,56 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryBandwidth(zes_mem_bandwi
 }
 
 template <>
+ze_result_t SysmanProductHelperHw<gfxProduct>::getNumberOfMemoryChannels(LinuxSysmanImp *pLinuxSysmanImp, uint32_t *pNumChannels) {
+
+    std::string &rootPath = pLinuxSysmanImp->getPciRootPath();
+    std::map<uint32_t, std::string> telemNodes;
+    NEO::PmtUtil::getTelemNodesInPciPath(std::string_view(rootPath), telemNodes);
+    if (telemNodes.empty()) {
+        return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    std::map<std::string, uint64_t> keyOffsetMap;
+    std::unordered_map<std::string, std::string> keyTelemInfoMap;
+
+    // Iterate through all the TelemNodes to find both OOBMSM and PUNIT guids along with their keyOffsetMap
+    for (const auto &it : telemNodes) {
+        std::string telemNodeDir = it.second;
+
+        std::array<char, NEO::PmtUtil::guidStringSize> guidString = {};
+        if (!NEO::PmtUtil::readGuid(telemNodeDir, guidString)) {
+            continue;
+        }
+
+        auto keyOffsetMapIterator = guidToKeyOffsetMap.find(guidString.data());
+        if (keyOffsetMapIterator == guidToKeyOffsetMap.end()) {
+            continue;
+        }
+
+        const auto &tempKeyOffsetMap = keyOffsetMapIterator->second;
+        for (auto it = tempKeyOffsetMap.begin(); it != tempKeyOffsetMap.end(); it++) {
+            keyOffsetMap[it->first] = it->second;
+            keyTelemInfoMap[it->first] = telemNodeDir;
+        }
+    }
+
+    if (keyOffsetMap.empty()) {
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): key Offset map is empty\n", __FUNCTION__);
+        return ZE_RESULT_ERROR_NOT_AVAILABLE;
+    }
+
+    // Get Number of Memory Channels
+    uint32_t numChannels = 0;
+    std::string key = "NUM_OF_MEM_CHANNEL";
+    if (!PlatformMonitoringTech::readValue(keyOffsetMap, keyTelemInfoMap[key], key, 0, numChannels)) {
+        return ZE_RESULT_ERROR_NOT_AVAILABLE;
+    }
+
+    *pNumChannels = numChannels;
+    return ZE_RESULT_SUCCESS;
+}
+
+template <>
 bool SysmanProductHelperHw<gfxProduct>::isZesInitSupported() {
     return true;
 }
@@ -1685,7 +1729,7 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getPowerEnergyCounter(zes_power_e
     const double energyInJoules = static_cast<double>(energyIntegerPart + energyDecimalPart);
     pEnergy->energy = static_cast<uint64_t>((energyInJoules * convertJouleToMicroJoule));
 
-    // Timestamp calcuation
+    // Timestamp calculation
     uint64_t timestamp64 = 0;
     std::string key = "XTAL_COUNT";
     if (!PlatformMonitoringTech::readValue(keyOffsetMap, keyTelemInfoMap[key], key, 0, timestamp64)) {
@@ -1706,11 +1750,6 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getPowerEnergyCounter(zes_power_e
 
 template <>
 bool SysmanProductHelperHw<gfxProduct>::isEccConfigurationSupported() {
-    return true;
-}
-
-template <>
-bool SysmanProductHelperHw<gfxProduct>::isLateBindingSupported() {
     return true;
 }
 

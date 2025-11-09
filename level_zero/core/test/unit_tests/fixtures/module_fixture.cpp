@@ -67,14 +67,13 @@ ModuleImmutableDataFixture::MockModule::MockModule(L0::Device *device,
 }
 
 void ModuleImmutableDataFixture::MockModule::checkIfPrivateMemoryPerDispatchIsNeeded() {
-    const_cast<KernelDescriptor &>(kernelImmDatas[0]->getDescriptor()).kernelAttributes.perHwThreadPrivateMemorySize = mockKernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize;
+    const_cast<KernelDescriptor &>(kernelImmData[0]->getDescriptor()).kernelAttributes.perHwThreadPrivateMemorySize = mockKernelImmData->getDescriptor().kernelAttributes.perHwThreadPrivateMemorySize;
     ModuleImp::checkIfPrivateMemoryPerDispatchIsNeeded();
 }
 
 void ModuleImmutableDataFixture::MockKernel::setCrossThreadData(uint32_t dataSize) {
-    state.crossThreadData.reset(new uint8_t[dataSize]);
-    state.crossThreadDataSize = dataSize;
-    memset(state.crossThreadData.get(), 0x00, state.crossThreadDataSize);
+    privateState.crossThreadData.clear();
+    privateState.crossThreadData.resize(dataSize, 0x0);
 }
 
 void ModuleImmutableDataFixture::setUp() {
@@ -165,7 +164,7 @@ void ModuleFixture::createKernel() {
     desc.pKernelName = kernelName.c_str();
 
     kernel = std::make_unique<WhiteBox<::L0::KernelImp>>();
-    kernel->module = module.get();
+    kernel->setModule(module.get());
     kernel->initialize(&desc);
     if (NEO::ApiSpecificConfig::getBindlessMode(*device->getNEODevice())) {
         const_cast<KernelDescriptor &>(kernel->getKernelDescriptor()).kernelAttributes.bufferAddressingMode = KernelDescriptor::Bindless;
@@ -177,7 +176,7 @@ std::unique_ptr<WhiteBox<::L0::KernelImp>> ModuleFixture::createKernelWithName(s
     desc.pKernelName = name.c_str();
 
     auto kernel = std::make_unique<WhiteBox<::L0::KernelImp>>();
-    kernel->module = module.get();
+    kernel->setModule(module.get());
     kernel->initialize(&desc);
     return kernel;
 }
@@ -218,7 +217,7 @@ void MultiDeviceModuleFixture::createKernel(uint32_t rootDeviceIndex) {
     desc.pKernelName = kernelName.c_str();
 
     kernel = std::make_unique<WhiteBox<::L0::KernelImp>>();
-    kernel->module = modules[rootDeviceIndex].get();
+    kernel->setModule(modules[rootDeviceIndex].get());
     kernel->initialize(&desc);
 }
 
@@ -255,27 +254,65 @@ ModuleWithZebinFixture::MockModuleWithZebin::MockModuleWithZebin(L0::Device *dev
     isZebinBinary = true;
 }
 void ModuleWithZebinFixture::MockModuleWithZebin::addSegments() {
-    kernelImmDatas.push_back(std::make_unique<MockImmutableData>(device));
+    constexpr bool createWithSharedGlobalConstSurfaces = false;
+    addSegments(createWithSharedGlobalConstSurfaces);
+}
+void ModuleWithZebinFixture::MockModuleWithZebin::addSegments(bool createWithSharedGlobalConstSurfaces) {
+    kernelImmData.push_back(std::make_unique<MockImmutableData>(device));
     auto ptr = reinterpret_cast<void *>(0x1234);
     auto canonizedGpuAddress = castToUint64(ptr);
-    translationUnit->globalVarBuffer = new NEO::MockGraphicsAllocation(0,
-                                                                       1u /*num gmms*/,
-                                                                       NEO::AllocationType::globalSurface,
-                                                                       ptr,
-                                                                       0x1000,
-                                                                       0u,
-                                                                       MemoryPool::system4KBPages,
-                                                                       MemoryManager::maxOsContextCount,
-                                                                       canonizedGpuAddress);
-    translationUnit->globalConstBuffer = new NEO::MockGraphicsAllocation(0,
-                                                                         1u /*num gmms*/,
-                                                                         NEO::AllocationType::globalSurface,
-                                                                         ptr,
-                                                                         0x1000,
-                                                                         0u,
-                                                                         MemoryPool::system4KBPages,
-                                                                         MemoryManager::maxOsContextCount,
-                                                                         canonizedGpuAddress);
+
+    if (createWithSharedGlobalConstSurfaces) {
+        constexpr auto varBufferOffset = 128u;
+        constexpr auto varBufferSize = 64u;
+
+        constexpr auto constBufferOffset = 256u;
+        constexpr auto constBufferSize = 64u;
+
+        translationUnit->globalVarBuffer = std::make_unique<NEO::SharedPoolAllocation>(new NEO::MockGraphicsAllocation(0,
+                                                                                                                       1u /*num gmms*/,
+                                                                                                                       NEO::AllocationType::globalSurface,
+                                                                                                                       ptr,
+                                                                                                                       0x1000,
+                                                                                                                       0u,
+                                                                                                                       MemoryPool::system4KBPages,
+                                                                                                                       MemoryManager::maxOsContextCount,
+                                                                                                                       canonizedGpuAddress),
+                                                                                       varBufferOffset,
+                                                                                       varBufferSize,
+                                                                                       nullptr);
+        translationUnit->globalConstBuffer = std::make_unique<NEO::SharedPoolAllocation>(new NEO::MockGraphicsAllocation(0,
+                                                                                                                         1u /*num gmms*/,
+                                                                                                                         NEO::AllocationType::constantSurface,
+                                                                                                                         ptr,
+                                                                                                                         0x1000,
+                                                                                                                         0u,
+                                                                                                                         MemoryPool::system4KBPages,
+                                                                                                                         MemoryManager::maxOsContextCount,
+                                                                                                                         canonizedGpuAddress),
+                                                                                         constBufferOffset,
+                                                                                         constBufferSize,
+                                                                                         nullptr);
+    } else {
+        translationUnit->globalVarBuffer = std::make_unique<NEO::SharedPoolAllocation>(new NEO::MockGraphicsAllocation(0,
+                                                                                                                       1u /*num gmms*/,
+                                                                                                                       NEO::AllocationType::globalSurface,
+                                                                                                                       ptr,
+                                                                                                                       0x1000,
+                                                                                                                       0u,
+                                                                                                                       MemoryPool::system4KBPages,
+                                                                                                                       MemoryManager::maxOsContextCount,
+                                                                                                                       canonizedGpuAddress));
+        translationUnit->globalConstBuffer = std::make_unique<NEO::SharedPoolAllocation>(new NEO::MockGraphicsAllocation(0,
+                                                                                                                         1u /*num gmms*/,
+                                                                                                                         NEO::AllocationType::globalSurface,
+                                                                                                                         ptr,
+                                                                                                                         0x1000,
+                                                                                                                         0u,
+                                                                                                                         MemoryPool::system4KBPages,
+                                                                                                                         MemoryManager::maxOsContextCount,
+                                                                                                                         canonizedGpuAddress));
+    }
 
     translationUnit->programInfo.globalStrings.initData = &strings;
     translationUnit->programInfo.globalStrings.size = sizeof(strings);

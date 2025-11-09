@@ -37,8 +37,8 @@
 #include <set>
 
 namespace L0 {
-template Event *Event::create<uint64_t>(EventPool *, const ze_event_desc_t *, Device *);
-template Event *Event::create<uint32_t>(EventPool *, const ze_event_desc_t *, Device *);
+template Event *Event::create<uint64_t>(EventPool *, const ze_event_desc_t *, Device *, ze_result_t &);
+template Event *Event::create<uint32_t>(EventPool *, const ze_event_desc_t *, Device *, ze_result_t &);
 template Event *Event::create<uint64_t>(const EventDescriptor &, Device *, ze_result_t &);
 template Event *Event::create<uint32_t>(const EventDescriptor &, Device *, ze_result_t &);
 
@@ -192,9 +192,10 @@ ze_result_t EventPool::createEvent(const ze_event_desc_t *desc, ze_event_handle_
 
     auto &l0GfxCoreHelper = getDevice()->getNEODevice()->getRootDeviceEnvironment().getHelper<L0GfxCoreHelper>();
 
-    *eventHandle = l0GfxCoreHelper.createEvent(this, desc, getDevice());
+    ze_result_t result = ZE_RESULT_SUCCESS;
+    *eventHandle = l0GfxCoreHelper.createEvent(this, desc, getDevice(), result);
 
-    return ZE_RESULT_SUCCESS;
+    return result;
 }
 
 ze_result_t EventPool::getContextHandle(ze_context_handle_t *phContext) {
@@ -642,7 +643,7 @@ void Event::setIsCompleted() {
     unsetCmdQueue();
 }
 
-void Event::updateInOrderExecState(std::shared_ptr<NEO::InOrderExecInfo> &newInOrderExecInfo, uint64_t signalValue, uint32_t allocationOffset) {
+void Event::updateInOrderExecState(const std::shared_ptr<NEO::InOrderExecInfo> &newInOrderExecInfo, uint64_t signalValue, uint32_t allocationOffset) {
     resetCompletionStatus();
 
     if (this->inOrderExecInfo.get() != newInOrderExecInfo.get()) {
@@ -656,6 +657,11 @@ void Event::updateInOrderExecState(std::shared_ptr<NEO::InOrderExecInfo> &newInO
 uint64_t Event::getInOrderExecSignalValueWithSubmissionCounter() const {
     uint64_t appendCounter = inOrderExecInfo.get() ? NEO::InOrderPatchCommandHelpers::getAppendCounterValue(*inOrderExecInfo) : 0;
     return (inOrderExecSignalValue + appendCounter);
+}
+
+uint64_t Event::getInOrderIncrementValue(uint32_t partitionCount) const {
+    DEBUG_BREAK_IF(inOrderIncrementValue % partitionCount != 0);
+    return (inOrderIncrementValue / partitionCount);
 }
 
 void Event::setLatestUsedCmdQueue(CommandQueue *newCmdQ) {
@@ -763,6 +769,10 @@ ze_result_t Event::enableExtensions(const EventDescriptor &eventDescriptor) {
             interruptMode = (eventSyncModeDesc->syncModeFlags & ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT);
             kmdWaitMode = (eventSyncModeDesc->syncModeFlags & ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_LOW_POWER_WAIT);
             externalInterruptWait = (eventSyncModeDesc->syncModeFlags & ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_EXTERNAL_INTERRUPT_WAIT);
+
+            if (interruptMode && !device->getProductHelper().isInterruptSupported()) {
+                return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+            }
 
             if (externalInterruptWait) {
                 setExternalInterruptId(eventSyncModeDesc->externalInterruptId);

@@ -115,12 +115,13 @@ Event *Event::create(const EventDescriptor &eventDescriptor, Device *device, ze_
     if (result != ZE_RESULT_SUCCESS) {
         return nullptr;
     }
+    event->graphExternalEvent = eventDescriptor.graphExternalEvent;
 
     return event.release();
 }
 
 template <typename TagSizeT>
-Event *Event::create(EventPool *eventPool, const ze_event_desc_t *desc, Device *device) {
+Event *Event::create(EventPool *eventPool, const ze_event_desc_t *desc, Device *device, ze_result_t &result) {
     EventDescriptor eventDescriptor = {
         .eventPoolAllocation = &eventPool->getAllocation(),
         .extensions = desc->pNext,
@@ -135,6 +136,7 @@ Event *Event::create(EventPool *eventPool, const ze_event_desc_t *desc, Device *
         .kernelMappedTsPoolFlag = eventPool->isEventPoolKernelMappedTsFlagSet(),
         .importedIpcPool = eventPool->getImportedIpcPool(),
         .ipcPool = eventPool->isIpcPoolFlagSet(),
+        .graphExternalEvent = false,
     };
 
     if (eventPool->getCounterBasedFlags() != 0) {
@@ -145,11 +147,14 @@ Event *Event::create(EventPool *eventPool, const ze_event_desc_t *desc, Device *
         eventDescriptor.offsetInSharedAlloc = eventPool->getSharedTimestampAllocation()->getOffset();
     }
 
-    ze_result_t result = ZE_RESULT_SUCCESS;
+    result = ZE_RESULT_SUCCESS;
 
     Event *event = Event::create<TagSizeT>(eventDescriptor, device, result);
-    UNRECOVERABLE_IF(event == nullptr);
-    event->setEventPool(eventPool);
+
+    if (event) {
+        event->setEventPool(eventPool);
+    }
+
     return event;
 }
 
@@ -303,9 +308,10 @@ ze_result_t EventImp<TagSizeT>::queryCounterBasedEventStatus() {
     if (!inOrderExecInfo->isCounterAlreadyDone(waitValue)) {
         bool signaled = true;
 
-        if (this->isCounterBased() && !this->inOrderTimestampNode.empty() && !this->device->getCompilerProductHelper().isHeaplessModeEnabled(this->device->getHwInfo())) {
+        if (this->optimizedCbEvent) {
             this->synchronizeTimestampCompletionWithTimeout();
             signaled = this->isTimestampPopulated();
+            this->optimizedCbEvent = !signaled;
         } else {
             const uint64_t *hostAddress = ptrOffset(inOrderExecInfo->getBaseHostAddress(), this->inOrderAllocationOffset);
             for (uint32_t i = 0; i < inOrderExecInfo->getNumHostPartitionsToWait(); i++) {
@@ -546,7 +552,7 @@ ze_result_t EventImp<TagSizeT>::hostEventSetValueTimestamps(Event::State eventSt
         }
     }
 
-    auto hostAddresss = getHostAddress();
+    auto hostAddress = getHostAddress();
 
     const std::array<TagSizeT, 4> copyData = {{timestampStart, timestampStart, timestampEnd, timestampEnd}};
     constexpr size_t copySize = copyData.size() * sizeof(TagSizeT);
@@ -555,7 +561,7 @@ ze_result_t EventImp<TagSizeT>::hostEventSetValueTimestamps(Event::State eventSt
     for (uint32_t i = 0; i < this->kernelCount; i++) {
         uint32_t packetsToSet = kernelEventCompletionData[i].getPacketsUsed();
         for (uint32_t j = 0; j < packetsToSet; j++, packets++) {
-            if (castToUint64(baseHostAddr) >= castToUint64(ptrOffset(hostAddresss, totalEventSize))) {
+            if (castToUint64(baseHostAddr) >= castToUint64(ptrOffset(hostAddress, totalEventSize))) {
                 break;
             }
 
@@ -644,12 +650,12 @@ ze_result_t EventImp<TagSizeT>::hostEventSetValue(Event::State eventState) {
 
     size_t totalSizeToCopy = 0;
 
-    auto hostAddresss = getHostAddress();
+    auto hostAddress = getHostAddress();
 
     for (uint32_t i = 0; i < kernelCount; i++) {
         uint32_t packetsToSet = kernelEventCompletionData[i].getPacketsUsed();
         for (uint32_t j = 0; j < packetsToSet; j++, packets++) {
-            if (castToUint64(packetHostAddr) >= castToUint64(ptrOffset(hostAddresss, totalEventSize))) {
+            if (castToUint64(packetHostAddr) >= castToUint64(ptrOffset(hostAddress, totalEventSize))) {
                 break;
             }
 
@@ -761,12 +767,13 @@ ze_result_t EventImp<TagSizeT>::hostSynchronize(uint64_t timeout) {
     const bool fenceWait = isKmdWaitModeEnabled() && isCounterBased() && csrs[0]->waitUserFenceSupported();
 
     do {
-        if (this->isCounterBased() && !this->inOrderTimestampNode.empty() && !this->device->getCompilerProductHelper().isHeaplessModeEnabled(hwInfo)) {
+        if (this->optimizedCbEvent) {
             synchronizeTimestampCompletionWithTimeout();
             if (this->isTimestampPopulated()) {
                 inOrderExecInfo->setLastWaitedCounterValue(getInOrderExecSignalValueWithSubmissionCounter());
                 handleSuccessfulHostSynchronization();
                 ret = ZE_RESULT_SUCCESS;
+                this->optimizedCbEvent = false;
             }
         } else {
             if (fenceWait) {
@@ -875,7 +882,7 @@ void EventImp<TagSizeT>::synchronizeTimestampCompletionWithTimeout() {
         calculateProfilingData();
 
         timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - startTime).count();
-    } while (!isTimestampPopulated() && (timeDiff < completionTimeoutMs));
+    } while (!isTimestampPopulated() && (timeDiff < getCompletionTimeout()));
     DEBUG_BREAK_IF(!isTimestampPopulated());
 }
 
@@ -978,6 +985,7 @@ void EventImp<TagSizeT>::getSynchronizedKernelTimestamps(ze_synchronized_timesta
     const auto maxKernelTsValue = maxNBitValue(hwInfo.capabilityTable.kernelTimestampValidBits);
 
     const auto numBitsForResolution = Math::log2(static_cast<uint64_t>(resolution)) + 1u;
+    UNRECOVERABLE_IF(numBitsForResolution > 64U);
     const auto clampedBitsCount = std::min(hwInfo.capabilityTable.kernelTimestampValidBits, 64u - numBitsForResolution);
     const auto maxClampedTsValue = maxNBitValue(clampedBitsCount);
 

@@ -46,6 +46,7 @@ struct PipelineSelectArgs;
 struct RootDeviceEnvironment;
 struct StateBaseAddressProperties;
 struct StateComputeModeProperties;
+struct StreamProperties;
 struct ImplicitArgs;
 struct EncodeKernelArgsExt;
 
@@ -117,9 +118,11 @@ struct EncodeDispatchKernelArgs {
     IndirectHeap *dynamicStateHeap = nullptr;
     const void *threadGroupDimensions = nullptr;
     void *outWalkerPtr = nullptr;
+    uint64_t outWalkerGpuVa = 0;
     void *cpuWalkerBuffer = nullptr;
     void *cpuPayloadBuffer = nullptr;
     void *outImplicitArgsPtr = nullptr;
+    uint64_t outImplicitArgsGpuVa = 0;
     std::list<void *> *additionalCommands = nullptr;
     EncodeKernelArgsExt *extendedArgs = nullptr;
     NEO::EncodePostSyncArgs postSyncArgs{};
@@ -388,7 +391,7 @@ struct EncodeMathMMIO {
     using MI_MATH_ALU_INST_INLINE = typename GfxFamily::MI_MATH_ALU_INST_INLINE;
     using MI_MATH = typename GfxFamily::MI_MATH;
 
-    static const size_t size = sizeof(MI_STORE_REGISTER_MEM);
+    static constexpr size_t size = sizeof(MI_STORE_REGISTER_MEM);
 
     static void encodeMulRegVal(CommandContainer &container, uint32_t offset, uint32_t val, uint64_t dstAddress, bool isBcs, EncodeStoreMMIOParams *outStoreMMIOParams);
 
@@ -462,9 +465,9 @@ struct EncodeSetMMIO {
     using MI_LOAD_REGISTER_MEM = typename GfxFamily::MI_LOAD_REGISTER_MEM;
     using MI_LOAD_REGISTER_REG = typename GfxFamily::MI_LOAD_REGISTER_REG;
 
-    static const size_t sizeIMM = sizeof(MI_LOAD_REGISTER_IMM);
-    static const size_t sizeMEM = sizeof(MI_LOAD_REGISTER_MEM);
-    static const size_t sizeREG = sizeof(MI_LOAD_REGISTER_REG);
+    static constexpr size_t sizeIMM = sizeof(MI_LOAD_REGISTER_IMM);
+    static constexpr size_t sizeMEM = sizeof(MI_LOAD_REGISTER_MEM);
+    static constexpr size_t sizeREG = sizeof(MI_LOAD_REGISTER_REG);
 
     static void encodeIMM(CommandContainer &container, uint32_t offset, uint32_t data, bool remap, bool isBcs);
     static void encodeMEM(CommandContainer &container, uint32_t offset, uint64_t address, bool isBcs);
@@ -548,6 +551,17 @@ struct EncodeSemaphore {
     using COMPARE_OPERATION = typename GfxFamily::MI_SEMAPHORE_WAIT::COMPARE_OPERATION;
 
     static constexpr uint32_t invalidHardwareTag = -2;
+
+    static void programMiSemaphoreWaitCommand(LinearStream *commandStream,
+                                              MI_SEMAPHORE_WAIT *cmd,
+                                              uint64_t compareAddress,
+                                              uint64_t compareData,
+                                              COMPARE_OPERATION compareMode,
+                                              bool registerPollMode,
+                                              bool waitMode,
+                                              bool useQwordData,
+                                              bool indirect,
+                                              bool switchOnUnsuccessful);
 
     static void programMiSemaphoreWait(MI_SEMAPHORE_WAIT *cmd,
                                        uint64_t compareAddress,
@@ -684,8 +698,12 @@ template <typename GfxFamily>
 struct EncodeMiArbCheck {
     using MI_ARB_CHECK = typename GfxFamily::MI_ARB_CHECK;
 
+    static void program(MI_ARB_CHECK *arbCheckCmd, std::optional<bool> preParserDisable);
+    static inline void program(void *cmdBuffer, std::optional<bool> preParserDisable) {
+        program(reinterpret_cast<MI_ARB_CHECK *>(cmdBuffer), preParserDisable);
+    }
     static void program(LinearStream &commandStream, std::optional<bool> preParserDisable);
-    static size_t getCommandSize();
+    static constexpr size_t getCommandSize() { return sizeof(MI_ARB_CHECK); }
 
   protected:
     static void adjust(MI_ARB_CHECK &miArbCheck, std::optional<bool> preParserDisable);
@@ -737,12 +755,57 @@ struct EncodeStoreMemory {
                                     bool storeQword,
                                     bool workloadPartitionOffset);
 
-    static size_t getStoreDataImmSize() {
+    static void programStoreDataImmCommand(LinearStream *commandStream,
+                                           MI_STORE_DATA_IMM *cmdBuffer,
+                                           uint64_t gpuAddress,
+                                           uint32_t dataDword0,
+                                           uint32_t dataDword1,
+                                           bool storeQword,
+                                           bool workloadPartitionOffset);
+
+    static constexpr size_t getStoreDataImmSize() {
         return sizeof(MI_STORE_DATA_IMM);
     }
 
   protected:
     static void encodeForceCompletionCheck(MI_STORE_DATA_IMM &storeDataImmCmd);
+};
+
+template <typename GfxFamily>
+struct EncodeDataMemory {
+    static void programDataMemory(LinearStream &commandStream,
+                                  uint64_t dstGpuAddress,
+                                  void *srcData,
+                                  size_t size);
+    static void programDataMemory(void *&commandBuffer,
+                                  uint64_t dstGpuAddress,
+                                  void *srcData,
+                                  size_t size);
+    static size_t getCommandSizeForEncode(size_t size);
+
+    static void programNoop(LinearStream &commandStream,
+                            uint64_t dstGpuAddress, size_t size);
+    static void programNoop(void *&commandBuffer,
+                            uint64_t dstGpuAddress, size_t size);
+    static void programBbStart(LinearStream &commandStream,
+                               uint64_t dstGpuAddress, uint64_t address, bool secondLevel, bool indirect, bool predicate);
+    static void programBbStart(void *&commandBuffer,
+                               uint64_t dstGpuAddress, uint64_t address, bool secondLevel, bool indirect, bool predicate);
+
+    static void programFrontEndState(LinearStream &commandStream,
+                                     uint64_t dstGpuAddress,
+                                     const RootDeviceEnvironment &rootDeviceEnvironment,
+                                     uint32_t scratchSize,
+                                     uint64_t scratchAddress,
+                                     uint32_t maxFrontEndThreads,
+                                     const StreamProperties &streamProperties);
+    static void programFrontEndState(void *&commandBuffer,
+                                     uint64_t dstGpuAddress,
+                                     const RootDeviceEnvironment &rootDeviceEnvironment,
+                                     uint32_t scratchSize,
+                                     uint64_t scratchAddress,
+                                     uint32_t maxFrontEndThreads,
+                                     const StreamProperties &streamProperties);
 };
 
 template <typename GfxFamily>

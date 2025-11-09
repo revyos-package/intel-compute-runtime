@@ -25,6 +25,7 @@ namespace NEO {
 class Device;
 struct KernelInfo;
 class MemoryManager;
+class SharedPoolAllocation;
 } // namespace NEO
 
 namespace L0 {
@@ -36,8 +37,8 @@ struct KernelImmutableData {
     KernelImmutableData(L0::Device *l0device = nullptr);
     virtual ~KernelImmutableData();
 
-    MOCKABLE_VIRTUAL ze_result_t initialize(NEO::KernelInfo *kernelInfo, Device *device, uint32_t computeUnitsUsedForSratch,
-                                            NEO::GraphicsAllocation *globalConstBuffer, NEO::GraphicsAllocation *globalVarBuffer,
+    MOCKABLE_VIRTUAL ze_result_t initialize(NEO::KernelInfo *kernelInfo, Device *device, uint32_t computeUnitsUsedForScratch,
+                                            NEO::SharedPoolAllocation *globalConstBuffer, NEO::SharedPoolAllocation *globalVarBuffer,
                                             bool internalKernel);
 
     const std::vector<NEO::GraphicsAllocation *> &getResidencyContainer() const {
@@ -80,8 +81,8 @@ struct KernelImmutableData {
         return isaCopiedToAllocation;
     }
 
-    MOCKABLE_VIRTUAL void createRelocatedDebugData(NEO::GraphicsAllocation *globalConstBuffer,
-                                                   NEO::GraphicsAllocation *globalVarBuffer);
+    MOCKABLE_VIRTUAL void createRelocatedDebugData(NEO::SharedPoolAllocation *globalConstBuffer,
+                                                   NEO::SharedPoolAllocation *globalVarBuffer);
 
   protected:
     Device *device = nullptr;
@@ -127,7 +128,7 @@ struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI, NEO::N
     virtual ze_result_t setArgumentValue(uint32_t argIndex, size_t argSize, const void *pArgValue) = 0;
     virtual void setGroupCount(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
 
-    virtual ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *peerAllocData) = 0;
+    virtual ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *allocData) = 0;
     virtual ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal, bool isPacked) = 0;
     virtual ze_result_t setGroupSize(uint32_t groupSizeX, uint32_t groupSizeY,
                                      uint32_t groupSizeZ) = 0;
@@ -172,31 +173,13 @@ struct Kernel : _ze_kernel_handle_t, virtual NEO::DispatchKernelEncoderI, NEO::N
 
     virtual ze_result_t setSchedulingHintExp(ze_scheduling_hint_exp_desc_t *pHint) = 0;
 
+    virtual uint32_t getMaxWgCountPerTile(NEO::EngineGroupType engineGroupType) const = 0;
+
     static Kernel *fromHandle(ze_kernel_handle_t handle) { return static_cast<Kernel *>(handle); }
 
     inline ze_kernel_handle_t toHandle() { return this; }
 
-    uint32_t getMaxWgCountPerTile(NEO::EngineGroupType engineGroupType) const {
-        auto value = maxWgCountPerTileCcs;
-        if (engineGroupType == NEO::EngineGroupType::renderCompute) {
-            value = maxWgCountPerTileRcs;
-        } else if (engineGroupType == NEO::EngineGroupType::cooperativeCompute) {
-            value = maxWgCountPerTileCooperative;
-        }
-        return value;
-    }
-
     virtual uint32_t getIndirectSize() const = 0;
-
-  protected:
-    uint32_t maxWgCountPerTileCcs = 0;
-    uint32_t maxWgCountPerTileRcs = 0;
-    uint32_t maxWgCountPerTileCooperative = 0;
-    bool heaplessEnabled = false;
-    bool implicitScalingEnabled = false;
-    bool localDispatchSupport = false;
-    bool rcsAvailable = false;
-    bool cooperativeSupport = false;
 };
 
 using KernelAllocatorFn = Kernel *(*)(Module *module);

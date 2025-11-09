@@ -64,7 +64,7 @@ Context::~Context() {
         smallBufferPoolAllocator.releasePools();
     }
 
-    cleanupUsmAllocationPools();
+    usmDeviceMemAllocPool.cleanup();
 
     delete[] properties;
 
@@ -73,11 +73,11 @@ Context::~Context() {
             delete specialQueues[rootDeviceIndex];
         }
     }
-    if (svmAllocsManager) {
-        this->stagingBufferManager.reset();
-        svmAllocsManager->cleanupUSMAllocCaches();
-        delete svmAllocsManager;
+
+    if (platformManagersInitialized) {
+        this->getDevice(0)->getPlatform()->decActiveContextCount();
     }
+
     if (driverDiagnostics) {
         delete driverDiagnostics;
     }
@@ -298,10 +298,7 @@ bool Context::createImpl(const cl_context_properties *properties,
         }
 
         setupContextType();
-        this->svmAllocsManager = new SVMAllocsManager(this->memoryManager);
-        this->svmAllocsManager->initUsmAllocationsCaches(device->getDevice());
-        auto requiresWritableStaging = device->getDefaultEngine().commandStreamReceiver->getType() != CommandStreamReceiverType::hardware;
-        this->stagingBufferManager = std::make_unique<StagingBufferManager>(svmAllocsManager, rootDeviceIndices, deviceBitfields, requiresWritableStaging);
+        initializeManagers();
 
         smallBufferPoolAllocator.setParams(SmallBuffersParams::getPreferredBufferPoolParams(device->getProductHelper()));
     }
@@ -507,30 +504,7 @@ bool Context::isSingleDeviceContext() {
     return getNumDevices() == 1 && devices[0]->getNumGenericSubDevices() == 0;
 }
 
-Context::UsmPoolParams Context::getUsmHostPoolParams() const {
-    return {
-        .poolSize = 2 * MemoryConstants::megaByte,
-        .minServicedSize = 0u,
-        .maxServicedSize = 1 * MemoryConstants::megaByte};
-}
-
-Context::UsmPoolParams Context::getUsmDevicePoolParams() const {
-    const auto &productHelper = devices[0]->getDevice().getProductHelper();
-
-    if (productHelper.is2MBLocalMemAlignmentEnabled()) {
-        return {
-            .poolSize = 16 * MemoryConstants::megaByte,
-            .minServicedSize = 0u,
-            .maxServicedSize = 2 * MemoryConstants::megaByte};
-    }
-
-    return {
-        .poolSize = 2 * MemoryConstants::megaByte,
-        .minServicedSize = 0u,
-        .maxServicedSize = 1 * MemoryConstants::megaByte};
-}
-
-void Context::initializeUsmAllocationPools() {
+void Context::initializeDeviceUsmAllocationPool() {
     if (this->usmPoolInitialized) {
         return;
     }
@@ -549,7 +523,7 @@ void Context::initializeUsmAllocationPools() {
                    productHelper.isDeviceUsmPoolAllocatorSupported() &&
                    DeviceFactory::isHwModeSelected();
 
-    auto usmDevicePoolParams = getUsmDevicePoolParams();
+    auto usmDevicePoolParams = UsmPoolParams::getUsmPoolParams(getDevices()[0]->getGfxCoreHelper());
     if (debugManager.flags.EnableDeviceUsmAllocationPool.get() != -1) {
         enabled = debugManager.flags.EnableDeviceUsmAllocationPool.get() > 0;
         usmDevicePoolParams.poolSize = debugManager.flags.EnableDeviceUsmAllocationPool.get() * MemoryConstants::megaByte;
@@ -563,29 +537,7 @@ void Context::initializeUsmAllocationPools() {
         memoryProperties.device = &neoDevice;
         usmDeviceMemAllocPool.initialize(svmMemoryManager, memoryProperties, usmDevicePoolParams.poolSize, usmDevicePoolParams.minServicedSize, usmDevicePoolParams.maxServicedSize);
     }
-
-    enabled = ApiSpecificConfig::isHostUsmPoolingEnabled() &&
-              productHelper.isHostUsmPoolAllocatorSupported() &&
-              DeviceFactory::isHwModeSelected();
-    auto usmHostPoolParams = getUsmHostPoolParams();
-    if (debugManager.flags.EnableHostUsmAllocationPool.get() != -1) {
-        enabled = debugManager.flags.EnableHostUsmAllocationPool.get() > 0;
-        usmHostPoolParams.poolSize = debugManager.flags.EnableHostUsmAllocationPool.get() * MemoryConstants::megaByte;
-    }
-    if (enabled) {
-        auto subDeviceBitfields = getDeviceBitfields();
-        auto &neoDevice = devices[0]->getDevice();
-        subDeviceBitfields[neoDevice.getRootDeviceIndex()] = neoDevice.getDeviceBitfield();
-        SVMAllocsManager::UnifiedMemoryProperties memoryProperties(InternalMemoryType::hostUnifiedMemory, MemoryConstants::pageSize2M,
-                                                                   getRootDeviceIndices(), subDeviceBitfields);
-        usmHostMemAllocPool.initialize(svmMemoryManager, memoryProperties, usmHostPoolParams.poolSize, usmHostPoolParams.minServicedSize, usmHostPoolParams.maxServicedSize);
-    }
     this->usmPoolInitialized = true;
-}
-
-void Context::cleanupUsmAllocationPools() {
-    usmDeviceMemAllocPool.cleanup();
-    usmHostMemAllocPool.cleanup();
 }
 
 bool Context::BufferPoolAllocator::isAggregatedSmallBuffersEnabled(Context *context) const {
@@ -711,6 +663,14 @@ Buffer *Context::BufferPoolAllocator::allocateFromPools(const MemoryProperties &
     return nullptr;
 }
 
+void Context::initializeManagers() {
+    auto platform = this->getDevice(0)->getPlatform();
+    platform->incActiveContextCount();
+    platformManagersInitialized = true;
+    this->svmAllocsManager = platform->getSVMAllocsManager();
+    this->stagingBufferManager = platform->getStagingBufferManager();
+}
+
 TagAllocatorBase *Context::getMultiRootDeviceTimestampPacketAllocator() {
     return multiRootDeviceTimestampPacketAllocator.get();
 }
@@ -720,18 +680,6 @@ void Context::setMultiRootDeviceTimestampPacketAllocator(std::unique_ptr<TagAllo
 
 std::unique_lock<std::mutex> Context::obtainOwnershipForMultiRootDeviceAllocator() {
     return std::unique_lock<std::mutex>(multiRootDeviceAllocatorMtx);
-}
-
-void Context::setContextAsNonZebin() {
-    this->nonZebinContext = true;
-}
-
-bool Context::checkIfContextIsNonZebin() const {
-    return this->nonZebinContext;
-}
-
-StagingBufferManager *Context::getStagingBufferManager() const {
-    return this->stagingBufferManager.get();
 }
 
 } // namespace NEO

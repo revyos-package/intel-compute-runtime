@@ -30,11 +30,11 @@ cl_int CommandQueueHw<GfxFamily>::enqueueFillBuffer(
     auto memoryManager = getDevice().getMemoryManager();
     DEBUG_BREAK_IF(nullptr == memoryManager);
 
-    auto commandStreamReceieverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
+    auto commandStreamReceiverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
     auto storageWithAllocations = getGpgpuCommandStreamReceiver().getInternalAllocationStorage();
     auto allocationType = AllocationType::fillPattern;
     auto patternAllocation = storageWithAllocations->obtainReusableAllocation(patternSize, allocationType).release();
-    commandStreamReceieverOwnership.unlock();
+    commandStreamReceiverOwnership.unlock();
 
     if (!patternAllocation) {
         patternAllocation = memoryManager->allocateGraphicsMemoryWithProperties({getDevice().getRootDeviceIndex(), alignUp(patternSize, MemoryConstants::cacheLineSize), AllocationType::fillPattern, getDevice().getDeviceBitfield()});
@@ -52,9 +52,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueFillBuffer(
         memcpy_s(patternAllocation->getUnderlyingBuffer(), patternSize, pattern, patternSize);
     }
 
-    const bool useStateless = forceStateless(buffer->getSize());
+    const bool isStateless = forceStateless(buffer->getSize());
     const bool useHeapless = this->getHeaplessModeEnabled();
-    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::fillBuffer>(useStateless, useHeapless);
+    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::fillBuffer>(isStateless, useHeapless);
 
     auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtInType,
                                                                             this->getClDevice());

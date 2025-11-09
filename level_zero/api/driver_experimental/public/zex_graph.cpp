@@ -10,6 +10,7 @@
 #include "level_zero/core/source/cmdlist/cmdlist.h"
 #include "level_zero/core/source/context/context.h"
 #include "level_zero/experimental/source/graph/graph.h"
+#include "level_zero/experimental/source/graph/graph_export.h"
 
 namespace L0 {
 
@@ -133,7 +134,10 @@ ze_result_t ZE_APICALL zeCommandListInstantiateGraphExp(ze_graph_handle_t hGraph
 
     auto execGraph = std::make_unique<ExecutableGraph>();
     GraphInstatiateSettings settings{pNext};
-    execGraph->instantiateFrom(*virtualGraph, settings);
+    auto ret = execGraph->instantiateFrom(*virtualGraph, settings);
+    if (ret != ZE_RESULT_SUCCESS) {
+        return ret;
+    }
     *phExecutableGraph = execGraph.release();
 
     return ZE_RESULT_SUCCESS;
@@ -196,7 +200,21 @@ ze_result_t ZE_APICALL zeGraphIsEmptyExp(ze_graph_handle_t hGraph) {
 }
 
 ze_result_t ZE_APICALL zeGraphDumpContentsExp(ze_graph_handle_t hGraph, const char *filePath, void *pNext) {
-    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    if (nullptr != pNext) {
+        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+
+    auto graph = L0::Graph::fromHandle(hGraph);
+    if (nullptr == graph) {
+        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (nullptr == filePath) {
+        return ZE_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+
+    L0::GraphDotExporter exporter{};
+    return exporter.exportToFile(*graph, filePath);
 }
 
 } // namespace L0

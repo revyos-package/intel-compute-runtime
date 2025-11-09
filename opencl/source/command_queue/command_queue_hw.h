@@ -365,8 +365,10 @@ class CommandQueueHw : public CommandQueue {
                                   const cl_event *eventWaitList,
                                   cl_event *event) override;
 
-    cl_int finish() override;
+    cl_int finish(bool resolvePendingL3Flushes) override;
     cl_int flush() override;
+
+    void programPendingL3Flushes(CommandStreamReceiver &csr, bool &waitForTaskCountRequired, bool resolvePendingL3Flushes) override;
 
     template <uint32_t enqueueType>
     cl_int enqueueHandler(Surface **surfacesForResidency,
@@ -442,19 +444,19 @@ class CommandQueueHw : public CommandQueue {
                         TagNodeBase *multiRootDeviceSyncNode,
                         CsrDependencyContainer *csrDependencies);
 
-    CompletionStamp enqueueCommandWithoutKernel(Surface **surfaces,
-                                                size_t surfaceCount,
-                                                LinearStream *commandStream,
-                                                size_t commandStreamStart,
-                                                bool &blocking,
-                                                const EnqueueProperties &enqueueProperties,
-                                                TimestampPacketDependencies &timestampPacketDependencies,
-                                                EventsRequest &eventsRequest,
-                                                EventBuilder &eventBuilder,
-                                                TaskCountType taskLevel,
-                                                CsrDependencies &csrDeps,
-                                                CommandStreamReceiver *bcsCsr,
-                                                bool hasRelaxedOrderingDependencies);
+    MOCKABLE_VIRTUAL CompletionStamp enqueueCommandWithoutKernel(Surface **surfaces,
+                                                                 size_t surfaceCount,
+                                                                 LinearStream *commandStream,
+                                                                 size_t commandStreamStart,
+                                                                 bool &blocking,
+                                                                 const EnqueueProperties &enqueueProperties,
+                                                                 TimestampPacketDependencies &timestampPacketDependencies,
+                                                                 EventsRequest &eventsRequest,
+                                                                 EventBuilder &eventBuilder,
+                                                                 TaskCountType taskLevel,
+                                                                 CsrDependencies &csrDeps,
+                                                                 CommandStreamReceiver *bcsCsr,
+                                                                 bool hasRelaxedOrderingDependencies);
     void processDispatchForCacheFlush(Surface **surfaces,
                                       size_t numSurfaces,
                                       LinearStream *commandStream,

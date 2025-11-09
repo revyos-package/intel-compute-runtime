@@ -32,8 +32,6 @@ using MultiRootDeviceCommandStreamReceiverBufferTests = MultiRootDeviceFixture;
 
 HWTEST_F(MultiRootDeviceCommandStreamReceiverBufferTests, givenMultipleEventInMultiRootDeviceEnvironmentWhenTheyArePassedToEnqueueWithSubmissionThenCsIsWaitingForEventsFromPreviousDevices) {
     USE_REAL_FILE_SYSTEM();
-    REQUIRE_SVM_OR_SKIP(device1);
-    REQUIRE_SVM_OR_SKIP(device2);
 
     using MI_SEMAPHORE_WAIT = typename FamilyType::MI_SEMAPHORE_WAIT;
     cl_int retVal = 0;
@@ -425,8 +423,8 @@ HWTEST_F(CrossDeviceDependenciesTests, givenWaitListWithEventBlockedByUserEventW
         EXPECT_EQ(0u, semaphores.size());
     }
     userEvent1.setStatus(CL_COMPLETE);
-    pCmdQ1->finish();
-    pCmdQ2->finish();
+    pCmdQ1->finish(false);
+    pCmdQ2->finish(false);
     {
         HardwareParse csHwParser;
         csHwParser.parseCommands<FamilyType>(pCmdQ1->getGpgpuCommandStreamReceiver().getCS(0));
@@ -512,7 +510,7 @@ HWTEST_F(CrossDeviceDependenciesTests, givenWaitListWithEventBlockedByUserEventW
     userEvent1.setStatus(CL_COMPLETE);
     event1->release();
     event2->release();
-    pCmdQ1->finish();
+    pCmdQ1->finish(false);
     {
         HardwareParse csHwParser;
         csHwParser.parseCommands<FamilyType>(pCmdQ1->getGpgpuCommandStreamReceiver().getCS(0));
@@ -612,8 +610,8 @@ HWTEST_F(CrossDeviceDependenciesTests, givenWaitListWithEventBlockedByUserEventW
         EXPECT_EQ(0u, semaphores.size());
     }
     userEvent1.setStatus(CL_COMPLETE);
-    pCmdQ1->finish();
-    pCmdQ2->finish();
+    pCmdQ1->finish(false);
+    pCmdQ2->finish(false);
 
     {
         HardwareParse csHwParser;
@@ -692,8 +690,8 @@ HWTEST_F(MultiRootDeviceCommandStreamReceiverTests, givenUnflushedQueueAndEventI
     EXPECT_TRUE(pCmdQ1->getGpgpuCommandStreamReceiver().isLatestTaskCountFlushed());
     castToObject<Event>(inputEvent)->release();
     castToObject<Event>(outputEvent)->release();
-    pCmdQ1->finish();
-    pCmdQ2->finish();
+    pCmdQ1->finish(false);
+    pCmdQ2->finish(false);
 }
 
 HWTEST_F(CommandStreamReceiverFlushTaskTests, givenStaticPartitioningEnabledWhenFlushingTaskThenWorkPartitionAllocationIsMadeResident) {
@@ -989,7 +987,7 @@ HWTEST_F(BcsCrossDeviceMigrationTests, givenBufferWithMultiStorageWhenEnqueueRea
     retVal = cmdQueue->enqueueReadBuffer(buffer.get(), CL_FALSE, 0, size, hostPtr, nullptr, 0, nullptr, nullptr);
     EXPECT_EQ(CL_SUCCESS, retVal);
 
-    cmdQueue->finish();
+    cmdQueue->finish(false);
 
     EXPECT_TRUE(cmdQueue->migrateMultiGraphicsAllocationsIfRequiredCalled);
 

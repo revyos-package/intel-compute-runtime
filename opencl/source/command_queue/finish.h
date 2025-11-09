@@ -14,7 +14,7 @@
 namespace NEO {
 
 template <typename GfxFamily>
-cl_int CommandQueueHw<GfxFamily>::finish() {
+cl_int CommandQueueHw<GfxFamily>::finish(bool resolvePendingL3Flushes) {
 
     auto &csr = getGpgpuCommandStreamReceiver();
 
@@ -24,20 +24,7 @@ cl_int CommandQueueHw<GfxFamily>::finish() {
     }
 
     bool waitForTaskCountRequired = false;
-
-    if (!l3FlushedAfterCpuRead && l3FlushAfterPostSyncEnabled) {
-        csr.flushTagUpdate();
-
-        CompletionStamp completionStamp = {
-            csr.peekTaskCount(),
-            csr.peekTaskLevel(),
-            csr.obtainCurrentFlushStamp()};
-
-        this->updateFromCompletionStamp(completionStamp, nullptr);
-
-        this->l3FlushedAfterCpuRead = true;
-        waitForTaskCountRequired = true;
-    }
+    programPendingL3Flushes(csr, waitForTaskCountRequired, resolvePendingL3Flushes);
 
     // Stall until HW reaches taskCount on all its engines
     const auto waitStatus = waitForAllEngines(true, nullptr, waitForTaskCountRequired);
@@ -47,4 +34,9 @@ cl_int CommandQueueHw<GfxFamily>::finish() {
 
     return CL_SUCCESS;
 }
+
+template <typename GfxFamily>
+void CommandQueueHw<GfxFamily>::programPendingL3Flushes(CommandStreamReceiver &csr, bool &waitForTaskCountRequired, bool resolvePendingL3Flushes) {
+}
+
 } // namespace NEO

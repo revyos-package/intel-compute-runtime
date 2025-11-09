@@ -151,10 +151,9 @@ ze_result_t LinuxFrequencyImp::osFrequencyGetState(zes_freq_state_t *pState) {
         pState->actual = -1;
     }
 
-    pState->pNext = nullptr;
     getCurrentVoltage(pState->currentVoltage);
 
-    pState->throttleReasons = pSysmanProductHelper->getThrottleReasons(pLinuxSysmanImp, subdeviceId);
+    pState->throttleReasons = pSysmanProductHelper->getThrottleReasons(pSysmanKmdInterface, pSysfsAccess, subdeviceId, const_cast<void *>(pState->pNext));
 
     return ZE_RESULT_SUCCESS;
 }
@@ -426,7 +425,7 @@ std::vector<zes_freq_domain_t> OsFrequency::getNumberOfFreqDomainsSupported(OsSy
         auto pSysfsAccess = &pLinuxSysmanImp->getSysfsAccess();
         auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
         auto baseDir = pSysmanKmdInterface->getFreqMediaDomainBasePath();
-        if (pSysfsAccess->directoryExists(baseDir)) {
+        if (pSysfsAccess->directoryExists(std::move(baseDir))) {
             freqDomains.push_back(ZES_FREQ_DOMAIN_MEDIA);
         }
     }

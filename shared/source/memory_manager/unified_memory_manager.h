@@ -65,6 +65,7 @@ struct SvmAllocationData : NEO::NonCopyableAndNonMovableClass {
     MemoryProperties allocationFlagsProperty;
     Device *device = nullptr;
     bool isImportedAllocation = false;
+    void *memFreeCallbackDescriptor = nullptr;
     void setAllocId(uint32_t id) {
         allocId = id;
     }
@@ -96,6 +97,9 @@ struct SvmMapOperation {
 class SVMAllocsManager {
   public:
     using SortedVectorBasedAllocationTracker = BaseSortedPointerWithValueVector<SvmAllocationData>;
+    using ContainerMutexType = std::shared_mutex;
+    using ContainerReadLockType = std::shared_lock<ContainerMutexType>;
+    using ContainerReadWriteLockType = std::unique_lock<ContainerMutexType>;
 
     class MapBasedAllocationTracker {
         friend class SVMAllocsManager;
@@ -247,7 +251,7 @@ class SVMAllocsManager {
     template <typename T,
               std::enable_if_t<std::is_same_v<T, void> || std::is_same_v<T, const void>, int> = 0>
     SvmAllocationData *getSVMAlloc(T *ptr) {
-        std::shared_lock<std::shared_mutex> lock(mtx);
+        ContainerReadLockType lock(mtx);
         return svmAllocs.get(ptr);
     }
 
@@ -284,6 +288,7 @@ class SVMAllocsManager {
     MOCKABLE_VIRTUAL void prefetchMemory(Device &device, CommandStreamReceiver &commandStreamReceiver, const void *ptr, const size_t size);
     void prefetchSVMAllocs(Device &device, CommandStreamReceiver &commandStreamReceiver);
     void sharedSystemAtomicAccess(Device &device, AtomicAccessMode mode, const void *ptr, const size_t size);
+    MOCKABLE_VIRTUAL AtomicAccessMode getSharedSystemAtomicAccess(Device &device, const void *ptr, const size_t size);
     std::unique_lock<std::mutex> obtainOwnership();
 
     std::map<CommandStreamReceiver *, InternalAllocationsTracker> indirectAllocationsResidency;
@@ -315,7 +320,7 @@ class SVMAllocsManager {
     MapOperationsTracker svmMapOperations;
     MapBasedAllocationTracker svmDeferFreeAllocs;
     MemoryManager *memoryManager;
-    std::shared_mutex mtx;
+    ContainerMutexType mtx;
     std::mutex mtxForIndirectAccess;
     std::unique_ptr<SvmAllocationCache> usmDeviceAllocationsCache;
     std::unique_ptr<SvmAllocationCache> usmHostAllocationsCache;

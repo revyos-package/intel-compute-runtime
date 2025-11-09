@@ -57,10 +57,12 @@ class IoctlHelperXe : public IoctlHelper {
                       bool userInterrupt, uint32_t externalInterruptId, GraphicsAllocation *allocForInterruptWait) override;
     uint32_t getAtomicAdvise(bool isNonAtomic) override;
     uint32_t getAtomicAccess(AtomicAccessMode mode) override;
+    uint64_t getPreferredLocationArgs(MemAdvise memAdviseOp) override;
     uint32_t getPreferredLocationAdvise() override;
     std::optional<MemoryClassInstance> getPreferredLocationRegion(PreferredLocation memoryLocation, uint32_t memoryInstance) override;
     bool setVmBoAdvise(int32_t handle, uint32_t attribute, void *region) override;
     bool setVmSharedSystemMemAdvise(uint64_t handle, const size_t size, const uint32_t attribute, const uint64_t param, const std::vector<uint32_t> &vmIds) override;
+    AtomicAccessMode getVmSharedSystemAtomicAttribute(uint64_t handle, const size_t size, const uint32_t vmId) override;
     bool setVmBoAdviseForChunking(int32_t handle, uint64_t start, uint64_t length, uint32_t attribute, void *region) override;
     bool setVmPrefetch(uint64_t start, uint64_t length, uint32_t region, uint32_t vmId) override;
     bool setGemTiling(void *setTiling) override;
@@ -143,6 +145,7 @@ class IoctlHelperXe : public IoctlHelper {
     bool isSmallBarConfigAllowed() const override { return false; }
     void *pciBarrierMmap() override;
     bool retrieveMmapOffsetForBufferObject(BufferObject &bo, uint64_t flags, uint64_t &offset) override;
+    bool is2MBSizeAlignmentRequired(AllocationType allocationType) const override;
 
   protected:
     static constexpr uint32_t maxContextSetProperties = 4;
@@ -176,9 +179,9 @@ class IoctlHelperXe : public IoctlHelper {
     };
 
     uint16_t getDefaultEngineClass(const aub_stream::EngineType &defaultEngineType);
-    void setOptionalContextProperties(Drm &drm, void *extProperties, uint32_t &extIndexInOut);
+    void setOptionalContextProperties(const OsContextLinux &osContext, Drm &drm, void *extProperties, uint32_t &extIndexInOut);
     virtual void setContextProperties(const OsContextLinux &osContext, uint32_t deviceIndex, void *extProperties, uint32_t &extIndexInOut);
-    virtual void applyContextFlags(void *execQueueCreate, bool allocateInterrupt){};
+    virtual void applyContextFlags(void *execQueueCreate, bool allocateInterrupt);
 
     struct GtIpVersion {
         uint16_t major;
@@ -187,6 +190,7 @@ class IoctlHelperXe : public IoctlHelper {
     };
     bool queryHwIpVersion(GtIpVersion &gtIpVersion);
 
+    bool isLowLatencyHintAvailable = false;
     int maxExecQueuePriority = 0;
     std::mutex xeLock;
     std::mutex gemCloseLock;

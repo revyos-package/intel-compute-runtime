@@ -38,7 +38,6 @@
 #include "test_traits_common.h"
 
 using namespace NEO;
-#include "shared/test/common/test_macros/header/heapful_test_definitions.h"
 #include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 typedef EnqueueHandlerTestT<MockCsrBase> EnqueueHandlerTestWithMockCsrBase;
@@ -185,13 +184,11 @@ HWTEST_TEMPLATED_F(EnqueueHandlerWithAubSubCaptureTestsWithMockAubCsr, givenEnqu
     EXPECT_TRUE(cmdQ.waitUntilCompleteCalled);
 }
 
-HEAPFUL_HWTEST_F(EnqueueHandlerWithAubSubCaptureTests, givenEnqueueHandlerWithAubSubCaptureWhenSubCaptureGetsActivatedThenTimestampPacketDependenciesAreClearedAndNextRemainUncleared) {
+HWTEST2_F(EnqueueHandlerWithAubSubCaptureTests, givenEnqueueHandlerWithAubSubCaptureWhenSubCaptureGetsActivatedThenTimestampPacketDependenciesAreClearedAndNextRemainUncleared, IsHeapfulRequired) {
     DebugManagerStateRestore stateRestore;
     debugManager.flags.AUBDumpSubCaptureMode.set(1);
     debugManager.flags.EnableTimestampPacket.set(true);
     debugManager.flags.CsrDispatchMode.set(static_cast<int32_t>(DispatchMode::batchedDispatch));
-
-    UnitTestSetter::disableHeaplessStateInit(stateRestore);
 
     auto aubCsr = new MockAubCsr<FamilyType>("", true, *pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield());
     pDevice->resetCommandStreamReceiver(aubCsr);
@@ -222,12 +219,11 @@ HEAPFUL_HWTEST_F(EnqueueHandlerWithAubSubCaptureTests, givenEnqueueHandlerWithAu
     EXPECT_FALSE(cmdQ.timestampPacketDependenciesCleared);
 }
 
-HEAPFUL_HWTEST_F(EnqueueHandlerWithAubSubCaptureTests, givenInputEventsWhenDispatchingEnqueueWithSubCaptureThenClearDependencies) {
+HWTEST2_F(EnqueueHandlerWithAubSubCaptureTests, givenInputEventsWhenDispatchingEnqueueWithSubCaptureThenClearDependencies, IsHeapfulRequired) {
     DebugManagerStateRestore stateRestore;
     debugManager.flags.AUBDumpSubCaptureMode.set(1);
     debugManager.flags.EnableTimestampPacket.set(true);
     debugManager.flags.CsrDispatchMode.set(static_cast<int32_t>(DispatchMode::batchedDispatch));
-    UnitTestSetter::disableHeaplessStateInit(stateRestore);
 
     auto defaultEngine = defaultHwInfo->capabilityTable.defaultEngineType;
 
@@ -552,7 +548,7 @@ HWTEST_F(EnqueueHandlerTest, givenExternallySynchronizedParentEventWhenRequestin
 
     Event *ouputEvent = castToObject<Event>(outEv);
     ASSERT_NE(nullptr, ouputEvent);
-    EXPECT_EQ(0U, ouputEvent->peekTaskCount());
+    EXPECT_EQ(mockCmdQ->taskCount, ouputEvent->peekTaskCount());
 
     ouputEvent->release();
     mockCmdQ->release();
@@ -605,7 +601,6 @@ HWTEST_F(EnqueueHandlerTest, givenEnqueueHandlerWhenSubCaptureIsOnThenActivateSu
 }
 
 HWTEST_F(EnqueueHandlerTest, givenEnqueueHandlerWhenClSetKernelExecInfoAlreadySetKernelThreadArbitrationPolicyThenRequiredThreadArbitrationPolicyIsSetProperly) {
-    REQUIRE_SVM_OR_SKIP(pClDevice);
     auto &clGfxCoreHelper = pClDevice->getRootDeviceEnvironment().getHelper<ClGfxCoreHelper>();
     if (!clGfxCoreHelper.isSupportedKernelThreadArbitrationPolicy()) {
         GTEST_SKIP();
@@ -753,7 +748,7 @@ HWTEST_F(EnqueueHandlerTest, givenEnqueueHandlerWhenImageUsedInKernelThenGetTota
     EXPECT_EQ(defaultBcsCacheFlushSize + cacheFlushCmdSize, sizeForBcsCacheFlush);
 }
 
-HEAPFUL_HWTEST_F(EnqueueHandlerTest, givenKernelUsingSyncBufferWhenEnqueuingKernelThenSshIsCorrectlyProgrammed) {
+HWTEST2_F(EnqueueHandlerTest, givenKernelUsingSyncBufferWhenEnqueuingKernelThenSshIsCorrectlyProgrammed, IsHeapfulRequired) {
     using BINDING_TABLE_STATE = typename FamilyType::BINDING_TABLE_STATE;
     using RENDER_SURFACE_STATE = typename FamilyType::RENDER_SURFACE_STATE;
 

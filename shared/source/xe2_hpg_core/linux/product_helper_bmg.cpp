@@ -33,5 +33,15 @@ bool ProductHelperHw<gfxProduct>::isDisableScratchPagesSupported() const {
     return true;
 }
 
+template <>
+bool ProductHelperHw<gfxProduct>::isTlbFlushRequired() const {
+    return false;
+}
+
+template <>
+uint64_t ProductHelperHw<gfxProduct>::getSharedSystemPatIndex() const {
+    return 0;
+}
+
 template class ProductHelperHw<gfxProduct>;
 } // namespace NEO

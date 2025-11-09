@@ -243,8 +243,9 @@ HWTEST_F(EnqueueCopyBufferTest, WhenCopyingBufferThenIndirectDataGetsAdded) {
     auto heaplessEnabled = pDevice->getCompilerProductHelper().isHeaplessModeEnabled(*defaultHwInfo);
     auto inlineDataSize = UnitTestHelper<FamilyType>::getInlineDataSize(heaplessEnabled);
     bool crossThreadDataFitsInInlineData = (crossThreadDatSize <= inlineDataSize);
+    bool isUsingImplicitArgs = kernel->getImplicitArgs() != nullptr;
 
-    if (crossThreadDataFitsInInlineData) {
+    if (crossThreadDataFitsInInlineData && !isUsingImplicitArgs) {
         EXPECT_EQ(iohBefore, pIOH->getUsed());
     } else {
         EXPECT_NE(iohBefore, pIOH->getUsed());
@@ -280,7 +281,7 @@ HWTEST_F(EnqueueCopyBufferTest, WhenCopyingBufferStatelessThenStatelessKernelIsU
     EXPECT_FALSE(kernel->getKernelInfo().getArgDescriptorAt(0).as<ArgDescPointer>().isPureStateful());
 }
 
-HWTEST2_F(EnqueueCopyBufferTest, WhenCopyingBufferStatelessHeaplessThenCorrectKernelIsUsed, HeaplessSupportedMatcher) {
+HWTEST2_F(EnqueueCopyBufferTest, WhenCopyingBufferStatelessHeaplessThenCorrectKernelIsUsed, HeaplessSupport) {
 
     if (is32bit) {
         GTEST_SKIP();

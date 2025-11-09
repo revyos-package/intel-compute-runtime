@@ -163,6 +163,26 @@ HWTEST_F(CommandQueueCreate, givenPrintfKernelAndDetectedHangWhenSynchronizingTh
     commandQueue->destroy();
 }
 
+HWTEST_F(CommandQueueCreate, whenSynchronizedThenPollForAubCompletion) {
+    const ze_command_queue_desc_t desc{};
+    ze_result_t returnValue;
+    auto commandQueue = whiteboxCast(CommandQueue::create(productFamily,
+                                                          device,
+                                                          neoDevice->getDefaultEngine().commandStreamReceiver,
+                                                          &desc,
+                                                          false,
+                                                          false,
+                                                          false,
+                                                          returnValue));
+
+    auto &csr = neoDevice->getUltCommandStreamReceiver<FamilyType>();
+    auto numPolls = csr.pollForAubCompletionCalled;
+    EXPECT_EQ(ZE_RESULT_SUCCESS, commandQueue->synchronize(std::numeric_limits<uint64_t>::max()));
+    EXPECT_EQ(numPolls + 1, csr.pollForAubCompletionCalled);
+
+    commandQueue->destroy();
+}
+
 HWTEST_F(CommandQueueCreate, givenGpuHangOnSecondReserveWhenReservingLinearStreamThenReturnGpuHang) {
     const ze_command_queue_desc_t desc{};
     ze_result_t returnValue;
@@ -1796,7 +1816,7 @@ HWTEST2_F(ExecuteCommandListTests, givenTwoCommandQueuesHavingTwoB2BCommandLists
     commandQueue1->destroy();
 }
 
-HWTEST2_F(ExecuteCommandListTests, givenTwoCommandQueuesHavingTwoB2BCommandListsAndWithPrivateScratchUniquePerCmdListThenCFEIsProgrammedOncePerSubmission, IsHeapfulSupportedAndAtLeastXeCore) {
+HWTEST2_F(ExecuteCommandListTests, givenTwoCommandQueuesHavingTwoB2BCommandListsAndWithPrivateScratchUniquePerCmdListThenCFEIsProgrammedOncePerSubmission, IsHeapfulRequiredAndAtLeastXeCore) {
 
     auto &compilerProductHelper = device->getCompilerProductHelper();
     auto heaplessEnabled = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo);

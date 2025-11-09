@@ -67,35 +67,35 @@ void BlitCommandsHelper<Family>::appendBlitCommandsBlockCopy(const BlitPropertie
     auto dstAllocation = blitProperties.dstAllocation;
     auto srcAllocation = blitProperties.srcAllocation;
 
-    if (srcAllocation->isCompressionEnabled()) {
+    if (srcAllocation && srcAllocation->isCompressionEnabled()) {
         auto resourceFormat = srcAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
         srcCompressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
     }
 
-    if (dstAllocation->isCompressionEnabled()) {
+    if (dstAllocation && dstAllocation->isCompressionEnabled()) {
         auto resourceFormat = dstAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
         dstCompressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
     }
 
     if (debugManager.flags.ForceBufferCompressionFormat.get() != -1) {
-        if (srcAllocation->isCompressionEnabled()) {
+        if (srcAllocation && srcAllocation->isCompressionEnabled()) {
             srcCompressionFormat = static_cast<uint8_t>(debugManager.flags.ForceBufferCompressionFormat.get());
         }
-        if (dstAllocation->isCompressionEnabled()) {
+        if (dstAllocation && dstAllocation->isCompressionEnabled()) {
             dstCompressionFormat = static_cast<uint8_t>(debugManager.flags.ForceBufferCompressionFormat.get());
         }
     }
 
     DEBUG_BREAK_IF((AuxTranslationDirection::none != blitProperties.auxTranslationDirection) &&
-                   (blitProperties.dstAllocation != blitProperties.srcAllocation || !blitProperties.dstAllocation->isCompressionEnabled()));
+                   (blitProperties.dstAllocation != blitProperties.srcAllocation || (blitProperties.dstAllocation && !blitProperties.dstAllocation->isCompressionEnabled())));
 
     blitCmd.setSourceCompressionFormat(static_cast<XY_BLOCK_COPY_BLT::SOURCE_COMPRESSION_FORMAT>(srcCompressionFormat));
     blitCmd.setDestinationCompressionFormat(static_cast<XY_BLOCK_COPY_BLT::DESTINATION_COMPRESSION_FORMAT>(dstCompressionFormat));
 
-    if (MemoryPoolHelper::isSystemMemoryPool(blitProperties.dstAllocation->getMemoryPool())) {
+    if (!dstAllocation || MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool())) {
         blitCmd.setDestinationTargetMemory(XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
     }
-    if (MemoryPoolHelper::isSystemMemoryPool(blitProperties.srcAllocation->getMemoryPool())) {
+    if (!srcAllocation || MemoryPoolHelper::isSystemMemoryPool(srcAllocation->getMemoryPool())) {
         blitCmd.setSourceTargetMemory(XY_BLOCK_COPY_BLT::TARGET_MEMORY::TARGET_MEMORY_SYSTEM_MEM);
     }
 
@@ -170,34 +170,28 @@ void BlitCommandsHelper<Family>::appendBlitCommandsMemCopy(const BlitProperties 
 
     if (dstAllocation) {
         if (dstAllocation->isCompressionEnabled()) {
-            auto resourceFormat = dstAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
-            compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
-        }
-    }
-    if (compressionFormat == 0) {
-        if (srcAllocation) {
-            if (srcAllocation->isCompressionEnabled()) {
-                auto resourceFormat = srcAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
+            compressionFormat = 2;
+            if (rootDeviceEnvironment.getProductHelper().isCompressionFormatFromGmmRequired()) {
+                auto resourceFormat = dstAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
                 compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
             }
         }
     }
 
-    if (debugManager.flags.EnableStatelessCompressionWithUnifiedMemory.get()) {
-        bool enable = false;
+    if (compressionFormat == 0) {
         if (srcAllocation) {
-            if (!MemoryPoolHelper::isSystemMemoryPool(srcAllocation->getMemoryPool())) {
-                enable = true;
+            if (srcAllocation->isCompressionEnabled()) {
+                compressionFormat = 2;
+                if (rootDeviceEnvironment.getProductHelper().isCompressionFormatFromGmmRequired()) {
+                    auto resourceFormat = srcAllocation->getDefaultGmm()->gmmResourceInfo->getResourceFormat();
+                    compressionFormat = rootDeviceEnvironment.getGmmClientContext()->getSurfaceStateCompressionFormat(resourceFormat);
+                }
             }
         }
-        if (dstAllocation) {
-            if (!MemoryPoolHelper::isSystemMemoryPool(dstAllocation->getMemoryPool())) {
-                enable = true;
-            }
-        }
-        if (enable) {
-            compressionFormat = static_cast<uint8_t>(debugManager.flags.FormatForStatelessCompressionWithUnifiedMemory.get());
-        }
+    }
+
+    if (debugManager.flags.BcsCompressionFormatForXe2Plus.get() != -1) {
+        compressionFormat = static_cast<uint8_t>(debugManager.flags.BcsCompressionFormatForXe2Plus.get());
     }
 
     blitCmd.setCompressionFormat(static_cast<COMPRESSION_FORMAT30>(compressionFormat));

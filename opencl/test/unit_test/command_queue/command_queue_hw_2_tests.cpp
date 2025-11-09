@@ -22,6 +22,7 @@
 #include "opencl/test/unit_test/command_queue/command_queue_fixture.h"
 #include "opencl/test/unit_test/fixtures/buffer_fixture.h"
 #include "opencl/test/unit_test/fixtures/image_fixture.h"
+#include "opencl/test/unit_test/mocks/mock_builder.h"
 #include "opencl/test/unit_test/mocks/mock_cl_device.h"
 #include "opencl/test/unit_test/mocks/mock_cl_execution_environment.h"
 #include "opencl/test/unit_test/mocks/mock_command_queue.h"
@@ -30,51 +31,6 @@
 #include "opencl/test/unit_test/mocks/mock_mdi.h"
 
 using namespace NEO;
-
-void cloneMdi(MultiDispatchInfo &dst, const MultiDispatchInfo &src) {
-    for (auto &srcDi : src) {
-        dst.push(srcDi);
-    }
-    dst.setBuiltinOpParams(src.peekBuiltinOpParams());
-}
-
-struct MockBuilder : BuiltinDispatchInfoBuilder {
-    using BuiltinDispatchInfoBuilder::BuiltinDispatchInfoBuilder;
-    bool buildDispatchInfos(MultiDispatchInfo &d) const override {
-        wasBuildDispatchInfosWithBuiltinOpParamsCalled = true;
-        paramsReceived.multiDispatchInfo.setBuiltinOpParams(d.peekBuiltinOpParams());
-        return true;
-    }
-    bool buildDispatchInfos(MultiDispatchInfo &d, Kernel *kernel,
-                            const uint32_t dim, const Vec3<size_t> &gws, const Vec3<size_t> &elws, const Vec3<size_t> &offset) const override {
-        paramsReceived.kernel = kernel;
-        paramsReceived.gws = gws;
-        paramsReceived.elws = elws;
-        paramsReceived.offset = offset;
-        wasBuildDispatchInfosWithKernelParamsCalled = true;
-
-        DispatchInfoBuilder<NEO::SplitDispatch::Dim::d3D, NEO::SplitDispatch::SplitMode::noSplit> dispatchInfoBuilder(clDevice);
-        dispatchInfoBuilder.setKernel(paramsToUse.kernel);
-        dispatchInfoBuilder.setDispatchGeometry(dim, paramsToUse.gws, paramsToUse.elws, paramsToUse.offset);
-        dispatchInfoBuilder.bake(d);
-
-        cloneMdi(paramsReceived.multiDispatchInfo, d);
-        return true;
-    }
-
-    mutable bool wasBuildDispatchInfosWithBuiltinOpParamsCalled = false;
-    mutable bool wasBuildDispatchInfosWithKernelParamsCalled = false;
-    struct Params {
-        MultiDispatchInfo multiDispatchInfo;
-        Kernel *kernel = nullptr;
-        Vec3<size_t> gws = Vec3<size_t>{0, 0, 0};
-        Vec3<size_t> elws = Vec3<size_t>{0, 0, 0};
-        Vec3<size_t> offset = Vec3<size_t>{0, 0, 0};
-    };
-
-    mutable Params paramsReceived;
-    Params paramsToUse;
-};
 
 using MultiIoqCmdQSynchronizationTest = CommandQueueHwBlitTest<false>;
 
@@ -148,8 +104,8 @@ HWTEST_F(MultiIoqCmdQSynchronizationTest, givenTwoIoqCmdQsWhenEnqueuesSynchroniz
         EXPECT_TRUE(pipeControlForBcsSemaphoreFound);
     }
 
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
-    EXPECT_EQ(CL_SUCCESS, pCmdQ2->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
+    EXPECT_EQ(CL_SUCCESS, pCmdQ2->finish(false));
 
     clReleaseEvent(outEvent);
     // tearDown
@@ -181,9 +137,16 @@ struct BuiltinParamsCommandQueueHwTests : public CommandQueueHwTest {
 
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadWriteBufferCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
 
+    auto builtInType = EBuiltInOps::copyBufferToBuffer;
+
     auto &compilerProductHelper = pDevice->getCompilerProductHelper();
-    auto builtIn = compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo) ? EBuiltInOps::copyBufferToBufferStatelessHeapless : EBuiltInOps::copyBufferToBuffer;
-    setUpImpl(builtIn);
+    if (compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo)) {
+        builtInType = EBuiltInOps::copyBufferToBufferStatelessHeapless;
+    } else if (compilerProductHelper.isForceToStatelessRequired()) {
+        builtInType = EBuiltInOps::copyBufferToBufferStateless;
+    }
+
+    setUpImpl(builtInType);
     BufferDefaults::context = context;
     auto buffer = clUniquePtr(BufferHelper<>::create());
 
@@ -222,6 +185,7 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueWriteImageCallWhenBuiltin
     debugManager.flags.EnableCopyWithStagingBuffers.set(0);
 
     bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
+    const bool useStateless = pDevice->getCompilerProductHelper().isForceToStatelessRequired();
 
     for (auto useHeapless : {false, heaplessAllowed}) {
         if (useHeapless && !heaplessAllowed) {
@@ -229,7 +193,7 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueWriteImageCallWhenBuiltin
         }
 
         reinterpret_cast<MockCommandQueueHw<FamilyType> *>(pCmdQ)->heaplessModeEnabled = useHeapless;
-        setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToImage3d>(false, useHeapless));
+        setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToImage3d>(useStateless, useHeapless));
 
         std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
 
@@ -270,9 +234,10 @@ HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueWriteImageCallWhenBuiltin
 }
 
 HWTEST_F(BuiltinParamsCommandQueueHwTests, givenEnqueueReadImageCallWhenBuiltinParamsArePassedThenCheckValuesCorectness) {
-
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-    setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyImage3dToBuffer>(false, pCmdQ->getHeaplessModeEnabled()));
+
+    const bool useStateless = pDevice->getCompilerProductHelper().isForceToStatelessRequired();
+    setUpImpl(EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyImage3dToBuffer>(useStateless, pCmdQ->getHeaplessModeEnabled()));
 
     std::unique_ptr<Image> dstImage(ImageHelperUlt<ImageUseHostPtr<Image2dDefaults>>::create(context));
 
@@ -1410,7 +1375,7 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenBlitAfterBarrierWhenEnqueueingCommandTh
         EXPECT_EQ(bcsHwParser.cmdList.end(), pipeControlItor);
     }
 
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(OoqCommandQueueHwBlitTest, givenBlitBeforeBarrierWhenEnqueueingCommandThenWaitForBlitBeforeBarrier) {
@@ -1497,7 +1462,7 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenBlitBeforeBarrierWhenEnqueueingCommandT
         EXPECT_EQ(1u, findAll<MI_SEMAPHORE_WAIT *>(bcsHwParser.cmdList.begin(), blitItor).size());
     }
 
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(OoqCommandQueueHwBlitTest, givenBlockedBlitAfterBarrierWhenEnqueueingCommandThenWaitForBlitBeforeBarrier) {
@@ -1561,7 +1526,7 @@ HWTEST_F(OoqCommandQueueHwBlitTest, givenBlockedBlitAfterBarrierWhenEnqueueingCo
         EXPECT_EQ(bcsHwParser.cmdList.end(), find<PIPE_CONTROL *>(semaphoreItor, bcsHwParser.cmdList.end()));
     }
 
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(CommandQueueHwTest, GivenBuiltinKernelWhenBuiltinDispatchInfoBuilderIsProvidedThenThisBuilderIsUsedForCreatingDispatchInfo) {
@@ -1673,7 +1638,7 @@ HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushNotRequiredWhenEnqueu
 
     auto pipeControls = findAll<PIPE_CONTROL *>(ccsHwParser.cmdList.begin(), ccsHwParser.cmdList.end());
     EXPECT_TRUE(pipeControls.empty());
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueReadImageThenNoCacheFlushSubmitted) {
@@ -1711,7 +1676,7 @@ HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueRe
 
     auto pipeControls = findAll<PIPE_CONTROL *>(ccsHwParser.cmdList.begin(), ccsHwParser.cmdList.end());
     EXPECT_TRUE(pipeControls.empty());
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueWriteImageThenCacheFlushSubmitted) {
@@ -1760,7 +1725,7 @@ HWTEST_F(ImageTextureCacheFlushTest, givenTextureCacheFlushRequiredWhenEnqueueWr
         }
     }
     EXPECT_TRUE(isPipeControlWithTextureCacheFlush);
-    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish());
+    EXPECT_EQ(CL_SUCCESS, pCmdQ->finish(false));
 }
 
 HWTEST_F(IoqCommandQueueHwBlitTest, givenImageWithHostPtrWhenCreateImageThenStopRegularBcs) {

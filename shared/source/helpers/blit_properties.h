@@ -14,6 +14,8 @@
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/vec.h"
 
+#include "blit_properties_ext.h"
+
 #include <cstdint>
 
 namespace NEO {
@@ -46,9 +48,10 @@ struct BlitSyncProperties {
 };
 
 struct BlitProperties {
-    static BlitProperties constructPropertiesForMemoryFill(GraphicsAllocation *dstAllocation, size_t size, uint32_t *pattern, size_t patternSize, size_t offset);
 
-    static BlitProperties constructPropertiesForSystemMemoryFill(uint64_t dstPtr, size_t size, uint32_t *pattern, size_t patternSize, size_t offset);
+    static BlitProperties constructPropertiesForMemoryFill(
+        GraphicsAllocation *dstAllocation, uint64_t dstPtr,
+        size_t size, uint32_t *pattern, size_t patternSize, size_t offset);
 
     static BlitProperties constructPropertiesForReadWrite(BlitterConstants::BlitDirection blitDirection,
                                                           CommandStreamReceiver &commandStreamReceiver,
@@ -60,15 +63,13 @@ struct BlitProperties {
                                                           size_t hostRowPitch, size_t hostSlicePitch,
                                                           size_t gpuRowPitch, size_t gpuSlicePitch);
 
-    static BlitProperties constructPropertiesForCopy(GraphicsAllocation *dstAllocation, GraphicsAllocation *srcAllocation,
-                                                     const Vec3<size_t> &dstOffset, const Vec3<size_t> &srcOffset, Vec3<size_t> copySize,
-                                                     size_t srcRowPitch, size_t srcSlicePitch,
-                                                     size_t dstRowPitch, size_t dstSlicePitch, GraphicsAllocation *clearColorAllocation);
-
-    static BlitProperties constructPropertiesForSystemCopy(GraphicsAllocation *dstAllocation, GraphicsAllocation *srcAllocation, uint64_t dstPtr, uint64_t srcPtr,
-                                                           const Vec3<size_t> &dstOffset, const Vec3<size_t> &srcOffset, Vec3<size_t> copySize,
-                                                           size_t srcRowPitch, size_t srcSlicePitch,
-                                                           size_t dstRowPitch, size_t dstSlicePitch, GraphicsAllocation *clearColorAllocation);
+    static BlitProperties constructPropertiesForCopy(
+        GraphicsAllocation *dstAllocation, uint64_t dstPtr,
+        GraphicsAllocation *srcAllocation, uint64_t srcPtr,
+        const Vec3<size_t> &dstOffset, const Vec3<size_t> &srcOffset, Vec3<size_t> copySize,
+        size_t srcRowPitch, size_t srcSlicePitch,
+        size_t dstRowPitch, size_t dstSlicePitch,
+        GraphicsAllocation *clearColorAllocation);
 
     static BlitProperties constructPropertiesForAuxTranslation(AuxTranslationDirection auxTranslationDirection,
                                                                GraphicsAllocation *allocation, GraphicsAllocation *clearColorAllocation);
@@ -115,6 +116,8 @@ struct BlitProperties {
     GMM_YUV_PLANE_ENUM srcPlane = GMM_YUV_PLANE_ENUM::GMM_NO_PLANE;
     bool isSystemMemoryPoolUsed = false;
     bool highPriority = false;
+
+    BlitPropertiesExt propertiesExt{};
 };
 
 } // namespace NEO

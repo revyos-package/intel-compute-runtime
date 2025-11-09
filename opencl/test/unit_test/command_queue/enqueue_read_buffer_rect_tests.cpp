@@ -523,7 +523,7 @@ HWTEST_F(EnqueueReadBufferRectTest, givenInOrderQueueAndMemObjWithOffsetPointThe
     EXPECT_EQ(CL_SUCCESS, retVal);
     EXPECT_EQ(pCmdQ->taskLevel, 0u);
 }
-HWTEST_F(EnqueueReadBufferRectTest, givenInOrderQueueAndMemObjWithOffsetPointDiffrentStorageWithHostWhenReadBufferIsExecutedThenTaskLevelShouldBeIncreased) {
+HWTEST_F(EnqueueReadBufferRectTest, givenInOrderQueueAndMemObjWithOffsetPointDifferentStorageWithHostWhenReadBufferIsExecutedThenTaskLevelShouldBeIncreased) {
     cl_int retVal = CL_SUCCESS;
     void *ptr = buffer->getCpuAddressForMemoryTransfer();
     size_t bufferOrigin[] = {0, 0, 0};
@@ -596,7 +596,7 @@ HWTEST_F(EnqueueReadWriteBufferRectDispatch, givenOffsetResultingInMisalignedPtr
     ASSERT_NE(0u, cmdQ->lastEnqueuedKernels.size());
     Kernel *kernel = cmdQ->lastEnqueuedKernels[0];
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     parseCommands<FamilyType>(*cmdQ);
 

@@ -5,8 +5,6 @@
  *
  */
 
-#include "shared/test/common/test_macros/test_checks_shared.h"
-
 #include "opencl/source/command_queue/command_queue_hw.h"
 #include "opencl/test/unit_test/command_queue/command_queue_fixture.h"
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
@@ -48,7 +46,7 @@ struct OOMCommandQueueImageTest : public ClDeviceFixture,
         if (oomSetting.oomCS) {
             auto &cs = pCmdQ->getCS(oomSize);
 
-            // CommandStream may be larger than requested so grab what wasnt requested
+            // CommandStream may be larger than requested so grab what was not requested
             cs.getSpace(cs.getAvailableSpace() - oomSize);
             ASSERT_EQ(oomSize, cs.getAvailableSpace());
         }
@@ -56,7 +54,7 @@ struct OOMCommandQueueImageTest : public ClDeviceFixture,
         if (oomSetting.oomISH) {
             auto &ish = pCmdQ->getIndirectHeap(IndirectHeap::Type::dynamicState, oomSize);
 
-            // IndirectHeap may be larger than requested so grab what wasnt requested
+            // IndirectHeap may be larger than requested so grab what was not requested
             ish.getSpace(ish.getAvailableSpace() - oomSize);
             ASSERT_EQ(oomSize, ish.getAvailableSpace());
         }

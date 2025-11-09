@@ -14,6 +14,7 @@
 #include "shared/source/os_interface/linux/drm_memory_operations_handler.h"
 #include "shared/source/os_interface/linux/os_context_linux.h"
 #include "shared/source/os_interface/os_interface.h"
+#include "shared/source/os_interface/product_helper.h"
 #include "shared/test/common/helpers/batch_buffer_helper.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
@@ -36,7 +37,6 @@ struct DrmCommandStreamMultiTileMemExecFixture {
         debugManager.flags.CreateMultipleSubDevices.set(2u);
         debugManager.flags.EnableImplicitScaling.set(1);
         debugManager.flags.EnableForcePin.set(false);
-        osLocalMemoryBackup = std::make_unique<VariableBackup<bool>>(&OSInterface::osEnableLocalMemory, true);
 
         executionEnvironment = new MockExecutionEnvironment();
         executionEnvironment->incRefInternal();
@@ -104,6 +104,12 @@ struct DrmCommandStreamMultiTileMemExecTestWithCsr : public DrmCommandStreamMult
 };
 
 HWCMDTEST_TEMPLATED_F(IGFX_XE_HP_CORE, DrmCommandStreamMultiTileMemExecTestWithCsr, GivenDrmSupportsCompletionFenceAndVmBindWhenCallingCsrExecThenMultipleTagAllocationIsPassed) {
+
+    auto &productHelper = device->getProductHelper();
+    if (productHelper.isL3FlushAfterPostSyncSupported(true)) {
+        GTEST_SKIP();
+    }
+
     auto testCsr = static_cast<TestedDrmCommandStreamReceiver<FamilyType> *>(&device->getGpgpuCommandStreamReceiver());
     EXPECT_EQ(2u, testCsr->activePartitions);
 

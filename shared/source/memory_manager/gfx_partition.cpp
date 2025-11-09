@@ -30,8 +30,8 @@ const std::array<HeapIndex, 8> GfxPartition::heapNonSvmNames{{HeapIndex::heapInt
                                                               HeapIndex::heapStandard2MB,
                                                               HeapIndex::heapExtended}};
 
-static void reserveLow48BitRangeWithRetry(OSMemory *osMemory, OSMemory::ReservedCpuAddressRange &reservedCpuAddressRange) {
-    uint64_t reservationSize = 256 * MemoryConstants::gigaByte;
+static void reserveLow48BitRangeWithRetry(OSMemory *osMemory, OSMemory::ReservedCpuAddressRange &reservedCpuAddressRange, size_t numRootDevices) {
+    uint64_t reservationSize = numRootDevices * MemoryConstants::teraByte;
     constexpr uint64_t minimalReservationSize = 32 * MemoryConstants::gigaByte;
 
     while (reservationSize >= minimalReservationSize) {
@@ -81,10 +81,10 @@ static void reserveRangeWithMemoryMapsParse(OSMemory *osMemory, OSMemory::Reserv
     }
 }
 
-static void reserveHigh48BitRangeWithMemoryMapsParse(OSMemory *osMemory, OSMemory::ReservedCpuAddressRange &reservedCpuAddressRange) {
+static void reserveHigh48BitRangeWithMemoryMapsParse(OSMemory *osMemory, OSMemory::ReservedCpuAddressRange &reservedCpuAddressRange, size_t numRootDevices) {
     constexpr uint64_t high48BitAreaBase = maxNBitValue(47) + 1; // 0x800000000000
     constexpr uint64_t high48BitAreaTop = maxNBitValue(48);      // 0xFFFFFFFFFFFF
-    uint64_t reservationSize = MemoryConstants::teraByte;
+    uint64_t reservationSize = numRootDevices * MemoryConstants::teraByte;
     reserveRangeWithMemoryMapsParse(osMemory, reservedCpuAddressRange, high48BitAreaBase, high48BitAreaTop, reservationSize);
 }
 
@@ -94,11 +94,11 @@ static void reserve57BitRangeWithMemoryMapsParse(OSMemory *osMemory, OSMemory::R
     reserveRangeWithMemoryMapsParse(osMemory, reservedCpuAddressRange, areaBase, areaTop, reservationSize);
 }
 
-GfxPartition::GfxPartition(OSMemory::ReservedCpuAddressRange &reservedCpuAddressRangeForHeapSvm) : reservedCpuAddressRangeForHeapSvm(reservedCpuAddressRangeForHeapSvm), osMemory(OSMemory::create()) {}
+GfxPartition::GfxPartition(OSMemory::ReservedCpuAddressRange &reservedCpuAddressRangeForNonSvmHeaps) : reservedCpuAddressRangeForNonSvmHeaps(reservedCpuAddressRangeForNonSvmHeaps), osMemory(OSMemory::create()) {}
 
 GfxPartition::~GfxPartition() {
-    osMemory->releaseCpuAddressRange(reservedCpuAddressRangeForHeapSvm);
-    reservedCpuAddressRangeForHeapSvm = {};
+    osMemory->releaseCpuAddressRange(reservedCpuAddressRangeForNonSvmHeaps);
+    reservedCpuAddressRangeForNonSvmHeaps = {};
     osMemory->releaseCpuAddressRange(reservedCpuAddressRangeForHeapExtended);
 }
 
@@ -250,26 +250,26 @@ bool GfxPartition::init(uint64_t gpuAddressSpace, size_t cpuAddressRangeSizeToRe
             gfxBase = maxNBitValue(48 - 1) + 1;
             heapInit(HeapIndex::heapSvm, 0ull, gfxBase);
         } else if (gpuAddressSpace == maxNBitValue(47)) {
-            if (reservedCpuAddressRangeForHeapSvm.alignedPtr == nullptr) {
+            if (reservedCpuAddressRangeForNonSvmHeaps.alignedPtr == nullptr) {
                 if (cpuAddressRangeSizeToReserve == 0) {
                     return false;
                 }
-                reservedCpuAddressRangeForHeapSvm = osMemory->reserveCpuAddressRange(cpuAddressRangeSizeToReserve, GfxPartition::heapGranularity);
-                if (reservedCpuAddressRangeForHeapSvm.originalPtr == nullptr) {
+                reservedCpuAddressRangeForNonSvmHeaps = osMemory->reserveCpuAddressRange(cpuAddressRangeSizeToReserve, GfxPartition::heapGranularity);
+                if (reservedCpuAddressRangeForNonSvmHeaps.originalPtr == nullptr) {
                     return false;
                 }
-                if (!isAligned<GfxPartition::heapGranularity>(reservedCpuAddressRangeForHeapSvm.alignedPtr)) {
+                if (!isAligned<GfxPartition::heapGranularity>(reservedCpuAddressRangeForNonSvmHeaps.alignedPtr)) {
                     return false;
                 }
             }
-            gfxBase = reinterpret_cast<uint64_t>(reservedCpuAddressRangeForHeapSvm.alignedPtr);
+            gfxBase = reinterpret_cast<uint64_t>(reservedCpuAddressRangeForNonSvmHeaps.alignedPtr);
             gfxTop = gfxBase + cpuAddressRangeSizeToReserve;
             heapInit(HeapIndex::heapSvm, 0ull, gpuAddressSpace + 1);
         } else if (gpuAddressSpace < maxNBitValue(47)) {
             gfxBase = 0ull;
             heapInit(HeapIndex::heapSvm, 0ull, 0ull);
         } else {
-            if (!initAdditionalRange(cpuVirtualAddressSize, gpuAddressSpace, gfxBase, gfxTop, rootDeviceIndex, systemMemorySize)) {
+            if (!initAdditionalRange(cpuVirtualAddressSize, gpuAddressSpace, gfxBase, gfxTop, rootDeviceIndex, systemMemorySize, numRootDevices)) {
                 return false;
             }
         }
@@ -326,7 +326,7 @@ bool GfxPartition::init(uint64_t gpuAddressSpace, size_t cpuAddressRangeSizeToRe
     return true;
 }
 
-bool GfxPartition::initAdditionalRange(uint32_t cpuVirtualAddressSize, uint64_t gpuAddressSpace, uint64_t &gfxBase, uint64_t &gfxTop, uint32_t rootDeviceIndex, uint64_t systemMemorySize) {
+bool GfxPartition::initAdditionalRange(uint32_t cpuVirtualAddressSize, uint64_t gpuAddressSpace, uint64_t &gfxBase, uint64_t &gfxTop, uint32_t rootDeviceIndex, uint64_t systemMemorySize, size_t numRootDevices) {
     /*
      * 57-bit Full Range SVM gfx layout:
      *
@@ -353,20 +353,20 @@ bool GfxPartition::initAdditionalRange(uint32_t cpuVirtualAddressSize, uint64_t 
 
     if (cpuVirtualAddressSize == 57 && CpuInfo::getInstance().isCpuFlagPresent("la57")) {
         // Always reserve 48 bit window on 57 bit CPU
-        if (reservedCpuAddressRangeForHeapSvm.alignedPtr == nullptr) {
-            reserveHigh48BitRangeWithMemoryMapsParse(osMemory.get(), reservedCpuAddressRangeForHeapSvm);
+        if (reservedCpuAddressRangeForNonSvmHeaps.alignedPtr == nullptr) {
+            reserveHigh48BitRangeWithMemoryMapsParse(osMemory.get(), reservedCpuAddressRangeForNonSvmHeaps, numRootDevices);
 
-            if (reservedCpuAddressRangeForHeapSvm.alignedPtr == nullptr) {
-                reserveLow48BitRangeWithRetry(osMemory.get(), reservedCpuAddressRangeForHeapSvm);
+            if (reservedCpuAddressRangeForNonSvmHeaps.alignedPtr == nullptr) {
+                reserveLow48BitRangeWithRetry(osMemory.get(), reservedCpuAddressRangeForNonSvmHeaps, numRootDevices);
             }
 
-            if (reservedCpuAddressRangeForHeapSvm.alignedPtr == nullptr) {
+            if (reservedCpuAddressRangeForNonSvmHeaps.alignedPtr == nullptr) {
                 return false;
             }
         }
 
-        gfxBase = castToUint64(reservedCpuAddressRangeForHeapSvm.alignedPtr);
-        gfxTop = gfxBase + reservedCpuAddressRangeForHeapSvm.sizeToReserve;
+        gfxBase = castToUint64(reservedCpuAddressRangeForNonSvmHeaps.alignedPtr);
+        gfxTop = gfxBase + reservedCpuAddressRangeForNonSvmHeaps.sizeToReserve;
         if (gpuAddressSpace == maxNBitValue(57)) {
             heapInit(HeapIndex::heapSvm, 0ull, maxNBitValue(57 - 1) + 1);
         } else {

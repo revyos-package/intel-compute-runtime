@@ -75,7 +75,7 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
       private:
         cl_event event;
         ClbFuncT callbackFunction;
-        int32_t callbackExecutionStatusTarget; // minimum event execution status that will triger this callback
+        int32_t callbackExecutionStatusTarget; // minimum event execution status that will trigger this callback
         void *userData;
     };
     static_assert(NEO::NonCopyableAndNonMovable<IFList<Callback, true, true>>);
@@ -212,7 +212,7 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
         return submittedCmd != nullptr;
     }
 
-    // commands blocked by user event depencies
+    // commands blocked by user event dependencies
     bool isReadyForSubmission();
 
     // adds a callback (execution state change listener) to this event's list of callbacks
@@ -312,6 +312,14 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
 
     void copyTimestamps(Event &srcEvent);
 
+    void setWaitForTaskCountRequired(bool newValue) {
+        waitForTaskCountRequired = newValue;
+    }
+
+    bool getWaitForTaskCountRequired() const {
+        return waitForTaskCountRequired;
+    }
+
   protected:
     Event(Context *ctx, CommandQueue *cmdQueue, cl_command_type cmdType,
           TaskCountType taskLevel, TaskCountType taskCount);
@@ -367,6 +375,7 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
     std::atomic<Command *> cmdToSubmit{nullptr};
     std::atomic<Command *> submittedCmd{nullptr};
     bool eventWithoutCommand = true;
+    bool waitForTaskCountRequired = false;
 
     Context *ctx = nullptr;
     CommandQueue *cmdQueue = nullptr;
@@ -376,8 +385,8 @@ class Event : public BaseObject<_cl_event>, public IDNode<Event> {
     IFList<Callback, true, true> callbacks[static_cast<uint32_t>(ECallbackTarget::max)];
 
     // can be accessed only with transitionExecutionState
-    // this is to ensure state consitency event when doning lock-free multithreading
-    // e.g. CL_COMPLETE -> CL_SUBMITTED or CL_SUBMITTED -> CL_QUEUED becomes forbiden
+    // this is to ensure state consistency event when doning lock-free multithreading
+    // e.g. CL_COMPLETE -> CL_SUBMITTED or CL_SUBMITTED -> CL_QUEUED becomes forbidden
     mutable std::atomic<int32_t> executionStatus{CL_QUEUED};
     // Timestamps
     bool profilingEnabled = false;

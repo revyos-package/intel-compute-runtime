@@ -40,7 +40,6 @@ MockContext::MockContext(
     userData = data;
     memoryManager = nullptr;
     driverDiagnostics = nullptr;
-    rootDeviceIndices = {};
     maxRootDeviceIndex = std::numeric_limits<uint32_t>::max();
     deviceBitfields = {};
 }
@@ -56,6 +55,17 @@ MockContext::~MockContext() {
         memoryManager->getDeferredDeleter()->removeClient();
     }
     memoryManager = nullptr;
+
+    if (!platformManagersInitialized && stagingBufferManager) {
+        delete stagingBufferManager;
+        stagingBufferManager = nullptr;
+    }
+    if (!platformManagersInitialized && svmAllocsManager) {
+        usmDeviceMemAllocPool.cleanup();
+        svmAllocsManager->cleanupUSMAllocCaches();
+        delete svmAllocsManager;
+        svmAllocsManager = nullptr;
+    }
 }
 
 MockContext::MockContext() {
@@ -63,7 +73,6 @@ MockContext::MockContext() {
     cl_device_id deviceId = pDevice;
     initializeWithDevices(ClDeviceVector{&deviceId, 1}, false);
     pDevice->decRefInternal();
-    this->usmPoolInitialized = true;
 }
 
 void MockContext::setSharingFunctions(SharingFunctions *sharingFunctions) {
@@ -101,7 +110,6 @@ void MockContext::initializeWithDevices(const ClDeviceVector &devices, bool noSp
 
     this->devices = devices;
     memoryManager = devices[0]->getMemoryManager();
-    svmAllocsManager = new MockSVMAllocsManager(memoryManager);
 
     for (auto &rootDeviceIndex : rootDeviceIndices) {
         DeviceBitfield deviceBitfield{};
@@ -116,7 +124,8 @@ void MockContext::initializeWithDevices(const ClDeviceVector &devices, bool noSp
         }
         deviceBitfields.insert({rootDeviceIndex, deviceBitfield});
     }
-    stagingBufferManager = std::make_unique<StagingBufferManager>(svmAllocsManager, rootDeviceIndices, deviceBitfields, true);
+
+    initializeManagers();
 
     cl_int retVal;
     if (!noSpecialQueue) {
@@ -130,6 +139,16 @@ void MockContext::initializeWithDevices(const ClDeviceVector &devices, bool noSp
     }
 
     setupContextType();
+}
+
+void MockContext::initializeManagers() {
+    auto platform = this->getDevice(0)->getPlatform();
+    if (platform != nullptr && platform->isInitialized()) {
+        Context::initializeManagers();
+    } else {
+        svmAllocsManager = new SVMAllocsManager(memoryManager);
+        stagingBufferManager = new StagingBufferManager(svmAllocsManager, rootDeviceIndices, deviceBitfields, true);
+    }
 }
 
 MockDefaultContext::MockDefaultContext() : MockDefaultContext(false) {}
@@ -194,7 +213,6 @@ BcsMockContext::BcsMockContext(ClDevice *device) : MockContext(device) {
         return BlitOperationResult::success;
     };
     blitMemoryToAllocationFuncBackup = mockBlitMemoryToAllocation;
-    this->usmPoolInitialized = true;
 }
 BcsMockContext::~BcsMockContext() = default;
 } // namespace NEO

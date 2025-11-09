@@ -121,7 +121,7 @@ HWTEST_F(AubCommandStreamReceiverTests, givenAubCommandStreamReceiverWhenForcedB
     size_t sizeBatchBuffer = 0xffffu;
 
     std::unique_ptr<GraphicsAllocation, std::function<void(GraphicsAllocation *)>> flatBatchBuffer(
-        aubCsr->getFlatBatchBufferHelper().flattenBatchBuffer(aubCsr->getRootDeviceIndex(), batchBuffer, sizeBatchBuffer, DispatchMode::adaptiveDispatch, pDevice->getDeviceBitfield()),
+        aubCsr->getFlatBatchBufferHelper().flattenBatchBuffer(aubCsr->getRootDeviceIndex(), batchBuffer, sizeBatchBuffer, DispatchMode::deviceDefault, pDevice->getDeviceBitfield()),
         [&](GraphicsAllocation *ptr) { memoryManager->freeGraphicsMemory(ptr); });
     EXPECT_EQ(nullptr, flatBatchBuffer.get());
     EXPECT_EQ(0xffffu, sizeBatchBuffer);
@@ -603,18 +603,6 @@ HWTEST_F(AubCommandStreamReceiverNoHostPtrTests, givenAubCommandStreamReceiverWh
 
     EXPECT_FALSE(memoryManager->unlockResourceParam.wasCalled);
     memoryManager->freeGraphicsMemory(gfxAllocation);
-}
-
-HWTEST_F(AubCommandStreamReceiverTests, givenNoDbgDeviceIdFlagWhenAubCsrIsCreatedThenUseDefaultDeviceId) {
-    std::unique_ptr<MockAubCsr<FamilyType>> aubCsr(new MockAubCsr<FamilyType>("", true, *pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield()));
-    EXPECT_EQ(pDevice->getHardwareInfo().capabilityTable.aubDeviceId, aubCsr->aubDeviceId);
-}
-
-HWTEST_F(AubCommandStreamReceiverTests, givenDbgDeviceIdFlagIsSetWhenAubCsrIsCreatedThenUseDebugDeviceId) {
-    DebugManagerStateRestore stateRestore;
-    debugManager.flags.OverrideAubDeviceId.set(9); // this is Hsw, not used
-    std::unique_ptr<MockAubCsr<FamilyType>> aubCsr(new MockAubCsr<FamilyType>("", true, *pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield()));
-    EXPECT_EQ(9u, aubCsr->aubDeviceId);
 }
 
 HWTEST_F(AubCommandStreamReceiverTests, givenAubCommandStreamReceiverWhenGetGTTDataIsCalledThenLocalMemoryIsSetAccordingToCsrFeature) {

@@ -28,6 +28,8 @@ ADAPTER_BDF gAdapterBDF{};
 D3DKMT_DEVICEEXECUTION_STATE gExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
 NTSTATUS gGetDeviceStateExecutionReturnValue = STATUS_SUCCESS;
 NTSTATUS gGetDeviceStatePageFaultReturnValue = STATUS_SUCCESS;
+bool failCreateDevice = false;
+bool failCreatePagingQueue = false;
 
 NTSTATUS __stdcall mockD3DKMTEscape(IN CONST D3DKMT_ESCAPE *pData) {
     static int perfTicks = 0;
@@ -69,6 +71,9 @@ NTSTATUS __stdcall mockD3DKMTOpenAdapterFromLuid(IN OUT CONST D3DKMT_OPENADAPTER
 }
 
 NTSTATUS __stdcall mockD3DKMTCreateDevice(IN OUT D3DKMT_CREATEDEVICE *createDevice) {
+    if (failCreateDevice) {
+        return STATUS_UNSUCCESSFUL;
+    }
     if (createDevice == nullptr || createDevice->hAdapter != ADAPTER_HANDLE) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -85,6 +90,9 @@ NTSTATUS __stdcall mockD3DKMTDestroyDevice(IN CONST D3DKMT_DESTROYDEVICE *destor
 }
 
 NTSTATUS __stdcall mockD3DKMTCreatePagingQueue(IN OUT D3DKMT_CREATEPAGINGQUEUE *createQueue) {
+    if (failCreatePagingQueue) {
+        return STATUS_UNSUCCESSFUL;
+    }
     if (createQueue == nullptr || (createQueue->hDevice != DEVICE_HANDLE)) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -593,6 +601,7 @@ NTSTATUS __stdcall mockD3DKMTSetAllocationPriority(IN CONST D3DKMT_SETALLOCATION
 }
 
 static D3DKMT_CREATEHWQUEUE createHwQueueData{};
+static CREATEHWQUEUE_PVTDATA createHwQueuePrivateData{};
 
 NTSTATUS __stdcall mockD3DKMTCreateHwQueue(IN OUT D3DKMT_CREATEHWQUEUE *createHwQueue) {
     createHwQueue->hHwQueueProgressFence = 1;
@@ -600,6 +609,11 @@ NTSTATUS __stdcall mockD3DKMTCreateHwQueue(IN OUT D3DKMT_CREATEHWQUEUE *createHw
     createHwQueue->HwQueueProgressFenceGPUVirtualAddress = 3;
     createHwQueue->hHwQueue = 4;
     createHwQueueData = *createHwQueue;
+
+    if (createHwQueue->PrivateDriverDataSize == sizeof(CREATEHWQUEUE_PVTDATA) && createHwQueue->pPrivateDriverData) {
+        createHwQueuePrivateData = *((CREATEHWQUEUE_PVTDATA *)createHwQueue->pPrivateDriverData);
+        createHwQueueData.pPrivateDriverData = &createHwQueuePrivateData;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -607,6 +621,8 @@ static D3DKMT_DESTROYHWQUEUE destroyHwQueueData{};
 
 NTSTATUS __stdcall mockD3DKMTDestroyHwQueue(IN CONST D3DKMT_DESTROYHWQUEUE *destroyHwQueue) {
     destroyHwQueueData = *destroyHwQueue;
+    createHwQueueData.pPrivateDriverData = nullptr;
+    createHwQueueData.PrivateDriverDataSize = 0;
     return STATUS_SUCCESS;
 }
 

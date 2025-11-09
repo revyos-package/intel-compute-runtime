@@ -31,15 +31,16 @@ void *ExtensionFunctionAddressHelper::getExtensionFunctionAddress(const std::str
     RETURN_FUNC_PTR_IF_EXIST(zexDriverReleaseImportedPointer);
     RETURN_FUNC_PTR_IF_EXIST(zexDriverGetHostPointerBaseAddress);
     RETURN_FUNC_PTR_IF_EXIST(zeDriverGetDefaultContext);
-    RETURN_FUNC_PTR_IF_EXIST(zerDriverGetDefaultContext);
-    RETURN_FUNC_PTR_IF_EXIST(zerDriverGetLastErrorDescription);
+    RETURN_FUNC_PTR_IF_EXIST(zerGetDefaultContext);
+    RETURN_FUNC_PTR_IF_EXIST(zerGetLastErrorDescription);
 
-    RETURN_FUNC_PTR_IF_EXIST(zerDeviceTranslateToIdentifier);
-    RETURN_FUNC_PTR_IF_EXIST(zerIdentifierTranslateToDeviceHandle);
+    RETURN_FUNC_PTR_IF_EXIST(zerTranslateDeviceHandleToIdentifier);
+    RETURN_FUNC_PTR_IF_EXIST(zerTranslateIdentifierToDeviceHandle);
     RETURN_FUNC_PTR_IF_EXIST(zeDeviceSynchronize);
     RETURN_FUNC_PTR_IF_EXIST(zeDeviceGetPriorityLevels);
 
     RETURN_FUNC_PTR_IF_EXIST(zeCommandListAppendLaunchKernelWithArguments);
+    RETURN_FUNC_PTR_IF_EXIST(zeCommandListAppendLaunchKernelWithParameters);
 
     RETURN_FUNC_PTR_IF_EXIST(zexKernelGetBaseAddress);
     RETURN_FUNC_PTR_IF_EXIST(zexKernelGetArgumentSize);
@@ -61,6 +62,7 @@ void *ExtensionFunctionAddressHelper::getExtensionFunctionAddress(const std::str
     RETURN_FUNC_PTR_IF_EXIST(zexCounterBasedEventGetIpcHandle);
     RETURN_FUNC_PTR_IF_EXIST(zexCounterBasedEventOpenIpcHandle);
     RETURN_FUNC_PTR_IF_EXIST(zexCounterBasedEventCloseIpcHandle);
+    RETURN_FUNC_PTR_IF_EXIST(zexDeviceGetAggregatedCopyOffloadIncrementValue);
 
     RETURN_FUNC_PTR_IF_EXIST(zeMemGetPitchFor2dImage);
     RETURN_FUNC_PTR_IF_EXIST(zeImageGetDeviceOffsetExp);
@@ -68,6 +70,7 @@ void *ExtensionFunctionAddressHelper::getExtensionFunctionAddress(const std::str
 
     RETURN_FUNC_PTR_IF_EXIST(zeIntelMediaCommunicationCreate);
     RETURN_FUNC_PTR_IF_EXIST(zeIntelMediaCommunicationDestroy);
+    RETURN_FUNC_PTR_IF_EXIST(zexMemFreeRegisterCallbackExt);
 
     RETURN_FUNC_PTR_IF_EXIST(zexIntelAllocateNetworkInterrupt);
     RETURN_FUNC_PTR_IF_EXIST(zexIntelReleaseNetworkInterrupt);
@@ -75,6 +78,7 @@ void *ExtensionFunctionAddressHelper::getExtensionFunctionAddress(const std::str
     RETURN_FUNC_PTR_IF_EXIST(zetIntelCommandListAppendMarkerExp);
     RETURN_FUNC_PTR_IF_EXIST(zetDeviceEnableMetricsExp);
     RETURN_FUNC_PTR_IF_EXIST(zetDeviceDisableMetricsExp);
+    RETURN_FUNC_PTR_IF_EXIST(zexCommandListAppendHostFunction);
 
     // mutable command list extension
     RETURN_FUNC_PTR_IF_EXIST(zeCommandListGetNextCommandIdExp);
@@ -117,12 +121,14 @@ void *ExtensionFunctionAddressHelper::getExtensionFunctionAddress(const std::str
     RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricDecoderDestroyExp);
     RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricDecoderGetDecodableMetricsExp);
     RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricTracerDecodeExp);
-    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculateOperationCreateExp);
-    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculateOperationDestroyExp);
-    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculateGetReportFormatExp);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculationOperationCreateExp);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculationOperationDestroyExp);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculationOperationGetExcludedMetricsExp);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculationOperationGetReportFormatExp);
     RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricDecodeCalculateMultipleValuesExp);
-    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculateMultipleValuesExp);
     RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricCalculateValuesExp);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricTracerDecodeExp2);
+    RETURN_FUNC_PTR_IF_EXIST(zetIntelMetricSupportedScopesGetExp);
 
     // Graphs
     RETURN_FUNC_PTR_IF_EXIST(zeGraphCreateExp);

@@ -1128,7 +1128,7 @@ HWTEST2_F(EncodeDispatchKernelTest, givenPrintKernelDispatchParametersWhenEncodi
     EXPECT_NE(std::string::npos, outputString.find("threadGroupDispatchSize enum"));
 }
 
-HWTEST2_F(EncodeDispatchKernelTest, givenNonBindlessOrStatelessArgWhenDispatchingKernelThenSurfaceStateOffsetInCrossThreadDataIsNotPatched, IsHeapfulSupported) {
+HWTEST2_F(EncodeDispatchKernelTest, givenNonBindlessOrStatelessArgWhenDispatchingKernelThenSurfaceStateOffsetInCrossThreadDataIsNotPatched, IsHeapfulRequired) {
     using BINDING_TABLE_STATE = typename FamilyType::BINDING_TABLE_STATE;
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
     uint32_t numBindingTable = 1;
@@ -1449,7 +1449,7 @@ HWTEST_F(BindlessCommandEncodeStatesContainerTest, givenBindlessKernelAndBindles
     EXPECT_EQ(commandContainer->getIndirectHeap(HeapType::surfaceState), nullptr);
 }
 
-HWTEST2_F(BindlessCommandEncodeStatesContainerTest, givenBindfulKernelWhenBindlessModeEnabledThenCmdContainerHasSsh, IsHeapfulSupported) {
+HWTEST2_F(BindlessCommandEncodeStatesContainerTest, givenBindfulKernelWhenBindlessModeEnabledThenCmdContainerHasSsh, IsHeapfulRequired) {
     using BINDING_TABLE_STATE = typename FamilyType::BINDING_TABLE_STATE;
     using DefaultWalkerType = typename FamilyType::DefaultWalkerType;
     DebugManagerStateRestore dbgRestorer;
@@ -1626,19 +1626,19 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, CommandEncodeStatesTest, givenEncodeDispatchKerne
 
     EXPECT_EQ(0u, EncodeDispatchKernel<FamilyType>::getInlineDataOffset(dispatchArgs));
 }
-HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGetIohAlignemntThenOneReturned, IsAtMostXeCore) {
+HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGetIohAlignmentThenOneReturned, IsAtMostXeCore) {
     EXPECT_EQ(NEO::EncodeDispatchKernel<FamilyType>::getDefaultIOHAlignment(), 1u);
 }
 
-HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGetIohAlignemntThenCacheLineSizeReturned, IsAtLeastXe2HpgCore) {
+HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGetIohAlignmentThenCacheLineSizeReturned, IsAtLeastXe2HpgCore) {
     EXPECT_EQ(NEO::EncodeDispatchKernel<FamilyType>::getDefaultIOHAlignment(), FamilyType::cacheLineSize);
 }
 
-HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenForcingDifferentIohAlignemntThenExpectedAlignmentReturned, IsAtLeastXe2HpgCore) {
+HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenForcingDifferentIohAlignmentThenExpectedAlignmentReturned, IsAtLeastXe2HpgCore) {
     DebugManagerStateRestore restorer;
-    auto expectedAlignemnt = 1024u;
-    debugManager.flags.ForceIOHAlignment.set(expectedAlignemnt);
-    EXPECT_EQ(NEO::EncodeDispatchKernel<FamilyType>::getDefaultIOHAlignment(), expectedAlignemnt);
+    auto expectedAlignment = 1024u;
+    debugManager.flags.ForceIOHAlignment.set(expectedAlignment);
+    EXPECT_EQ(NEO::EncodeDispatchKernel<FamilyType>::getDefaultIOHAlignment(), expectedAlignment);
 }
 
 HWTEST2_F(CommandEncodeStatesTest, givenEncodeDispatchKernelWhenGettingThreadCountPerSubsliceThenUseDualSubSliceAsDenominator, IsAtMostXeCore) {

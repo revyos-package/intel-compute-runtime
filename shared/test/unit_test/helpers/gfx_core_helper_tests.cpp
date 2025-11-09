@@ -11,6 +11,7 @@
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/command_container/encode_surface_state.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
+#include "shared/source/gmm_helper/resource_info.h"
 #include "shared/source/helpers/aligned_memory.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/pipe_control_args.h"
@@ -24,6 +25,7 @@
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
 #include "shared/test/common/mocks/mock_gmm.h"
+#include "shared/test/common/mocks/mock_gmm_resource_info.h"
 #include "shared/test/common/mocks/mock_release_helper.h"
 #include "shared/test/common/test_macros/hw_test.h"
 #include "shared/test/common/test_macros/test_checks_shared.h"
@@ -909,26 +911,6 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, givenGfxCoreHelperWhenGettingG
     EXPECT_EQ(gfxCoreHelper.getGlobalTimeStampBits(), 36U);
 }
 
-TEST_F(GfxCoreHelperTest, givenEnableLocalMemoryDebugVarAndOsEnableLocalMemoryWhenSetThenGetEnableLocalMemoryReturnsCorrectValue) {
-    DebugManagerStateRestore dbgRestore;
-    VariableBackup<bool> orgOsEnableLocalMemory(&OSInterface::osEnableLocalMemory);
-    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
-
-    debugManager.flags.EnableLocalMemory.set(0);
-    EXPECT_FALSE(gfxCoreHelper.getEnableLocalMemory(hardwareInfo));
-
-    debugManager.flags.EnableLocalMemory.set(1);
-    EXPECT_TRUE(gfxCoreHelper.getEnableLocalMemory(hardwareInfo));
-
-    debugManager.flags.EnableLocalMemory.set(-1);
-
-    OSInterface::osEnableLocalMemory = false;
-    EXPECT_FALSE(gfxCoreHelper.getEnableLocalMemory(hardwareInfo));
-
-    OSInterface::osEnableLocalMemory = true;
-    EXPECT_EQ(gfxCoreHelper.isLocalMemoryEnabled(hardwareInfo), gfxCoreHelper.getEnableLocalMemory(hardwareInfo));
-}
-
 TEST_F(GfxCoreHelperTest, givenAUBDumpForceAllToLocalMemoryDebugVarWhenSetThenGetEnableLocalMemoryReturnsCorrectValue) {
     DebugManagerStateRestore dbgRestore;
     std::unique_ptr<MockDevice> device(MockDevice::createWithNewExecutionEnvironment<MockDevice>(&hardwareInfo));
@@ -1017,17 +999,19 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, GivenBarrierEncodingWhenCallin
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, GivenVariousValuesWhenCallingCalculateAvailableThreadCountThenCorrectValueIsReturned) {
+    MockExecutionEnvironment mockExecutionEnvironment{};
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
-    auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, 0);
+    auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, 0, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
     EXPECT_EQ(hardwareInfo.gtSystemInfo.ThreadCount, result);
 }
 
 HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, GivenModifiedGtSystemInfoWhenCallingCalculateAvailableThreadCountThenCorrectValueIsReturned) {
+    MockExecutionEnvironment mockExecutionEnvironment{};
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     auto hwInfo = hardwareInfo;
     for (auto threadCount : {1u, 5u, 9u}) {
         hwInfo.gtSystemInfo.ThreadCount = threadCount;
-        auto result = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, 0);
+        auto result = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, 0, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
         EXPECT_EQ(threadCount, result);
     }
 }
@@ -1094,27 +1078,6 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, WhenIsFusedEuDispatchEnabledIs
     EXPECT_FALSE(gfxCoreHelper.isFusedEuDispatchEnabled(hardwareInfo, false));
 }
 
-HWTEST_F(PipeControlHelperTests, WhenProgrammingCacheFlushThenExpectBasicFieldsSet) {
-    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
-    auto buffer = std::make_unique<uint8_t[]>(128);
-
-    LinearStream stream(buffer.get(), 128);
-    MockExecutionEnvironment mockExecutionEnvironment{};
-    MemorySynchronizationCommands<FamilyType>::addFullCacheFlush(stream, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
-    PIPE_CONTROL *pipeControl = genCmdCast<PIPE_CONTROL *>(buffer.get());
-    ASSERT_NE(nullptr, pipeControl);
-
-    EXPECT_TRUE(pipeControl->getCommandStreamerStallEnable());
-    EXPECT_EQ(MemorySynchronizationCommands<FamilyType>::getDcFlushEnable(true, *mockExecutionEnvironment.rootDeviceEnvironments[0]), pipeControl->getDcFlushEnable());
-
-    EXPECT_TRUE(pipeControl->getRenderTargetCacheFlushEnable());
-    EXPECT_TRUE(pipeControl->getInstructionCacheInvalidateEnable());
-    EXPECT_TRUE(pipeControl->getTextureCacheInvalidationEnable());
-    EXPECT_TRUE(pipeControl->getPipeControlFlushEnable());
-    EXPECT_TRUE(pipeControl->getStateCacheInvalidationEnable());
-    EXPECT_TRUE(pipeControl->getTlbInvalidate());
-}
-
 HWTEST_F(PipeControlHelperTests, WhenGettingPipeControSizeForInstructionCacheFlushThenReturnCorrectValue) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     size_t actualSize = MemorySynchronizationCommands<FamilyType>::getSizeForInstructionCacheFlush();
@@ -1143,6 +1106,11 @@ HWTEST2_F(ProductHelperCommonTest, givenBlitterPreferenceWhenEnablingBlitterOper
 
     const auto expectedBlitterSupport = productHelper.obtainBlitterPreference(hardwareInfo);
     EXPECT_EQ(expectedBlitterSupport, hardwareInfo.capabilityTable.blitterOperationsSupported);
+}
+
+HWTEST2_F(ProductHelperCommonTest, whenCallIsAvailableExtendedScratchThenReturnFalse, IsAtMostXe3Core) {
+    auto &productHelper = getHelper<ProductHelper>();
+    EXPECT_FALSE(productHelper.isAvailableExtendedScratch());
 }
 
 HWTEST_F(GfxCoreHelperTest, givenGfxCoreHelperWhenAskingForIsaSystemMemoryPlacementThenReturnFalseIfLocalMemorySupported) {
@@ -1227,7 +1195,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, GfxCoreHelperTest, GivenVariousValuesWhenComputeS
     EXPECT_EQ(7u, gfxCoreHelper.computeSlmValues(hwInfo, 65536, nullptr, false));
 }
 
-HWTEST2_F(GfxCoreHelperTest, GivenZeroSlmSizeWhenComputeSlmSizeIsCalledThenCorrectValueIsReturned, IsHeapfulSupported) {
+HWTEST2_F(GfxCoreHelperTest, GivenZeroSlmSizeWhenComputeSlmSizeIsCalledThenCorrectValueIsReturned, IsHeapfulRequired) {
     using SHARED_LOCAL_MEMORY_SIZE = typename FamilyType::INTERFACE_DESCRIPTOR_DATA::SHARED_LOCAL_MEMORY_SIZE;
     auto hwInfo = *defaultHwInfo;
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
@@ -1256,6 +1224,99 @@ HWTEST_F(GfxCoreHelperTest, whenSetCompressedFlagThenProperFlagSet) {
 
     gfxCoreHelper.applyRenderCompressionFlag(*gmm, 0);
     EXPECT_EQ(0u, gmm->resourceParams.Flags.Info.RenderCompressed);
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenSetNotCompressedFlagThenProperValueReturned, IsAtLeastXe2HpgCore) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto gmmFlags = gmm->gmmResourceInfo->getResourceFlags();
+    gmmFlags->Info.NotCompressed = 0;
+    EXPECT_TRUE(gfxCoreHelper.isCompressionAppliedForImportedResource(*gmm));
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenSetRenderCompressedFlagThenProperValueReturned, IsAtMostDg2) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto gmmFlags = gmm->gmmResourceInfo->getResourceFlags();
+    gmmFlags->Info.RenderCompressed = 1;
+    gmmFlags->Info.MediaCompressed = 0;
+    EXPECT_TRUE(gfxCoreHelper.isCompressionAppliedForImportedResource(*gmm));
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenCheckingCrossEngineCacheFlushRequirementThenReturnTrue, IsAtMostDg2) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+    EXPECT_TRUE(gfxCoreHelper.crossEngineCacheFlushRequired());
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenSetMediaCompressedFlagThenProperValueReturned, IsAtMostDg2) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto gmmFlags = gmm->gmmResourceInfo->getResourceFlags();
+    gmmFlags->Info.RenderCompressed = 0;
+    gmmFlags->Info.MediaCompressed = 1;
+    EXPECT_TRUE(gfxCoreHelper.isCompressionAppliedForImportedResource(*gmm));
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenSetRenderAndMediaCompressedFlagsThenProperValueReturned, IsAtMostDg2) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+    auto gmm = std::make_unique<MockGmm>(pDevice->getGmmHelper());
+    auto gmmFlags = gmm->gmmResourceInfo->getResourceFlags();
+    gmmFlags->Info.RenderCompressed = 1;
+    gmmFlags->Info.MediaCompressed = 1;
+    EXPECT_TRUE(gfxCoreHelper.isCompressionAppliedForImportedResource(*gmm));
+}
+
+class MockGmmResourceInfoWithDenyCompression : public MockGmmResourceInfo {
+  public:
+    MockGmmResourceInfoWithDenyCompression(GMM_RESCREATE_PARAMS *resourceCreateParams) : MockGmmResourceInfo(resourceCreateParams) {}
+    MockGmmResourceInfoWithDenyCompression(GMM_RESOURCE_INFO *inputGmmResourceInfo) : MockGmmResourceInfo(inputGmmResourceInfo) {}
+
+    bool isResourceDenyCompressionEnabled() override {
+        return true;
+    }
+};
+
+HWTEST_F(GfxCoreHelperTest, givenResourceDenyCompressionEnabledWhenIsCompressionAppliedForImportedResourceCalledThenReturnsFalse) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+
+    // Create GMM params for a compressed resource
+    GMM_RESCREATE_PARAMS gmmParams = {};
+    gmmParams.Type = GMM_RESOURCE_TYPE::RESOURCE_BUFFER;
+    gmmParams.Format = GMM_FORMAT_GENERIC_8BIT;
+    gmmParams.BaseWidth64 = 1024;
+    gmmParams.BaseHeight = 1;
+    gmmParams.Depth = 1;
+    gmmParams.Flags.Info.NotCompressed = 0; // Compression enabled in flags
+
+    // Create our custom mock that returns true for isResourceDenyCompressionEnabled
+    auto mockGmmResourceInfo = std::make_unique<MockGmmResourceInfoWithDenyCompression>(&gmmParams);
+    MockGmm mockGmm(pDevice->getGmmHelper());
+    mockGmm.gmmResourceInfo.reset(mockGmmResourceInfo.release());
+
+    // Even though NotCompressed = 0 (compression enabled), the deny compression should override it
+    EXPECT_FALSE(gfxCoreHelper.isCompressionAppliedForImportedResource(mockGmm));
+}
+
+HWTEST_F(GfxCoreHelperTest, givenResourceDenyCompressionEnabledWhenRenderAndMediaCompressionAreSetThenIsCompressionAppliedIsFalse) {
+    auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
+
+    // Create GMM params for a compressed resource
+    GMM_RESCREATE_PARAMS gmmParams = {};
+    gmmParams.Type = GMM_RESOURCE_TYPE::RESOURCE_BUFFER;
+    gmmParams.Format = GMM_FORMAT_GENERIC_8BIT;
+    gmmParams.BaseWidth64 = 1024;
+    gmmParams.BaseHeight = 1;
+    gmmParams.Depth = 1;
+    gmmParams.Flags.Info.RenderCompressed = 1;
+    gmmParams.Flags.Info.MediaCompressed = 1;
+
+    // Create our custom mock that returns true for isResourceDenyCompressionEnabled
+    auto mockGmmResourceInfo = std::make_unique<MockGmmResourceInfoWithDenyCompression>(&gmmParams);
+    MockGmm mockGmm(pDevice->getGmmHelper());
+    mockGmm.gmmResourceInfo.reset(mockGmmResourceInfo.release());
+
+    // Even though Render and Media compression are enabled, the deny compression should override it
+    EXPECT_FALSE(gfxCoreHelper.isCompressionAppliedForImportedResource(mockGmm));
 }
 
 HWTEST_F(GfxCoreHelperTest, whenAdjustPreemptionSurfaceSizeIsCalledThenCsrSizeDoesntChange) {
@@ -1855,12 +1916,13 @@ HWTEST_F(GfxCoreHelperTest, whenEncodeAdditionalTimestampOffsetsThenNothingEncod
 HWTEST2_F(GfxCoreHelperTest, GivenVariousValuesWhenCallingCalculateAvailableThreadCountAndThreadCountAvailableIsBiggerThenCorrectValueIsReturned, IsAtMostXe2HpgCore) {
     std::array<std::pair<uint32_t, uint32_t>, 2> grfTestInputs = {{{128, 8},
                                                                    {256, 4}}};
+    MockExecutionEnvironment mockExecutionEnvironment{};
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     for (const auto &[grfCount, expectedThreadCountPerEu] : grfTestInputs) {
         auto expected = expectedThreadCountPerEu * hardwareInfo.gtSystemInfo.EUCount;
-        // force allways bigger Thread Count available
+        // force always bigger Thread Count available
         hardwareInfo.gtSystemInfo.ThreadCount = 2 * expected;
-        auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, grfCount);
+        auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, grfCount, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
         EXPECT_EQ(expected, result);
     }
 }
@@ -1870,12 +1932,13 @@ HWTEST2_F(GfxCoreHelperTest, GivenVariousValuesWhenCallingCalculateAvailableThre
         {128, 8},
         {256, 4},
     }};
+    MockExecutionEnvironment mockExecutionEnvironment{};
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     for (const auto &[grfCount, expectedThreadCountPerEu] : grfTestInputs) {
         auto calculatedThreadCount = expectedThreadCountPerEu * hardwareInfo.gtSystemInfo.EUCount;
         // force thread count smaller than calculation
         hardwareInfo.gtSystemInfo.ThreadCount = calculatedThreadCount / 2;
-        auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, grfCount);
+        auto result = gfxCoreHelper.calculateAvailableThreadCount(hardwareInfo, grfCount, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
         EXPECT_EQ(hardwareInfo.gtSystemInfo.ThreadCount, result);
     }
 }
@@ -1883,13 +1946,14 @@ HWTEST2_F(GfxCoreHelperTest, GivenVariousValuesWhenCallingCalculateAvailableThre
 HWTEST2_F(GfxCoreHelperTest, GivenModifiedGtSystemInfoWhenCallingCalculateAvailableThreadCountThenCorrectValueIsReturned, IsAtMostXe2HpgCore) {
     std::array<std::pair<uint32_t, uint32_t>, 2> testInputs = {{{64, 256},
                                                                 {128, 512}}};
+    MockExecutionEnvironment mockExecutionEnvironment{};
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     auto hwInfo = hardwareInfo;
     for (const auto &[euCount, expectedThreadCount] : testInputs) {
         // force thread count bigger than expected
         hwInfo.gtSystemInfo.ThreadCount = 1024;
         hwInfo.gtSystemInfo.EUCount = euCount;
-        auto result = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, 256);
+        auto result = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, 256, *mockExecutionEnvironment.rootDeviceEnvironments[0]);
         EXPECT_EQ(expectedThreadCount, result);
     }
 }
@@ -1937,6 +2001,11 @@ HWTEST2_F(GfxCoreHelperTest, whenIsCacheFlushPriorImageReadRequiredCalledThenFal
     EXPECT_FALSE(helper.isCacheFlushPriorImageReadRequired());
 }
 
+HWTEST2_F(GfxCoreHelperTest, whenIsExtendedUsmPoolSizeEnabledRequiredCalledThenFalseIsReturned, IsAtMostXeCore) {
+    auto &helper = getHelper<GfxCoreHelper>();
+    EXPECT_FALSE(helper.isExtendedUsmPoolSizeEnabled());
+}
+
 HWTEST2_F(GfxCoreHelperTest, givenAtLeastXe2HpgWhenSetStallOnlyBarrierThenPipeControlProgrammed, IsAtMostXeCore) {
     using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
     constexpr static auto bufferSize = sizeof(PIPE_CONTROL);
@@ -1955,7 +2024,27 @@ HWTEST2_F(GfxCoreHelperTest, givenAtLeastXe2HpgWhenSetStallOnlyBarrierThenPipeCo
     EXPECT_TRUE(hwParser.isStallingBarrier<FamilyType>(itor));
 }
 
-TEST_F(GfxCoreHelperTest, whenGetQueuePriorityLevelsQueriedThen2IsReturned) {
+HWTEST_F(GfxCoreHelperTest, givenCommandCacheInvalidateFlagSetWhenProgrammingBarrierThenExpectFieldSet) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    constexpr static size_t bufferSize = 64;
+    alignas(4) char streamBuffer[bufferSize];
+    LinearStream stream(streamBuffer, bufferSize);
+    PipeControlArgs args;
+    args.commandCacheInvalidateEnable = true;
+
+    MemorySynchronizationCommands<FamilyType>::addSingleBarrier(stream, args);
+
+    HardwareParse hwParser;
+    hwParser.parseCommands<FamilyType>(stream, 0);
+    GenCmdList pipeControlList = hwParser.getCommandsList<PIPE_CONTROL>();
+    EXPECT_EQ(1u, pipeControlList.size());
+    GenCmdList::iterator itor = pipeControlList.begin();
+    auto pipeControl = genCmdCast<PIPE_CONTROL *>(*itor);
+    EXPECT_TRUE(pipeControl->getCommandCacheInvalidateEnable());
+}
+
+HWTEST2_F(GfxCoreHelperTest, whenGetQueuePriorityLevelsQueriedThen2IsReturned, IsAtMostXe3Core) {
     auto &gfxCoreHelper = getHelper<GfxCoreHelper>();
     EXPECT_EQ(2u, gfxCoreHelper.getQueuePriorityLevels());
 }

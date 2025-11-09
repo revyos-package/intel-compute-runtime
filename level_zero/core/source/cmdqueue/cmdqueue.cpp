@@ -23,6 +23,7 @@
 #include "shared/source/os_interface/os_context.h"
 #include "shared/source/os_interface/product_helper.h"
 
+#include "level_zero/core/source/cmdlist/cmdlist_imp.h"
 #include "level_zero/core/source/cmdqueue/cmdqueue_imp.h"
 #include "level_zero/core/source/device/device.h"
 #include "level_zero/core/source/device/device_imp.h"
@@ -39,6 +40,16 @@ CommandQueueAllocatorFn commandQueueFactory[IGFX_MAX_PRODUCT] = {};
 
 bool CommandQueue::frontEndTrackingEnabled() const {
     return NEO::debugManager.flags.AllowPatchingVfeStateInCommandLists.get() || this->frontEndStateTracking;
+}
+
+void CommandQueue::saveTagAndTaskCountForCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *commandListHandles,
+                                                      NEO::GraphicsAllocation *tagGpuAllocation, TaskCountType submittedTaskCount) {
+    if (this->saveWaitForPreamble) {
+        for (uint32_t i = 0; i < numCommandLists; i++) {
+            auto commandList = CommandList::fromHandle(commandListHandles[i]);
+            commandList->saveLatestTagAndTaskCount(tagGpuAllocation, submittedTaskCount);
+        }
+    }
 }
 
 CommandQueueImp::CommandQueueImp(Device *device, NEO::CommandStreamReceiver *csr, const ze_command_queue_desc_t *desc)
@@ -144,7 +155,6 @@ NEO::SubmissionStatus CommandQueueImp::submitBatchBuffer(size_t offset, NEO::Res
         commandStream.getGraphicsAllocation()->updateResidencyTaskCount(csr->peekTaskCount(), csr->getOsContext().getContextId());
         return ret;
     }
-
     buffers.setCurrentFlushStamp(csr->peekTaskCount(), csr->obtainCurrentFlushStamp());
 
     return ret;
@@ -188,6 +198,8 @@ ze_result_t CommandQueueImp::synchronizeByPollingForTaskCount(uint64_t timeoutNa
     }
 
     postSyncOperations(false);
+    getCsr()->pollForAubCompletion();
+
     return ZE_RESULT_SUCCESS;
 }
 
@@ -396,6 +408,11 @@ void CommandQueueImp::makeResidentForResidencyContainer(const NEO::ResidencyCont
         alloc->prepareHostPtrForResidency(csr);
         csr->makeResident(*alloc);
     }
+}
+
+bool CommandQueueImp::checkNeededPatchPreambleWait(CommandList *commandList) {
+    uint64_t tagGpuAddress = commandList->getLatestTagGpuAddress();
+    return this->saveWaitForPreamble && (tagGpuAddress != 0) && (getCsr()->getTagAllocation()->getGpuAddress() != tagGpuAddress);
 }
 
 } // namespace L0

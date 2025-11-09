@@ -98,7 +98,7 @@ class GfxCoreHelper {
     virtual uint32_t getMetricsLibraryGenId() const = 0;
     virtual uint32_t getMocsIndex(const GmmHelper &gmmHelper, bool l3enabled, bool l1enabled) const = 0;
     virtual uint8_t getBarriersCountFromHasBarriers(uint8_t hasBarriers) const = 0;
-    virtual uint32_t calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount) const = 0;
+    virtual uint32_t calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount, const RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
     virtual uint32_t calculateMaxWorkGroupSize(const KernelDescriptor &kernelDescriptor, uint32_t defaultMaxGroupSize, const RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
     virtual uint32_t alignSlmSize(uint32_t slmSize) const = 0;
     virtual uint32_t computeSlmValues(const HardwareInfo &hwInfo, uint32_t slmSize, ReleaseHelper *releaseHelper, bool isHeapless) const = 0;
@@ -134,7 +134,7 @@ class GfxCoreHelper {
     virtual uint32_t adjustMaxWorkGroupCount(uint32_t maxWorkGroupCount, const EngineGroupType engineGroupType,
                                              const RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
     virtual uint32_t adjustMaxWorkGroupSize(const uint32_t grfCount, const uint32_t simd, const uint32_t defaultMaxGroupSize, const RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
-    virtual size_t getMaxFillPaternSizeForCopyEngine() const = 0;
+    virtual size_t getMaxFillPatternSizeForCopyEngine() const = 0;
     virtual bool isCpuImageTransferPreferred(const HardwareInfo &hwInfo) const = 0;
     virtual aub_stream::MMIOList getExtraMmioList(const HardwareInfo &hwInfo, const GmmHelper &gmmHelper) const = 0;
     virtual bool isSubDeviceEngineSupported(const RootDeviceEnvironment &rootDeviceEnvironment, const DeviceBitfield &deviceBitfield, aub_stream::EngineType engineType) const = 0;
@@ -146,6 +146,7 @@ class GfxCoreHelper {
     virtual size_t getTimestampPacketAllocatorAlignment() const = 0;
     virtual size_t getSingleTimestampPacketSize() const = 0;
     virtual void applyAdditionalCompressionSettings(Gmm &gmm, bool isNotCompressed) const = 0;
+    virtual bool isCompressionAppliedForImportedResource(Gmm &gmm) const = 0;
     virtual void applyRenderCompressionFlag(Gmm &gmm, uint32_t isCompressed) const = 0;
     virtual bool unTypedDataPortCacheFlushRequired() const = 0;
     virtual bool isEngineTypeRemappingToHwSpecificRequired() const = 0;
@@ -219,6 +220,9 @@ class GfxCoreHelper {
     virtual uint32_t getDefaultWalkerInlineDataSize() const = 0;
     virtual uintptr_t getSurfaceBaseAddressAlignmentMask() const = 0;
     virtual uintptr_t getSurfaceBaseAddressAlignment() const = 0;
+
+    virtual bool isExtendedUsmPoolSizeEnabled() const = 0;
+    virtual bool crossEngineCacheFlushRequired() const = 0;
 
     virtual ~GfxCoreHelper() = default;
 
@@ -336,7 +340,7 @@ class GfxCoreHelperHw : public GfxCoreHelper {
 
     uint8_t getBarriersCountFromHasBarriers(uint8_t hasBarriers) const override;
 
-    uint32_t calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount) const override;
+    uint32_t calculateAvailableThreadCount(const HardwareInfo &hwInfo, uint32_t grfCount, const RootDeviceEnvironment &rootDeviceEnvironment) const override;
 
     void alignThreadGroupCountToDssSize(uint32_t &threadCount, uint32_t dssCount, uint32_t threadsPerDss, uint32_t threadGroupSize) const override;
 
@@ -397,7 +401,7 @@ class GfxCoreHelperHw : public GfxCoreHelper {
                                      const RootDeviceEnvironment &rootDeviceEnvironment) const override;
 
     uint32_t adjustMaxWorkGroupSize(const uint32_t grfCount, const uint32_t simd, const uint32_t defaultMaxGroupSize, const RootDeviceEnvironment &rootDeviceEnvironment) const override;
-    size_t getMaxFillPaternSizeForCopyEngine() const override;
+    size_t getMaxFillPatternSizeForCopyEngine() const override;
 
     bool isCpuImageTransferPreferred(const HardwareInfo &hwInfo) const override;
 
@@ -418,6 +422,7 @@ class GfxCoreHelperHw : public GfxCoreHelper {
     static size_t getSingleTimestampPacketSizeHw();
 
     void applyAdditionalCompressionSettings(Gmm &gmm, bool isNotCompressed) const override;
+    bool isCompressionAppliedForImportedResource(Gmm &gmm) const override;
 
     void applyRenderCompressionFlag(Gmm &gmm, uint32_t isCompressed) const override;
 
@@ -487,6 +492,10 @@ class GfxCoreHelperHw : public GfxCoreHelper {
 
     uint32_t getQueuePriorityLevels() const override;
 
+    bool isExtendedUsmPoolSizeEnabled() const override;
+
+    bool crossEngineCacheFlushRequired() const override;
+
     ~GfxCoreHelperHw() override = default;
 
   protected:
@@ -547,7 +556,6 @@ struct MemorySynchronizationCommands {
 
     static bool getDcFlushEnable(bool isFlushPreferred, const RootDeviceEnvironment &rootDeviceEnvironment);
 
-    static void addFullCacheFlush(LinearStream &commandStream, const RootDeviceEnvironment &rootDeviceEnvironment);
     static void setCacheFlushExtraProperties(PipeControlArgs &args);
     static void addStateCacheFlush(LinearStream &commandStream, const RootDeviceEnvironment &rootDeviceEnvironment);
     static void addInstructionCacheFlush(LinearStream &commandStream);

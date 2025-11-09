@@ -21,7 +21,6 @@
 #include "level_zero/tools/source/metrics/metric.h"
 
 #include "driver_version.h"
-#include "log_manager.h"
 
 #include <memory>
 #include <mutex>
@@ -63,9 +62,6 @@ void DriverImp::initialize(ze_result_t *result) {
         executionEnvironment->setDebuggingMode(dbgMode);
     }
 
-    // Logging enablement if opted
-    NEO::initLogger();
-
     if (envVariables.fp64Emulation) {
         executionEnvironment->setFP64EmulationEnabled();
     }
@@ -89,6 +85,15 @@ void DriverImp::initialize(ze_result_t *result) {
         auto driverHandle = DriverHandle::create(std::move(devices), envVariables, result);
         if (driverHandle) {
             globalDriverHandles->push_back(driverHandle);
+
+            auto &devicesToExpose = static_cast<DriverHandleImp *>(driverHandle)->devicesToExpose;
+            std::vector<NEO::Device *> neoDeviceToExpose;
+            neoDeviceToExpose.reserve(devicesToExpose.size());
+            for (auto deviceToExpose : devicesToExpose) {
+                neoDeviceToExpose.push_back(Device::fromHandle(deviceToExpose)->getNEODevice());
+            }
+
+            NEO::Device::initializePeerAccessForDevices(DeviceImp::queryPeerAccess, neoDeviceToExpose);
         }
     }
 

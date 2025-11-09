@@ -21,6 +21,7 @@
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/ptr_math.h"
 #include "shared/source/helpers/string.h"
+#include "shared/source/helpers/topology.h"
 #include "shared/source/os_interface/linux/drm_buffer_object.h"
 #include "shared/source/os_interface/linux/drm_neo.h"
 #include "shared/source/os_interface/linux/engine_info.h"
@@ -75,6 +76,14 @@ const char *IoctlHelperXe::xeGetBindOperationName(int bindOperation) {
 }
 
 const char *IoctlHelperXe::xeGetAdviseOperationName(int adviseOperation) {
+    switch (adviseOperation) {
+    case DRM_XE_MEM_RANGE_ATTR_PREFERRED_LOC:
+        return "PREFERRED_LOC";
+    case DRM_XE_MEM_RANGE_ATTR_ATOMIC:
+        return "ATOMIC";
+    case DRM_XE_MEM_RANGE_ATTR_PAT:
+        return "PAT";
+    }
     return "Unknown operation";
 }
 
@@ -163,7 +172,8 @@ bool IoctlHelperXe::queryDeviceIdAndRevision(Drm &drm) {
 
     if ((debugManager.flags.EnableRecoverablePageFaults.get() != 0) && (debugManager.flags.EnableSharedSystemUsmSupport.get() == 1) && (config->info[DRM_XE_QUERY_CONFIG_FLAGS] & DRM_XE_QUERY_CONFIG_FLAG_HAS_CPU_ADDR_MIRROR)) {
         drm.setSharedSystemAllocEnable(true);
-        drm.setPageFaultSupported(true);
+    } else {
+        printDebugString(debugManager.flags.PrintDebugMessages.get(), stderr, "%s", "Shared System USM NOT allowed: KMD does not support\n");
     }
     return true;
 }
@@ -212,8 +222,17 @@ bool IoctlHelperXe::initialize() {
 
     xeLog("DRM_XE_QUERY_CONFIG_MAX_EXEC_QUEUE_PRIORITY\t\t%#llx\n",
           config->info[DRM_XE_QUERY_CONFIG_MAX_EXEC_QUEUE_PRIORITY]);
+    xeLog("  DRM_XE_QUERY_CONFIG_FLAG_HAS_LOW_LATENCY\t%s\n",
+          config->info[DRM_XE_QUERY_CONFIG_FLAGS] &
+                  DRM_XE_QUERY_CONFIG_FLAG_HAS_LOW_LATENCY
+              ? "ON"
+              : "OFF");
 
     maxExecQueuePriority = config->info[DRM_XE_QUERY_CONFIG_MAX_EXEC_QUEUE_PRIORITY] & 0xffff;
+    isLowLatencyHintAvailable = config->info[DRM_XE_QUERY_CONFIG_FLAGS] & DRM_XE_QUERY_CONFIG_FLAG_HAS_LOW_LATENCY;
+    if (debugManager.flags.ForceLowLatencyHint.get() != -1) {
+        isLowLatencyHintAvailable = !!debugManager.flags.ForceLowLatencyHint.get();
+    }
 
     memset(&queryConfig, 0, sizeof(queryConfig));
     queryConfig.query = DRM_XE_DEVICE_QUERY_HWCONFIG;
@@ -515,132 +534,65 @@ bool IoctlHelperXe::setGpuCpuTimes(TimeStampData *pGpuCpuTime, OSTime *osTime) {
 }
 
 bool IoctlHelperXe::getTopologyDataAndMap(const HardwareInfo &hwInfo, DrmQueryTopologyData &topologyData, TopologyMap &topologyMap) {
+    const auto queryGtTopology = queryData<uint8_t>(DRM_XE_DEVICE_QUERY_GT_TOPOLOGY);
 
-    auto queryGtTopology = queryData<uint8_t>(DRM_XE_DEVICE_QUERY_GT_TOPOLOGY);
-
-    auto fillMask = [](std::vector<std::bitset<8>> &vec, drm_xe_query_topology_mask *topo) {
-        for (uint32_t j = 0; j < topo->num_bytes; j++) {
-            vec.push_back(topo->mask[j]);
-        }
-    };
-
-    StackVec<std::vector<std::bitset<8>>, 2> geomDss;
-    StackVec<std::vector<std::bitset<8>>, 2> computeDss;
-    StackVec<std::vector<std::bitset<8>>, 2> euDss;
-    StackVec<std::vector<std::bitset<8>>, 2> l3Banks;
+    const auto numTiles = tileIdToGtId.size();
+    std::vector<TopologyBitmap> topologyBitmap(numTiles);
 
     auto topologySize = queryGtTopology.size();
     auto dataPtr = queryGtTopology.data();
 
-    auto numTiles = tileIdToGtId.size();
-    geomDss.resize(numTiles);
-    computeDss.resize(numTiles);
-    euDss.resize(numTiles);
-    l3Banks.resize(numTiles);
-    bool receivedDssInfo = false;
     while (topologySize >= sizeof(drm_xe_query_topology_mask)) {
-        drm_xe_query_topology_mask *topo = reinterpret_cast<drm_xe_query_topology_mask *>(dataPtr);
+        const drm_xe_query_topology_mask *topo = reinterpret_cast<const drm_xe_query_topology_mask *>(dataPtr);
         UNRECOVERABLE_IF(topo == nullptr);
 
-        uint32_t gtId = topo->gt_id;
-        auto tileId = gtIdToTileId[gtId];
+        const auto gtId = topo->gt_id;
+        const auto tileId = gtIdToTileId[gtId];
 
         if (tileId != invalidIndex) {
+            const auto bytes = std::span<const uint8_t>(topo->mask, topo->num_bytes);
+
             switch (topo->type) {
             case DRM_XE_TOPO_DSS_GEOMETRY:
-                fillMask(geomDss[tileId], topo);
-                receivedDssInfo = true;
+                topologyBitmap[tileId].dssGeometry = bytes;
                 break;
             case DRM_XE_TOPO_DSS_COMPUTE:
-                fillMask(computeDss[tileId], topo);
-                receivedDssInfo = true;
+                topologyBitmap[tileId].dssCompute = bytes;
                 break;
             case DRM_XE_TOPO_L3_BANK:
-                fillMask(l3Banks[tileId], topo);
+                topologyBitmap[tileId].l3Banks = bytes;
                 break;
             case DRM_XE_TOPO_EU_PER_DSS:
             case DRM_XE_TOPO_SIMD16_EU_PER_DSS:
-                fillMask(euDss[tileId], topo);
+                topologyBitmap[tileId].eu = bytes;
                 break;
             default:
                 xeLog("Unhandle GT Topo type: %d\n", topo->type);
             }
         }
 
-        uint32_t itemSize = sizeof(drm_xe_query_topology_mask) + topo->num_bytes;
+        const auto itemSize = sizeof(drm_xe_query_topology_mask) + topo->num_bytes;
         topologySize -= itemSize;
         dataPtr = ptrOffset(dataPtr, itemSize);
     }
 
-    int sliceCount = 0;
-    int subSliceCount = 0;
-    int euPerDss = 0;
-    int l3BankCount = 0;
-    uint32_t hwMaxSubSliceCount = hwInfo.gtSystemInfo.MaxSubSlicesSupported;
-    topologyData.maxSlices = hwInfo.gtSystemInfo.MaxSlicesSupported ? hwInfo.gtSystemInfo.MaxSlicesSupported : 1;
-    topologyData.maxSubSlicesPerSlice = hwMaxSubSliceCount / topologyData.maxSlices;
+    const TopologyLimits topologyLimits{
+        .maxSlices = static_cast<int>(hwInfo.gtSystemInfo.MaxSlicesSupported),
+        .maxSubSlicesPerSlice = static_cast<int>(hwInfo.gtSystemInfo.MaxSubSlicesSupported / hwInfo.gtSystemInfo.MaxSlicesSupported),
+        .maxEusPerSubSlice = static_cast<int>(hwInfo.gtSystemInfo.MaxEuPerSubSlice),
+    };
 
-    for (auto tileId = 0u; tileId < numTiles; tileId++) {
+    const auto topologyInfo = getTopologyInfoMultiTile(topologyBitmap, topologyLimits, topologyMap);
 
-        int subSliceCountPerTile = 0;
+    topologyData.sliceCount = topologyInfo.sliceCount;
+    topologyData.subSliceCount = topologyInfo.subSliceCount;
+    topologyData.numL3Banks = topologyInfo.l3BankCount;
+    topologyData.euCount = topologyInfo.euCount;
+    topologyData.maxSlices = topologyLimits.maxSlices;
+    topologyData.maxSubSlicesPerSlice = topologyLimits.maxSubSlicesPerSlice;
+    topologyData.maxEusPerSubSlice = topologyLimits.maxEusPerSubSlice;
 
-        std::vector<int> sliceIndices;
-        std::vector<int> subSliceIndices;
-
-        int previouslyEnabledSlice = -1;
-
-        auto processSubSliceInfo = [&](const std::vector<std::bitset<8>> &subSliceInfo) -> void {
-            for (auto subSliceId = 0u; subSliceId < std::min(hwMaxSubSliceCount, static_cast<uint32_t>(subSliceInfo.size() * 8)); subSliceId++) {
-                auto byte = subSliceId / 8;
-                auto bit = subSliceId & 0b111;
-                int sliceId = static_cast<int>(subSliceId / topologyData.maxSubSlicesPerSlice);
-                if (subSliceInfo[byte].test(bit)) {
-                    subSliceIndices.push_back(subSliceId);
-                    subSliceCountPerTile++;
-                    if (sliceId != previouslyEnabledSlice) {
-                        previouslyEnabledSlice = sliceId;
-                        sliceIndices.push_back(sliceId);
-                    }
-                }
-            }
-        };
-        processSubSliceInfo(computeDss[tileId]);
-
-        if (subSliceCountPerTile == 0) {
-            processSubSliceInfo(geomDss[tileId]);
-        }
-
-        topologyMap[tileId].sliceIndices = std::move(sliceIndices);
-        if (topologyMap[tileId].sliceIndices.size() < 2u) {
-            topologyMap[tileId].subsliceIndices = std::move(subSliceIndices);
-        }
-        int sliceCountPerTile = static_cast<int>(topologyMap[tileId].sliceIndices.size());
-
-        int euPerDssPerTile = 0;
-        for (auto byte = 0u; byte < euDss[tileId].size(); byte++) {
-            euPerDssPerTile += euDss[tileId][byte].count();
-        }
-
-        int l3BankCountPerTile = 0;
-        for (auto byte = 0u; byte < l3Banks[tileId].size(); byte++) {
-            l3BankCountPerTile += l3Banks[tileId][byte].count();
-        }
-
-        // pick smallest config
-        sliceCount = (sliceCount == 0) ? sliceCountPerTile : std::min(sliceCount, sliceCountPerTile);
-        subSliceCount = (subSliceCount == 0) ? subSliceCountPerTile : std::min(subSliceCount, subSliceCountPerTile);
-        euPerDss = (euPerDss == 0) ? euPerDssPerTile : std::min(euPerDss, euPerDssPerTile);
-        l3BankCount = (l3BankCount == 0) ? l3BankCountPerTile : std::min(l3BankCount, l3BankCountPerTile);
-
-        // pick max config
-        topologyData.maxEusPerSubSlice = std::max(topologyData.maxEusPerSubSlice, euPerDssPerTile);
-    }
-
-    topologyData.sliceCount = sliceCount;
-    topologyData.subSliceCount = subSliceCount;
-    topologyData.euCount = subSliceCount * euPerDss;
-    topologyData.numL3Banks = l3BankCount;
-    return receivedDssInfo;
+    return topologyInfo.subSliceCount != 0;
 }
 
 void IoctlHelperXe::updateBindInfo(uint64_t userPtr) {
@@ -819,17 +771,63 @@ int IoctlHelperXe::waitUserFence(uint32_t ctxId, uint64_t address,
 
 uint32_t IoctlHelperXe::getAtomicAdvise(bool /* isNonAtomic */) {
     xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
-    return 0;
+    return DRM_XE_MEM_RANGE_ATTR_ATOMIC;
 }
 
 uint32_t IoctlHelperXe::getAtomicAccess(AtomicAccessMode mode) {
     xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
-    return 0;
+
+    uint32_t retVal = 0;
+    switch (mode) {
+    case AtomicAccessMode::device:
+        retVal = static_cast<uint32_t>(this->getDrmParamValue(DrmParam::atomicClassDevice));
+        break;
+    case AtomicAccessMode::system:
+        retVal = static_cast<uint32_t>(this->getDrmParamValue(DrmParam::atomicClassGlobal));
+        break;
+    case AtomicAccessMode::host:
+        retVal = static_cast<uint32_t>(this->getDrmParamValue(DrmParam::atomicClassSystem));
+        break;
+    case AtomicAccessMode::none:
+        retVal = static_cast<uint32_t>(this->getDrmParamValue(DrmParam::atomicClassUndefined));
+        break;
+    default:
+        xeLog(" Invalid advise mode %s\n", __FUNCTION__);
+        break;
+    }
+
+    return retVal;
+}
+
+uint64_t IoctlHelperXe::getPreferredLocationArgs(MemAdvise memAdviseOp) {
+    xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
+    uint64_t param = 0;
+
+    switch (memAdviseOp) {
+    case MemAdvise::setPreferredLocation:
+    case MemAdvise::clearPreferredLocation:
+
+    case MemAdvise::clearSystemMemoryPreferredLocation: {
+        // Assumes that the default location is Device VRAM.
+        const auto preferredLocation = static_cast<uint64_t>(getDrmParamValue(DrmParam::memoryAdviseLocationDevice));
+        const auto policy = static_cast<uint64_t>(getDrmParamValue(DrmParam::memoryAdviseMigrationPolicyAllPages));
+        param = (preferredLocation << 32) | policy;
+    } break;
+    case MemAdvise::setSystemMemoryPreferredLocation: {
+        const auto preferredLocation = static_cast<uint64_t>(getDrmParamValue(DrmParam::memoryAdviseLocationSystem));
+        const auto policy = static_cast<uint64_t>(getDrmParamValue(DrmParam::memoryAdviseMigrationPolicySystemPages));
+        param = (preferredLocation << 32) | policy;
+    } break;
+    default:
+        xeLog(" Invalid advise operation %s\n", __FUNCTION__);
+        break;
+    }
+    return param;
 }
 
 uint32_t IoctlHelperXe::getPreferredLocationAdvise() {
     xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
-    return 0;
+    return DRM_XE_MEM_RANGE_ATTR_PREFERRED_LOC;
 }
 
 std::optional<MemoryClassInstance> IoctlHelperXe::getPreferredLocationRegion(PreferredLocation memoryLocation, uint32_t memoryInstance) {
@@ -838,31 +836,129 @@ std::optional<MemoryClassInstance> IoctlHelperXe::getPreferredLocationRegion(Pre
 
 bool IoctlHelperXe::setVmBoAdvise(int32_t handle, uint32_t attribute, void *region) {
     xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
-    // There is no vmAdvise attribute in Xe, so return success
     return true;
 }
 
+inline void setMemoryAdvisePreferredLocationParam(drm_xe_madvise &vmAdvise, const uint64_t param) {
+
+    uint32_t devmemFd = static_cast<uint32_t>(param >> 32);
+    uint16_t migrationPolicy = static_cast<uint16_t>(param & 0xFFFF);
+
+    vmAdvise.preferred_mem_loc.devmem_fd = devmemFd;
+    vmAdvise.preferred_mem_loc.migration_policy = migrationPolicy;
+}
+
+inline void setMemoryAdviseAtomicParam(drm_xe_madvise &vmAdvise, const uint64_t param) {
+
+    uint32_t val = static_cast<uint32_t>(param);
+    vmAdvise.atomic.val = val;
+}
+
 bool IoctlHelperXe::setVmSharedSystemMemAdvise(uint64_t handle, const size_t size, const uint32_t attribute, const uint64_t param, const std::vector<uint32_t> &vmIds) {
-    std::string vmIdsStr = "[";
-    for (size_t i = 0; i < vmIds.size(); ++i) {
-        {
-            std::stringstream ss;
-            ss << std::hex << vmIds[i];
-            vmIdsStr += "0x" + ss.str();
-        }
-        if (i != vmIds.size() - 1) {
-            vmIdsStr += ", ";
+    xeLog(" -> IoctlHelperXe::%s h=0x%x s=0x%lx\n", __FUNCTION__, handle, size);
+
+    drm_xe_madvise vmAdvise{};
+    vmAdvise.start = alignDown(handle, MemoryConstants::pageSize);
+    vmAdvise.range = alignSizeWholePage(reinterpret_cast<void *>(handle), size);
+
+    vmAdvise.type = attribute;
+
+    if (vmAdvise.type == this->getPreferredLocationAdvise()) {
+        // Set preferred location param.
+        setMemoryAdvisePreferredLocationParam(vmAdvise, param);
+    } else if (vmAdvise.type == this->getAtomicAdvise(false)) {
+        // Set atomic access param.
+        setMemoryAdviseAtomicParam(vmAdvise, param);
+    } else {
+        xeLog(" Invalid advise operation %s\n", __FUNCTION__);
+        return false;
+    }
+
+    for (auto vmId : vmIds) {
+
+        // Call madvise on all VM Ids.
+        vmAdvise.vm_id = vmId;
+        auto ret = IoctlHelper::ioctl(DrmIoctl::gemVmAdvise, &vmAdvise);
+
+        xeLog(" vm=%d start=0x%lx size=0x%lx param=0x%lx operation=%d(%s) ret=%d\n",
+              vmAdvise.vm_id,
+              vmAdvise.start,
+              vmAdvise.range,
+              param,
+              vmAdvise.type,
+              xeGetAdviseOperationName(vmAdvise.type),
+              ret);
+
+        if (ret != 0) {
+            xeLog("error: %s ret=%d\n", xeGetAdviseOperationName(vmAdvise.type), ret);
+            return false;
         }
     }
-    vmIdsStr += "]";
-    xeLog(" -> IoctlHelperXe::%s h=0x%x s=0x%lx vmids=%s\n", __FUNCTION__, handle, size, vmIdsStr.c_str());
-    // There is no vmAdvise attribute in Xe, so return success
+
     return true;
+}
+
+AtomicAccessMode IoctlHelperXe::getVmSharedSystemAtomicAttribute(uint64_t handle, const size_t size, const uint32_t vmId) {
+
+    xeLog(" -> IoctlHelperXe::%s h=0x%x s=0x%lx vmids=%d\n", __FUNCTION__, handle, size, vmId);
+
+    drm_xe_vm_query_mem_range_attr query{};
+
+    query.vm_id = vmId;
+    query.start = handle;
+    query.range = size;
+
+    // First ioctl call to get num of mem regions and sizeof each attribute
+    auto ret = IoctlHelper::ioctl(DrmIoctl::gemVmGetMemRangeAttr, &query);
+
+    xeLog(" vm=%d start=0x%lx size=0x%lx num_mem_ranges=%d sizeof_mem_range_attr=%d ret=%d\n",
+          query.vm_id, query.start, query.range, query.num_mem_ranges, query.sizeof_mem_range_attr, ret);
+
+    if (ret != 0) {
+        xeLog("error: %s ret=%d\n", "QUERY RANGE ATTR", ret);
+        return AtomicAccessMode::invalid;
+    }
+
+    if (sizeof(drm_xe_mem_range_attr) != query.sizeof_mem_range_attr) {
+        xeLog("Error: sizeof(drm_xe_mem_range_attr) != query.sizeof_mem_range_attr\n");
+        return AtomicAccessMode::invalid;
+    }
+
+    if (query.num_mem_ranges > 1) {
+        xeLog("Error: More than one memory ranges found for vmId %d\n", query.vm_id);
+        return AtomicAccessMode::invalid;
+    }
+
+    // Allocate buffer for the memory region attributes.
+    drm_xe_mem_range_attr attr = {};
+    query.vector_of_mem_attr = reinterpret_cast<uintptr_t>(&attr);
+
+    // Second ioctl call to actually fill the memory attributes.
+    ret = IoctlHelper::ioctl(DrmIoctl::gemVmGetMemRangeAttr, &query);
+
+    xeLog(" vm=%d start=0x%lx size=0x%lx num_mem_ranges=%d sizeof_mem_range_attr=%d ret=%d\n",
+          query.vm_id, query.start, query.range, query.num_mem_ranges, query.sizeof_mem_range_attr, ret);
+
+    uint32_t val = attr.atomic.val;
+    xeLog("Found atomic attribute: val=0x%x\n", val);
+
+    int atomicValue = static_cast<int>(val);
+    if (atomicValue == this->getDrmParamValue(DrmParam::atomicClassDevice)) {
+        return AtomicAccessMode::device;
+    } else if (atomicValue == this->getDrmParamValue(DrmParam::atomicClassGlobal)) {
+        return AtomicAccessMode::system;
+    } else if (atomicValue == this->getDrmParamValue(DrmParam::atomicClassSystem)) {
+        return AtomicAccessMode::host;
+    } else if (atomicValue == this->getDrmParamValue(DrmParam::atomicClassUndefined)) {
+        return AtomicAccessMode::none;
+    } else {
+        xeLog("Unknown atomic access mode: 0x%x\n", val);
+    }
+    return AtomicAccessMode::invalid;
 }
 
 bool IoctlHelperXe::setVmBoAdviseForChunking(int32_t handle, uint64_t start, uint64_t length, uint32_t attribute, void *region) {
     xeLog(" -> IoctlHelperXe::%s\n", __FUNCTION__);
-    // There is no vmAdvise attribute in Xe, so return success
     return true;
 }
 
@@ -1135,17 +1231,25 @@ int IoctlHelperXe::getDrmParamValue(DrmParam drmParam) const {
     xeLog(" -> IoctlHelperXe::%s 0x%x %s\n", __FUNCTION__, drmParam, getDrmParamString(drmParam).c_str());
     switch (drmParam) {
     case DrmParam::atomicClassUndefined:
-        return -1;
+        return DRM_XE_ATOMIC_UNDEFINED;
     case DrmParam::atomicClassDevice:
-        return -1;
+        return DRM_XE_ATOMIC_DEVICE;
     case DrmParam::atomicClassGlobal:
-        return -1;
+        return DRM_XE_ATOMIC_GLOBAL;
     case DrmParam::atomicClassSystem:
-        return -1;
+        return DRM_XE_ATOMIC_CPU;
     case DrmParam::memoryClassDevice:
         return DRM_XE_MEM_REGION_CLASS_VRAM;
     case DrmParam::memoryClassSystem:
         return DRM_XE_MEM_REGION_CLASS_SYSMEM;
+    case DrmParam::memoryAdviseLocationDevice:
+        return DRM_XE_PREFERRED_LOC_DEFAULT_DEVICE;
+    case DrmParam::memoryAdviseLocationSystem:
+        return DRM_XE_PREFERRED_LOC_DEFAULT_SYSTEM;
+    case DrmParam::memoryAdviseMigrationPolicyAllPages:
+        return DRM_XE_MIGRATE_ALL_PAGES;
+    case DrmParam::memoryAdviseMigrationPolicySystemPages:
+        return DRM_XE_MIGRATE_ONLY_SYSTEM_PAGES;
     case DrmParam::engineClassRender:
         return DRM_XE_ENGINE_CLASS_RENDER;
     case DrmParam::engineClassCopy:
@@ -1400,6 +1504,12 @@ void IoctlHelperXe::xeShowBindTable() {
     }
 }
 
+void IoctlHelperXe::applyContextFlags(void *execQueueCreate, bool allocateInterrupt) {
+    if (this->isLowLatencyHintAvailable) {
+        reinterpret_cast<drm_xe_exec_queue_create *>(execQueueCreate)->flags |= DRM_XE_EXEC_QUEUE_LOW_LATENCY_HINT;
+    }
+}
+
 int IoctlHelperXe::createDrmContext(Drm &drm, OsContextLinux &osContext, uint32_t drmVmId, uint32_t deviceIndex, bool allocateInterrupt) {
     uint32_t drmContextId = 0;
 
@@ -1410,7 +1520,7 @@ int IoctlHelperXe::createDrmContext(Drm &drm, OsContextLinux &osContext, uint32_
 
     std::array<drm_xe_ext_set_property, maxContextSetProperties> extProperties{};
     uint32_t extPropertyIndex{0U};
-    setOptionalContextProperties(drm, &extProperties, extPropertyIndex);
+    setOptionalContextProperties(osContext, drm, &extProperties, extPropertyIndex);
     setContextProperties(osContext, deviceIndex, &extProperties, extPropertyIndex);
 
     drm_xe_exec_queue_create create{};
@@ -1474,8 +1584,8 @@ int IoctlHelperXe::xeVmBind(const VmBindParams &vmBindParams, bool isBind) {
     } else {
         GMM_RESOURCE_USAGE_TYPE usageType = GMM_RESOURCE_USAGE_OCL_BUFFER;
         bool compressed = false;
-        bool cachable = false;
-        bind.bind.pat_index = static_cast<uint16_t>(drm.getRootDeviceEnvironment().getGmmClientContext()->cachePolicyGetPATIndex(nullptr, usageType, compressed, cachable));
+        bool cacheable = false;
+        bind.bind.pat_index = static_cast<uint16_t>(drm.getRootDeviceEnvironment().getGmmClientContext()->cachePolicyGetPATIndex(nullptr, usageType, compressed, cacheable));
     }
     bind.bind.extensions = vmBindParams.extensions;
     bind.bind.flags = static_cast<uint32_t>(vmBindParams.flags);
@@ -1582,6 +1692,14 @@ std::string IoctlHelperXe::getDrmParamString(DrmParam drmParam) const {
         return "ContextParamSseu";
     case DrmParam::contextParamVm:
         return "ContextParamVm";
+    case DrmParam::memoryAdviseLocationDevice:
+        return "MemoryAdviseLocationDevice";
+    case DrmParam::memoryAdviseLocationSystem:
+        return "MemoryAdviseLocationSystem";
+    case DrmParam::memoryAdviseMigrationPolicyAllPages:
+        return "MemoryAdviseMigrationPolicyAllPages";
+    case DrmParam::memoryAdviseMigrationPolicySystemPages:
+        return "MemoryAdviseMigrationPolicySystemPages";
     case DrmParam::engineClassRender:
         return "EngineClassRender";
     case DrmParam::engineClassCompute:
@@ -1766,12 +1884,13 @@ bool IoctlHelperXe::getFdFromVmExport(uint32_t vmId, uint32_t flags, int32_t *fd
     return false;
 }
 
-void IoctlHelperXe::setOptionalContextProperties(Drm &drm, void *extProperties, uint32_t &extIndexInOut) {
+void IoctlHelperXe::setOptionalContextProperties(const OsContextLinux &osContext, Drm &drm, void *extProperties, uint32_t &extIndexInOut) {
 
     auto &ext = *reinterpret_cast<std::array<drm_xe_ext_set_property, maxContextSetProperties> *>(extProperties);
 
     if ((contextParamEngine[0].engine_class == DRM_XE_ENGINE_CLASS_RENDER) || (contextParamEngine[0].engine_class == DRM_XE_ENGINE_CLASS_COMPUTE)) {
-        if (drm.getRootDeviceEnvironment().executionEnvironment.isDebuggingEnabled()) {
+        const bool isSecondaryContext = osContext.isPartOfContextGroup() && (nullptr != osContext.getPrimaryContext());
+        if (!isSecondaryContext && drm.getRootDeviceEnvironment().executionEnvironment.isDebuggingEnabled()) {
             ext[extIndexInOut].base.next_extension = 0;
             ext[extIndexInOut].base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY;
             ext[extIndexInOut].property = getEudebugExtProperty();
@@ -1813,6 +1932,10 @@ unsigned int IoctlHelperXe::getIoctlRequestValue(DrmIoctl ioctlRequest) const {
         RETURN_ME(DRM_IOCTL_XE_EXEC);
     case DrmIoctl::gemVmBind:
         RETURN_ME(DRM_IOCTL_XE_VM_BIND);
+    case DrmIoctl::gemVmAdvise:
+        RETURN_ME(DRM_IOCTL_XE_MADVISE);
+    case DrmIoctl::gemVmGetMemRangeAttr:
+        RETURN_ME(DRM_IOCTL_XE_VM_QUERY_MEM_RANGE_ATTRS);
     case DrmIoctl::query:
         RETURN_ME(DRM_IOCTL_XE_DEVICE_QUERY);
     case DrmIoctl::gemContextCreateExt:
@@ -1868,6 +1991,8 @@ std::string IoctlHelperXe::getIoctlString(DrmIoctl ioctlRequest) const {
         STRINGIFY_ME(DRM_IOCTL_XE_GEM_MMAP_OFFSET);
     case DrmIoctl::gemCreate:
         STRINGIFY_ME(DRM_IOCTL_XE_GEM_CREATE);
+    case DrmIoctl::gemVmAdvise:
+        STRINGIFY_ME(DRM_IOCTL_XE_MADVISE);
     case DrmIoctl::gemExecbuffer2:
         STRINGIFY_ME(DRM_IOCTL_XE_EXEC);
     case DrmIoctl::gemVmBind:
@@ -1944,6 +2069,20 @@ bool IoctlHelperXe::retrieveMmapOffsetForBufferObject(BufferObject &bo, uint64_t
 
     offset = mmapOffset.offset;
     return true;
+}
+
+bool IoctlHelperXe::is2MBSizeAlignmentRequired(AllocationType allocationType) const {
+    if (debugManager.flags.Disable2MBSizeAlignment.get()) {
+        return false;
+    }
+
+    auto &rootDeviceEnvironment = drm.getRootDeviceEnvironment();
+    auto hwInfo = rootDeviceEnvironment.getHardwareInfo();
+    auto memoryManager = rootDeviceEnvironment.executionEnvironment.memoryManager.get();
+    if (hwInfo->capabilityTable.isIntegratedDevice) {
+        return memoryManager->isExternalAllocation(allocationType);
+    }
+    return false;
 }
 
 } // namespace NEO

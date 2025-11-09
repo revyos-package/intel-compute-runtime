@@ -37,10 +37,10 @@ TEST_F(ReleaseHelper2002Tests, whenGettingCapabilitiesThenCorrectPropertiesAreRe
         EXPECT_TRUE(releaseHelper->isAuxSurfaceModeOverrideRequired());
         EXPECT_TRUE(releaseHelper->isRcsExposureDisabled());
         EXPECT_FALSE(releaseHelper->isBindlessAddressingDisabled());
-        EXPECT_EQ(8u, releaseHelper->getNumThreadsPerEu());
         EXPECT_EQ(0u, releaseHelper->getStackSizePerRay());
         EXPECT_TRUE(releaseHelper->isRayTracingSupported());
         EXPECT_TRUE(releaseHelper->isNumRtStacksPerDssFixedValue());
+        EXPECT_TRUE(releaseHelper->isSpirSupported());
     }
 }
 
@@ -74,10 +74,6 @@ TEST_F(ReleaseHelper2002Tests, whenIsDummyBlitWaRequiredCalledThenFalseReturned)
 
 TEST_F(ReleaseHelper2002Tests, whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned) {
     whenIsBlitImageAllowedForDepthFormatCalledThenTrueReturned();
-}
-
-TEST_F(ReleaseHelper2002Tests, whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey) {
-    whenGettingNumThreadsPerEuThenCorrectValueIsReturnedBasedOnOverrideNumThreadsPerEuDebugKey();
 }
 
 TEST_F(ReleaseHelper2002Tests, whenIsPostImageWriteFlushRequiredCalledThenFalseReturned) {
@@ -114,4 +110,16 @@ TEST_F(ReleaseHelper2002Tests, whenGettingPreferredSlmSizeThenAllEntriesHaveCorr
         EXPECT_EQ(std::numeric_limits<uint32_t>::max(), preferredSlmValueArray[6].upperLimit);
         EXPECT_EQ(6u, preferredSlmValueArray[6].valueToProgram);
     }
+}
+
+TEST_F(ReleaseHelper2002Tests, whenCallingAdjustMaxThreadsPerEuCountThenCorrectValueIsReturned) {
+    whenCallingAdjustMaxThreadsPerEuCountThenCorrectValueIsReturned();
+}
+
+TEST_F(ReleaseHelper2002Tests, whenShouldQueryPeerAccessCalledThenTrueReturned) {
+    whenShouldQueryPeerAccessCalledThenTrueReturned();
+}
+
+TEST_F(ReleaseHelper2002Tests, whenIsSingleDispatchRequiredForMultiCCSThenTrueReturned) {
+    whenIsSingleDispatchRequiredForMultiCCSCalledThenTrueReturned();
 }

@@ -721,6 +721,8 @@ TEST(GmmTest, givenAllocationTypeWhenGettingUsageTypeThenReturnCorrectValue) {
             case AllocationType::svmCpu:
             case AllocationType::svmZeroCopy:
             case AllocationType::tagBuffer:
+            case AllocationType::printfSurface:
+            case AllocationType::hostFunction:
                 expectedUsage = forceUncached ? uncachedGmmUsageType : GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
                 break;
             default:
@@ -767,7 +769,12 @@ TEST(GmmTest, givenAllocationTypeWhenGettingUsageTypeThenReturnCorrectValue) {
             case AllocationType::mapAllocation:
             case AllocationType::svmCpu:
             case AllocationType::svmZeroCopy:
+            case AllocationType::printfSurface:
                 expectedUsage = forceUncached ? uncachedGmmUsageType : GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
+                break;
+            case AllocationType::tagBuffer:
+            case AllocationType::hostFunction:
+                expectedUsage = forceUncached ? uncachedGmmUsageType : GMM_RESOURCE_USAGE_OCL_BUFFER_CSR_UC;
                 break;
             case AllocationType::semaphoreBuffer:
             case AllocationType::ringBuffer:
@@ -828,6 +835,8 @@ TEST(GmmTest, givenAllocationTypeAndMitigatedDcFlushWhenGettingUsageTypeThenRetu
         case AllocationType::svmCpu:
         case AllocationType::svmZeroCopy:
         case AllocationType::tagBuffer:
+        case AllocationType::printfSurface:
+        case AllocationType::hostFunction:
             expectedUsage = GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
             break;
         default:
@@ -863,7 +872,12 @@ TEST(GmmTest, givenAllocationTypeAndMitigatedDcFlushWhenGettingUsageTypeThenRetu
         case AllocationType::mapAllocation:
         case AllocationType::svmCpu:
         case AllocationType::svmZeroCopy:
+        case AllocationType::printfSurface:
             expectedUsage = GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
+            break;
+        case AllocationType::tagBuffer:
+        case AllocationType::hostFunction:
+            expectedUsage = GMM_RESOURCE_USAGE_OCL_BUFFER_CSR_UC;
             break;
         case AllocationType::semaphoreBuffer:
         case AllocationType::ringBuffer:
@@ -932,7 +946,7 @@ TEST(GmmTest, givenForceAllResourcesUncachedFlagSetWhenGettingUsageTypeThenRetur
     }
 }
 
-TEST(GmmTest, givenUsageTypeWhenAskingIfUncachableThenReturnCorrectValue) {
+TEST(GmmTest, givenUsageTypeWhenAskingIfUncacheableThenReturnCorrectValue) {
     for (GMM_RESOURCE_USAGE_TYPE_ENUM usage : {GMM_RESOURCE_USAGE_OCL_IMAGE,
                                                GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER,
                                                GMM_RESOURCE_USAGE_OCL_BUFFER_CONST,
@@ -1444,6 +1458,42 @@ TEST_F(GmmCompressionTests, givenMediaCompressedImageApplyAuxFlagsForImageThenSe
     gmm.setupImageResourceParams(imgInfo, true);
 
     EXPECT_TRUE(gmm.isCompressionEnabled());
+}
+
+HWTEST2_F(GmmCompressionTests, givenGmmCreatedFromExistingGmmWithRenderCompressionThenCompressionFalseForSecondResource, IsAtMostXeCore) {
+    GmmRequirements gmmRequirements{};
+    gmmRequirements.allowLargePages = true;
+    gmmRequirements.preferCompressed = false;
+    MockGmm gmm(getGmmHelper(), nullptr, 1, 0, GMM_RESOURCE_USAGE_OCL_BUFFER, {}, gmmRequirements);
+    auto flags = gmm.gmmResourceInfo->getResourceFlags();
+    flags->Gpu.CCS = true;
+    flags->Gpu.UnifiedAuxSurface = true;
+    flags->Info.MediaCompressed = true;
+    flags->Info.RenderCompressed = false;
+    gmm.resourceParams.Flags.Info.MediaCompressed = false;
+    gmm.resourceParams.Flags.Info.RenderCompressed = true;
+    gmm.setupImageResourceParams(imgInfo, true);
+
+    EXPECT_TRUE(gmm.isCompressionEnabled());
+
+    auto gmmRes2 = std::make_unique<Gmm>(getGmmHelper(), gmm.gmmResourceInfo->peekGmmResourceInfo(), false);
+    EXPECT_FALSE(gmmRes2->isCompressionEnabled());
+}
+
+HWTEST2_F(GmmCompressionTests, givenGmmCreatedFromExistingGmmWithCompressionDisabledThenCompressionFalseForSecondResource, IsAtMostXeCore) {
+    localPlatformDevice->capabilityTable.ftrRenderCompressedImages = false;
+    GmmRequirements gmmRequirements{};
+    gmmRequirements.allowLargePages = true;
+    gmmRequirements.preferCompressed = false;
+    MockGmm gmm(getGmmHelper(), nullptr, 1, 0, GMM_RESOURCE_USAGE_OCL_BUFFER, {}, gmmRequirements);
+    gmm.resourceParams.Flags.Info.MediaCompressed = false;
+    gmm.resourceParams.Flags.Info.RenderCompressed = false;
+    gmm.setupImageResourceParams(imgInfo, false);
+
+    EXPECT_FALSE(gmm.isCompressionEnabled());
+
+    auto gmmRes2 = std::make_unique<Gmm>(getGmmHelper(), gmm.gmmResourceInfo->peekGmmResourceInfo(), false);
+    EXPECT_FALSE(gmmRes2->isCompressionEnabled());
 }
 
 TEST_F(GmmCompressionTests, givenRenderCompressedImageApplyAuxFlagsForImageThenSetFlagsToCompressed) {

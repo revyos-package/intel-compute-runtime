@@ -11,6 +11,7 @@
 #include "shared/source/helpers/device_bitfield.h"
 #include "shared/source/helpers/heap_base_address_model.h"
 
+#include "level_zero/driver_experimental/zex_graph.h"
 #include "level_zero/tools/source/debug/eu_thread.h"
 #include "level_zero/zet_intel_gpu_debug.h"
 #include <level_zero/ze_api.h>
@@ -69,9 +70,10 @@ class L0GfxCoreHelper : public NEO::ApiGfxCoreHelper {
     static bool dispatchCmdListBatchBufferAsPrimary(const NEO::RootDeviceEnvironment &rootDeviceEnvironment, bool allowPrimary);
     static bool useImmediateComputeFlushTask(const NEO::RootDeviceEnvironment &rootDeviceEnvironment);
     static ze_mutable_command_exp_flags_t getCmdListUpdateCapabilities(const NEO::RootDeviceEnvironment &rootDeviceEnvironment);
+    static ze_record_replay_graph_exp_flags_t getRecordReplayGraphCapabilities(const NEO::RootDeviceEnvironment &rootDeviceEnvironment);
 
     virtual void setAdditionalGroupProperty(ze_command_queue_group_properties_t &groupProperty, NEO::EngineGroupT &group) const = 0;
-    virtual L0::Event *createEvent(L0::EventPool *eventPool, const ze_event_desc_t *desc, L0::Device *device) const = 0;
+    virtual L0::Event *createEvent(L0::EventPool *eventPool, const ze_event_desc_t *desc, L0::Device *device, ze_result_t &result) const = 0;
     virtual L0::Event *createStandaloneEvent(const EventDescriptor &desc, L0::Device *device, ze_result_t &result) const = 0;
 
     virtual bool isResumeWARequired() = 0;
@@ -90,11 +92,11 @@ class L0GfxCoreHelper : public NEO::ApiGfxCoreHelper {
     virtual bool platformSupportsPipelineSelectTracking() const = 0;
     virtual bool platformSupportsStateBaseAddressTracking(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
     virtual bool platformSupportsPrimaryBatchBufferCmdList() const = 0;
-    virtual bool isZebinAllowed(const NEO::Debugger *debugger) const = 0;
     virtual uint32_t getEventMaxKernelCount(const NEO::HardwareInfo &hwInfo) const = 0;
     virtual uint32_t getEventBaseMaxPacketCount(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
     virtual NEO::HeapAddressModel getPlatformHeapAddressModel(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const = 0;
-    virtual ze_rtas_format_exp_t getSupportedRTASFormat() const = 0;
+    virtual ze_rtas_format_exp_t getSupportedRTASFormatExp() const = 0;
+    virtual ze_rtas_format_ext_t getSupportedRTASFormatExt() const = 0;
     virtual bool platformSupportsImmediateComputeFlushTask() const = 0;
     virtual zet_debug_regset_type_intel_gpu_t getRegsetTypeForLargeGrfDetection() const = 0;
     virtual uint32_t getGrfRegisterCount(uint32_t *regPtr) const = 0;
@@ -102,6 +104,7 @@ class L0GfxCoreHelper : public NEO::ApiGfxCoreHelper {
     virtual bool hasUnifiedPostSyncAllocationLayout() const = 0;
     virtual uint32_t getImmediateWritePostSyncOffset() const = 0;
     virtual ze_mutable_command_exp_flags_t getPlatformCmdListUpdateCapabilities() const = 0;
+    virtual ze_record_replay_graph_exp_flags_t getPlatformRecordReplayGraphCapabilities() const = 0;
     virtual void appendPlatformSpecificExtensions(std::vector<std::pair<std::string, uint32_t>> &extensions, const NEO::ProductHelper &productHelper, const NEO::HardwareInfo &hwInfo) const = 0;
     virtual std::vector<std::pair<const char *, const char *>> getStallSamplingReportMetrics() const = 0;
     virtual void stallSumIpDataToTypedValues(uint64_t ip, void *sumIpData, std::vector<zet_typed_value_t> &ipDataValues) = 0;
@@ -132,7 +135,7 @@ class L0GfxCoreHelperHw : public L0GfxCoreHelper {
     }
 
     void setAdditionalGroupProperty(ze_command_queue_group_properties_t &groupProperty, NEO::EngineGroupT &group) const override;
-    L0::Event *createEvent(L0::EventPool *eventPool, const ze_event_desc_t *desc, L0::Device *device) const override;
+    L0::Event *createEvent(L0::EventPool *eventPool, const ze_event_desc_t *desc, L0::Device *device, ze_result_t &result) const override;
     L0::Event *createStandaloneEvent(const EventDescriptor &desc, L0::Device *device, ze_result_t &result) const override;
 
     bool isResumeWARequired() override;
@@ -150,11 +153,11 @@ class L0GfxCoreHelperHw : public L0GfxCoreHelper {
     bool platformSupportsPipelineSelectTracking() const override;
     bool platformSupportsStateBaseAddressTracking(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const override;
     bool platformSupportsPrimaryBatchBufferCmdList() const override;
-    bool isZebinAllowed(const NEO::Debugger *debugger) const override;
     uint32_t getEventMaxKernelCount(const NEO::HardwareInfo &hwInfo) const override;
     uint32_t getEventBaseMaxPacketCount(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const override;
     NEO::HeapAddressModel getPlatformHeapAddressModel(const NEO::RootDeviceEnvironment &rootDeviceEnvironment) const override;
-    ze_rtas_format_exp_t getSupportedRTASFormat() const override;
+    ze_rtas_format_exp_t getSupportedRTASFormatExp() const override;
+    ze_rtas_format_ext_t getSupportedRTASFormatExt() const override;
     bool platformSupportsImmediateComputeFlushTask() const override;
     zet_debug_regset_type_intel_gpu_t getRegsetTypeForLargeGrfDetection() const override;
     uint32_t getGrfRegisterCount(uint32_t *regPtr) const override;
@@ -162,6 +165,7 @@ class L0GfxCoreHelperHw : public L0GfxCoreHelper {
     bool hasUnifiedPostSyncAllocationLayout() const override;
     uint32_t getImmediateWritePostSyncOffset() const override;
     ze_mutable_command_exp_flags_t getPlatformCmdListUpdateCapabilities() const override;
+    ze_record_replay_graph_exp_flags_t getPlatformRecordReplayGraphCapabilities() const override;
     void appendPlatformSpecificExtensions(std::vector<std::pair<std::string, uint32_t>> &extensions, const NEO::ProductHelper &productHelper, const NEO::HardwareInfo &hwInfo) const override;
     std::vector<std::pair<const char *, const char *>> getStallSamplingReportMetrics() const override;
     void stallSumIpDataToTypedValues(uint64_t ip, void *sumIpData, std::vector<zet_typed_value_t> &ipDataValues) override;

@@ -156,32 +156,6 @@ HWTEST_TEMPLATED_F(AubCsrTest, givenAubCsrSyncQueueAndKmdWaitWhenCallingExecuteC
     L0::CommandQueue::fromHandle(commandQueue)->destroy();
 }
 
-HWTEST_TEMPLATED_F(AubCsrTest, givenAubCsrAndSyncQueueWhenCallingExecuteCommandListsThenPollForCompletionIsNotCalled) {
-    auto csr = neoDevice->getDefaultEngine().commandStreamReceiver;
-    ze_result_t returnValue;
-    ze_command_queue_desc_t desc = {};
-    desc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
-    ze_command_queue_handle_t commandQueue = {};
-    ze_result_t res = context->createCommandQueue(device, &desc, &commandQueue);
-    ASSERT_EQ(ZE_RESULT_SUCCESS, res);
-    ASSERT_NE(nullptr, commandQueue);
-
-    auto aubCsr = static_cast<NEO::UltAubCommandStreamReceiver<FamilyType> *>(csr);
-    CommandQueue *queue = static_cast<CommandQueue *>(L0::CommandQueue::fromHandle(commandQueue));
-    EXPECT_EQ(aubCsr->pollForCompletionCalled, 0u);
-
-    std::unique_ptr<L0::CommandList> commandList(L0::CommandList::create(productFamily, device, NEO::EngineGroupType::compute, 0u, returnValue, false));
-    ASSERT_NE(nullptr, commandList);
-
-    auto commandListHandle = commandList->toHandle();
-    commandList->close();
-
-    queue->executeCommandLists(1, &commandListHandle, nullptr, false, nullptr, nullptr);
-    EXPECT_EQ(aubCsr->pollForCompletionCalled, 0u);
-
-    L0::CommandQueue::fromHandle(commandQueue)->destroy();
-}
-
 HWTEST_TEMPLATED_F(AubCsrTest, givenAubCsrAndAsyncQueueWhenCallingExecuteCommandListsThenPollForCompletionIsNotCalled) {
     auto csr = neoDevice->getDefaultEngine().commandStreamReceiver;
     ze_result_t returnValue;
@@ -771,7 +745,7 @@ struct DeviceWithDualStorage : Test<DeviceFixture> {
     std::unique_ptr<L0::ult::Module> mockModule;
 };
 
-HWTEST2_F(DeviceWithDualStorage, givenCmdListWithAppendedKernelAndUsmTransferAndBlitterDisabledWhenExecuteCmdListThenCfeStateOnceProgrammed, IsHeapfulSupportedAndAtLeastXeCore) {
+HWTEST2_F(DeviceWithDualStorage, givenCmdListWithAppendedKernelAndUsmTransferAndBlitterDisabledWhenExecuteCmdListThenCfeStateOnceProgrammed, IsHeapfulRequiredAndAtLeastXeCore) {
 
     auto &compilerProductHelper = neoDevice->getCompilerProductHelper();
     if (compilerProductHelper.isHeaplessModeEnabled(*defaultHwInfo)) {
@@ -811,7 +785,7 @@ HWTEST2_F(DeviceWithDualStorage, givenCmdListWithAppendedKernelAndUsmTransferAnd
                                   size, alignment, &ptr);
     EXPECT_EQ(ZE_RESULT_SUCCESS, res);
     auto gpuAlloc = device->getDriverHandle()->getSvmAllocsManager()->getSVMAllocs()->get(ptr)->gpuAllocations.getGraphicsAllocation(device->getRootDeviceIndex());
-    kernel.state.argumentsResidencyContainer.push_back(gpuAlloc);
+    kernel.privateState.argumentsResidencyContainer.push_back(gpuAlloc);
 
     ze_group_count_t dispatchKernelArguments{1, 1, 1};
     CmdListKernelLaunchParams launchParams = {};
@@ -981,9 +955,9 @@ HWTEST2_F(CommandQueueScratchTests, whenPatchCommandsIsCalledThenCommandsAreCorr
     auto commandQueue = std::make_unique<MockCommandQueueHw<FamilyType::gfxCoreFamily>>(device, csr, &desc);
     auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
 
-    EXPECT_NO_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_NO_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.push_back({});
-    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.clear();
 
     if constexpr (FamilyType::isHeaplessRequired()) {
@@ -992,7 +966,7 @@ HWTEST2_F(CommandQueueScratchTests, whenPatchCommandsIsCalledThenCommandsAreCorr
         commandToPatch.pCommand = nullptr;
         commandToPatch.type = CommandToPatch::FrontEndState;
         commandList->commandsToPatch.push_back(commandToPatch);
-        EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false));
+        EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
         commandList->commandsToPatch.clear();
     } else {
         using CFE_STATE = typename FamilyType::CFE_STATE;
@@ -1021,7 +995,7 @@ HWTEST2_F(CommandQueueScratchTests, whenPatchCommandsIsCalledThenCommandsAreCorr
         }
 
         uint64_t patchedScratchAddress = 0xABCD00;
-        commandQueue->patchCommands(*commandList, patchedScratchAddress, false);
+        commandQueue->patchCommands(*commandList, patchedScratchAddress, false, nullptr);
         for (size_t i = 0; i < 4; i++) {
             EXPECT_EQ(patchedScratchAddress, destinationCfeStates[i].getScratchSpaceBuffer());
             auto &sourceCfeState = *reinterpret_cast<CFE_STATE *>(commandList->commandsToPatch[i].pCommand);
@@ -1041,21 +1015,21 @@ HWTEST2_F(CommandQueueScratchTests, givenCommandsToPatchToNotSupportedPlatformWh
     auto commandQueue = std::make_unique<MockCommandQueueHw<FamilyType::gfxCoreFamily>>(device, csr, &desc);
     auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
 
-    EXPECT_NO_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_NO_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.push_back({});
-    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.clear();
 
     CommandToPatch commandToPatch;
 
     commandToPatch.type = CommandToPatch::FrontEndState;
     commandList->commandsToPatch.push_back(commandToPatch);
-    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.clear();
 
     commandToPatch.type = CommandToPatch::Invalid;
     commandList->commandsToPatch.push_back(commandToPatch);
-    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false));
+    EXPECT_ANY_THROW(commandQueue->patchCommands(*commandList, 0, false, nullptr));
     commandList->commandsToPatch.clear();
 }
 
@@ -1100,7 +1074,7 @@ HWTEST2_F(CommandQueueScratchTests, givenInlineDataScratchWhenPatchCommandsIsCal
         cmd.scratchAddressAfterPatch = testCase.scratchAlreadyPatched ? scratchAddress : 0;
 
         commandList->commandsToPatch.push_back(cmd);
-        commandQueue->patchCommands(*commandList, scratchAddress, testCase.scratchControllerChanged);
+        commandQueue->patchCommands(*commandList, scratchAddress, testCase.scratchControllerChanged, nullptr);
 
         EXPECT_EQ(testCase.expectedValue, scratchBuffer);
     }
@@ -1133,7 +1107,7 @@ HWTEST2_F(CommandQueueScratchTests, givenImplicitArgsScratchWhenPatchCommandsIsC
             cmd.scratchAddressAfterPatch = scratchAlreadyPatched ? scratchAddress : 0;
 
             commandList->commandsToPatch.push_back(cmd);
-            commandQueue->patchCommands(*commandList, scratchAddress, scratchControllerChanged);
+            commandQueue->patchCommands(*commandList, scratchAddress, scratchControllerChanged, nullptr);
 
             EXPECT_EQ(expectedValue, scratchBuffer);
         }
@@ -1162,13 +1136,90 @@ HWTEST_F(CommandQueueCreate, givenCommandsToPatchWithNoopSpacePatchWhenPatchComm
     commandToPatch.patchSize = dataSize;
 
     commandList->commandsToPatch.push_back(commandToPatch);
-    commandQueue->patchCommands(*commandList, 0, false);
+    commandQueue->patchCommands(*commandList, 0, false, nullptr);
     EXPECT_EQ(0, memcmp(patchBuffer.get(), zeroBuffer.get(), dataSize));
 
     memset(patchBuffer.get(), 0xFF, dataSize);
     commandList->commandsToPatch[0].pDestination = nullptr;
-    commandQueue->patchCommands(*commandList, 0, false);
+    commandQueue->patchCommands(*commandList, 0, false, nullptr);
     EXPECT_NE(0, memcmp(patchBuffer.get(), zeroBuffer.get(), dataSize));
+}
+
+using HostFunctionsCmdPatchTests = Test<DeviceFixture>;
+
+HWTEST_F(HostFunctionsCmdPatchTests, givenHostFunctionPatchCommandsWhenPatchCommandsIsCalledThenCorrectInstructionsWereProgrammed) {
+
+    using MI_STORE_DATA_IMM = typename FamilyType::MI_STORE_DATA_IMM;
+    using MI_SEMAPHORE_WAIT = typename FamilyType::MI_SEMAPHORE_WAIT;
+
+    ze_command_queue_desc_t desc = {};
+    NEO::CommandStreamReceiver *csr = nullptr;
+    device->getCsrForOrdinalAndIndex(&csr, 0u, 0u, ZE_COMMAND_QUEUE_PRIORITY_NORMAL, 0, false);
+    auto commandQueue = std::make_unique<MockCommandQueueHw<FamilyType::gfxCoreFamily>>(device, csr, &desc);
+    auto commandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
+    commandList->commandsToPatch.clear();
+
+    constexpr uint64_t pHostFunction = std::numeric_limits<uint64_t>::max() - 1024u;
+    constexpr uint64_t pUserData = std::numeric_limits<uint64_t>::max() - 4096u;
+
+    MI_STORE_DATA_IMM callbackAddressMiStore{};
+    MI_STORE_DATA_IMM userDataMiStore{};
+    MI_STORE_DATA_IMM internalTagMiStore{};
+    MI_SEMAPHORE_WAIT internalTagMiWait{};
+
+    {
+        CommandToPatch commandToPatch;
+        commandToPatch.type = CommandToPatch::HostFunctionEntry;
+        commandToPatch.baseAddress = pHostFunction;
+        commandToPatch.pCommand = reinterpret_cast<void *>(&callbackAddressMiStore);
+        commandList->commandsToPatch.push_back(commandToPatch);
+    }
+    {
+        CommandToPatch commandToPatch;
+        commandToPatch.type = CommandToPatch::HostFunctionUserData;
+        commandToPatch.baseAddress = pUserData;
+        commandToPatch.pCommand = reinterpret_cast<void *>(&userDataMiStore);
+        commandList->commandsToPatch.push_back(commandToPatch);
+    }
+    {
+        CommandToPatch commandToPatch;
+        commandToPatch.type = CommandToPatch::HostFunctionSignalInternalTag;
+        commandToPatch.pCommand = reinterpret_cast<void *>(&internalTagMiStore);
+        commandList->commandsToPatch.push_back(commandToPatch);
+    }
+    {
+        CommandToPatch commandToPatch;
+        commandToPatch.type = CommandToPatch::HostFunctionWaitInternalTag;
+        commandToPatch.pCommand = reinterpret_cast<void *>(&internalTagMiWait);
+        commandList->commandsToPatch.push_back(commandToPatch);
+    }
+
+    commandQueue->patchCommands(*commandList, 0, false, nullptr);
+
+    EXPECT_NE(nullptr, commandQueue->csr->getHostFunctionDataAllocation());
+
+    auto &hostFunctionDataFromCsr = commandQueue->csr->getHostFunctionData();
+
+    // callback address - mi store
+    EXPECT_EQ(getLowPart(pHostFunction), callbackAddressMiStore.getDataDword0());
+    EXPECT_EQ(getHighPart(pHostFunction), callbackAddressMiStore.getDataDword1());
+    EXPECT_TRUE(callbackAddressMiStore.getStoreQword());
+    EXPECT_EQ(reinterpret_cast<uint64_t>(hostFunctionDataFromCsr.entry), callbackAddressMiStore.getAddress());
+
+    // userData address - mi store
+    EXPECT_EQ(getLowPart(pUserData), userDataMiStore.getDataDword0());
+    EXPECT_EQ(getHighPart(pUserData), userDataMiStore.getDataDword1());
+    EXPECT_TRUE(userDataMiStore.getStoreQword());
+    EXPECT_EQ(reinterpret_cast<uint64_t>(hostFunctionDataFromCsr.userData), userDataMiStore.getAddress());
+
+    // internal tag signal - mi store
+    EXPECT_EQ(static_cast<uint32_t>(HostFunctionTagStatus::pending), internalTagMiStore.getDataDword0());
+    EXPECT_FALSE(internalTagMiStore.getStoreQword());
+    EXPECT_EQ(reinterpret_cast<uint64_t>(hostFunctionDataFromCsr.internalTag), internalTagMiStore.getAddress());
+
+    // internal tag wait - semaphore wait
+    EXPECT_EQ(static_cast<uint32_t>(HostFunctionTagStatus::completed), internalTagMiWait.getSemaphoreDataDword());
+    EXPECT_EQ(reinterpret_cast<uint64_t>(hostFunctionDataFromCsr.internalTag), internalTagMiWait.getSemaphoreGraphicsAddress());
 }
 
 } // namespace ult

@@ -34,6 +34,7 @@ class MemoryManager;
 
 namespace L0 {
 struct CommandList;
+struct CommandListImp;
 struct Kernel;
 struct CommandQueueImp : public CommandQueue {
     class CommandBufferManager {
@@ -118,6 +119,8 @@ struct CommandQueueImp : public CommandQueue {
         forceBbStartJump = true;
     }
     void makeResidentForResidencyContainer(const NEO::ResidencyContainer &residencyContainer);
+
+    bool checkNeededPatchPreambleWait(CommandList *commandList);
 
   protected:
     MOCKABLE_VIRTUAL NEO::SubmissionStatus submitBatchBuffer(size_t offset, NEO::ResidencyContainer &residencyContainer, void *endingCmdPtr,

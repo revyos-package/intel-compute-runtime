@@ -91,14 +91,6 @@ bool ReleaseHelperHw<releaseType>::isGlobalBindlessAllocatorEnabled() const {
 }
 
 template <ReleaseType releaseType>
-uint32_t ReleaseHelperHw<releaseType>::getNumThreadsPerEu() const {
-    if (debugManager.flags.OverrideNumThreadsPerEu.get() != -1) {
-        return debugManager.flags.OverrideNumThreadsPerEu.get();
-    }
-    return 8u;
-}
-
-template <ReleaseType releaseType>
 uint64_t ReleaseHelperHw<releaseType>::getTotalMemBankSize() const {
     return 32ull * MemoryConstants::gigaByte;
 }
@@ -188,4 +180,25 @@ template <ReleaseType releaseType>
 bool ReleaseHelperHw<releaseType>::isPostImageWriteFlushRequired() const {
     return false;
 }
+
+template <ReleaseType releaseType>
+uint32_t ReleaseHelperHw<releaseType>::adjustMaxThreadsPerEuCount(uint32_t maxThreadsPerEuCount, uint32_t grfCount) const {
+    return maxThreadsPerEuCount;
+}
+
+template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::shouldQueryPeerAccess() const {
+    return false;
+}
+
+template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::isSpirSupported() const {
+    return true;
+}
+
+template <ReleaseType releaseType>
+bool ReleaseHelperHw<releaseType>::isSingleDispatchRequiredForMultiCCS() const {
+    return false;
+}
+
 } // namespace NEO

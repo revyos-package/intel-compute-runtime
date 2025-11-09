@@ -24,9 +24,6 @@ extern bool mmapAllowExtendedPointers;
 } // namespace NEO
 
 static std::string mockCpuFlags;
-static void mockGetCpuFlagsFunc(std::string &cpuFlags) { cpuFlags = mockCpuFlags; }
-static void (*getCpuFlagsFuncSave)(std::string &) = nullptr;
-
 // CpuInfo is a singleton object so we have to patch it in place
 class CpuInfoOverrideVirtualAddressSizeAndFlags {
   public:
@@ -37,28 +34,15 @@ class CpuInfoOverrideVirtualAddressSizeAndFlags {
     } *mockCpuInfo = reinterpret_cast<MockCpuInfo *>(const_cast<CpuInfo *>(&CpuInfo::getInstance()));
 
     CpuInfoOverrideVirtualAddressSizeAndFlags(uint32_t newCpuVirtualAddressSize, const char *newCpuFlags = "") {
-        virtualAddressSizeSave = mockCpuInfo->getVirtualAddressSize();
         mockCpuInfo->virtualAddressSize = newCpuVirtualAddressSize;
 
-        getCpuFlagsFuncSave = mockCpuInfo->getCpuFlagsFunc;
-        mockCpuInfo->getCpuFlagsFunc = mockGetCpuFlagsFunc;
-        resetCpuFlags();
         mockCpuFlags = newCpuFlags;
     }
 
-    ~CpuInfoOverrideVirtualAddressSizeAndFlags() {
-        mockCpuInfo->virtualAddressSize = virtualAddressSizeSave;
-        resetCpuFlags();
-        mockCpuInfo->getCpuFlagsFunc = getCpuFlagsFuncSave;
-        getCpuFlagsFuncSave = nullptr;
-    }
-
-    void resetCpuFlags() {
-        mockCpuFlags = "";
-        mockCpuInfo->getCpuFlagsFunc(mockCpuInfo->cpuFlags);
-    }
-
-    uint32_t virtualAddressSizeSave = 0;
+    VariableBackup<decltype(MockCpuInfo::getCpuFlagsFunc)> funcBackup{&MockCpuInfo::getCpuFlagsFunc, [](std::string &flags) { flags = mockCpuFlags; }};
+    VariableBackup<decltype(MockCpuInfo::virtualAddressSize)> virtualAddressSizeBackup{&mockCpuInfo->virtualAddressSize};
+    VariableBackup<decltype(MockCpuInfo::cpuFlags)> cpuFlagsBackup{&mockCpuInfo->cpuFlags};
+    VariableBackup<decltype(mockCpuFlags)> mockFlagsBackup{&mockCpuFlags};
 };
 
 using namespace NEO;
@@ -797,7 +781,7 @@ TEST_F(GfxPartitionOn57bTest, given57bitCpuAddressWidthAndLa57IsPresentWhenIniti
     // No space in high 48 bits, allocate in low space, first try is OK
     resetGfxPartition();
 
-    constexpr uint64_t reservedLowSize = 256 * MemoryConstants::gigaByte;
+    constexpr uint64_t reservedLowSize = reservedHighSize;
     mockOsMemory->forceParseMemoryMaps = true;
     mockOsMemory->memoryMaps = {{0x7ffff7ff3000ull, 0x7ffff7ffb000ull}, {0x7ffff7ffc000ull, 0x7ffff7ffd000ull}, {0x7ffff7ffd000ull, 0x7ffff7ffe000ull}, {0x7ffff7ffe000ull, 0x7ffff7fff000ull}, {0x800000000000ull, 0x1000000000000ull}, {0xffffffffff600000ull, 0xffffffffff601000ull}};
 
@@ -855,7 +839,7 @@ TEST_F(GfxPartitionOn57bTest, whenInitGfxPartitionThenDoubleHeapStandardAtTheCos
     EXPECT_EQ(gfxPartitions[0]->getHeapSize(HeapIndex::heapStandard), 4 * gfxPartitions[0]->getHeapSize(HeapIndex::heapStandard2MB));
 }
 
-TEST_F(GfxPartitionOn57bTest, given48bitGpuAddressSpaceAnd57bitCpuAddressWidthWhenInitializingMultipleGfxPartitionsThenReserveSpaceForSvmHeapOnlyOnce) {
+TEST_F(GfxPartitionOn57bTest, given48bitGpuAddressSpaceAnd57bitCpuAddressWidthWhenInitializingMultipleGfxPartitionsThenReserveHigherSpaceForNonSvmHeapsOnlyOnce) {
     if (is32bit) {
         GTEST_SKIP();
     }
@@ -868,16 +852,20 @@ TEST_F(GfxPartitionOn57bTest, given48bitGpuAddressSpaceAnd57bitCpuAddressWidthWh
 
     OSMemory::ReservedCpuAddressRange reservedCpuAddressRange;
     std::vector<std::unique_ptr<MockGfxPartition>> gfxPartitions;
-    for (int i = 0; i < 10; ++i) {
+    constexpr auto numRootDevices = 10;
+    for (int i = 0; i < numRootDevices; ++i) {
         gfxPartitions.push_back(std::make_unique<MockGfxPartition>(reservedCpuAddressRange));
         gfxPartitions[i]->osMemory.reset(new MockOsMemory);
-        EXPECT_TRUE(gfxPartitions[i]->init(maxNBitValue(gpuAddressSpace), 0, i, 10, false, 0u, gfxTop));
+        EXPECT_TRUE(gfxPartitions[i]->init(maxNBitValue(gpuAddressSpace), 0, i, numRootDevices, false, 0u, gfxTop));
     }
 
-    EXPECT_EQ(1u, static_cast<MockOsMemory *>(gfxPartitions[0]->osMemory.get())->getReserveCount());
+    auto osMemory = static_cast<MockOsMemory *>(gfxPartitions[0]->osMemory.get());
+    EXPECT_EQ(1u, osMemory->getReserveCount());
+    constexpr auto expectedReserveSizeForNonSvm = numRootDevices * MemoryConstants::teraByte;
+    EXPECT_EQ(expectedReserveSizeForNonSvm, osMemory->reservationSizes[0]);
 }
 
-TEST_F(GfxPartitionOn57bTest, given57bitGpuAddressSpaceAnd57bitCpuAddressWidthWhenInitializingMultipleGfxPartitionsThenReserveSpaceForSvmHeapAndExtendedHeapsPerGfxPartition) {
+TEST_F(GfxPartitionOn57bTest, given57bitGpuAddressSpaceAnd57bitCpuAddressWidthWhenInitializingMultipleGfxPartitionsThenReserveSpaceForNonSvmHeapsOnceAndExtendedHeapsPerGfxPartition) {
     if (is32bit) {
         GTEST_SKIP();
     }
@@ -890,16 +878,29 @@ TEST_F(GfxPartitionOn57bTest, given57bitGpuAddressSpaceAnd57bitCpuAddressWidthWh
     uint64_t gfxTop = maxNBitValue(gpuAddressSpace) + 1;
     OSMemory::ReservedCpuAddressRange reservedCpuAddressRange;
     std::vector<std::unique_ptr<MockGfxPartition>> gfxPartitions;
-    for (int i = 0; i < 10; ++i) {
+    constexpr auto numRootDevices = 10;
+    constexpr auto systemMemorySize = 128 * MemoryConstants::gigaByte;
+    for (int i = 0; i < numRootDevices; ++i) {
         gfxPartitions.push_back(std::make_unique<MockGfxPartition>(reservedCpuAddressRange));
         gfxPartitions[i]->osMemory.reset(new MockOsMemory);
-        EXPECT_TRUE(gfxPartitions[i]->init(maxNBitValue(gpuAddressSpace), 0, i, 10, false, 0u, gfxTop));
+        EXPECT_TRUE(gfxPartitions[i]->init(maxNBitValue(gpuAddressSpace), 0, i, numRootDevices, false, systemMemorySize, gfxTop));
     }
+    constexpr auto expectedReserveSizeForNonSvm = numRootDevices * MemoryConstants::teraByte;
+    constexpr auto expectedReserveSizeForHeapExtended = 4 * systemMemorySize;
 
-    EXPECT_EQ(11u, static_cast<MockOsMemory *>(gfxPartitions[0]->osMemory.get())->getReserveCount());
+    auto osMemory0 = static_cast<MockOsMemory *>(gfxPartitions[0]->osMemory.get());
+    EXPECT_EQ(2u, osMemory0->reservationSizes.size());
+    EXPECT_EQ(expectedReserveSizeForNonSvm, osMemory0->reservationSizes[0]);
+    EXPECT_EQ(expectedReserveSizeForHeapExtended, osMemory0->reservationSizes[1]);
+
+    for (int i = 1; i < numRootDevices; i++) {
+        auto osMemory = static_cast<MockOsMemory *>(gfxPartitions[i]->osMemory.get());
+        EXPECT_EQ(1u, osMemory->reservationSizes.size());
+        EXPECT_EQ(expectedReserveSizeForHeapExtended, osMemory->reservationSizes[0]);
+    }
 }
 
-TEST(GfxPartitionTest, givenGpuAddressSpaceIs57BitAndSeveralRootDevicesThenHeapExtendedIsSplitted) {
+TEST(GfxPartitionTest, givenGpuAddressSpaceIs57BitAndSeveralRootDevicesThenHeapExtendedIsSplit) {
     if (is32bit) {
         GTEST_SKIP();
     }

@@ -5,7 +5,7 @@
  *
  */
 
-#include "level_zero/include/level_zero/zes_intel_gpu_sysman.h"
+#include "level_zero/zes_intel_gpu_sysman.h"
 #include <level_zero/zes_api.h>
 
 #include <algorithm>
@@ -512,7 +512,7 @@ void testSysmanEcc(ze_device_handle_t &device) {
     ze_bool_t eccAvailable = false;
     VALIDATECALL(zesDeviceEccAvailable(device, &eccAvailable));
     if (eccAvailable == false) {
-        std::cout << "Ecc not availabe" << std::endl;
+        std::cout << "Ecc not available" << std::endl;
         return;
     }
 
@@ -1267,6 +1267,7 @@ void testSysmanFirmware(ze_device_handle_t &device, std::string imagePath) {
         }
         if (imagePath.size() != 0 && imgSize > 0) {
             std::vector<char> img(imgSize);
+            imageFile.seekg(0, std::ios::beg);
             imageFile.read(img.data(), imgSize);
 
             flashData.flashComplete = false;
@@ -1588,7 +1589,7 @@ void testSysmanDiagnostics(ze_device_handle_t &device) {
                 std::cout << "diagnostics run, unable to fix" << std::endl;
                 break;
             case ZES_DIAG_RESULT_ABORT:
-                std::cout << "diagnostics run fialed, unknown error" << std::endl;
+                std::cout << "diagnostics run failed, unknown error" << std::endl;
                 break;
             case ZES_DIAG_RESULT_FORCE_UINT32:
             default:

@@ -24,7 +24,6 @@
 #include "shared/test/common/mocks/mock_gmm_resource_info.h"
 #include "shared/test/common/mocks/mock_memory_manager.h"
 #include "shared/test/common/test_macros/test.h"
-#include "shared/test/common/test_macros/test_checks_shared.h"
 
 #include "opencl/extensions/public/cl_ext_private.h"
 #include "opencl/source/helpers/mipmap.h"
@@ -38,6 +37,7 @@
 #include "opencl/test/unit_test/mocks/mock_context.h"
 #include "opencl/test/unit_test/mocks/mock_image.h"
 #include "opencl/test/unit_test/mocks/mock_platform.h"
+#include "opencl/test/unit_test/mocks/ult_cl_device_factory_with_platform.h"
 
 #include "CL/cl.h"
 #include "memory_properties_flags.h"
@@ -836,6 +836,7 @@ TEST_P(CreateImageHostPtr, givenLinearImageWhenFailedAtCreationThenReturnError) 
 }
 
 TEST_P(CreateImageHostPtr, WhenWritingOutsideAllocatedMemoryWhileCreatingImageThenWriteIsHandledCorrectly) {
+    pClDevice->getPlatform()->getSVMAllocsManager()->cleanupUSMAllocCaches();
     auto mockMemoryManager = new MockMemoryManager(*pDevice->executionEnvironment);
     pDevice->injectMemoryManager(mockMemoryManager);
     context->memoryManager = mockMemoryManager;
@@ -908,7 +909,7 @@ class ImageTransfer : public ::testing::Test {
     void *unalignedHostPtr;
 };
 
-TEST_F(ImageTransfer, GivenNonZeroCopyImageWhenDataTransferedFromHostPtrToMemStorageThenNoOverflowOfHostPtr) {
+TEST_F(ImageTransfer, GivenNonZeroCopyImageWhenDataTransferredFromHostPtrToMemStorageThenNoOverflowOfHostPtr) {
     size_t imageSize = 512 * 4;
     createHostPtrs(imageSize);
 
@@ -946,7 +947,7 @@ TEST_F(ImageTransfer, GivenNonZeroCopyImageWhenDataTransferedFromHostPtrToMemSto
     delete imageNonZeroCopy;
 }
 
-TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchImageWhenDataIsTransferedFromHostPtrToMemStorageThenDestinationIsNotOverflowed) {
+TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchImageWhenDataIsTransferredFromHostPtrToMemStorageThenDestinationIsNotOverflowed) {
     ModifyableImage::imageDesc.image_width = 16;
     ModifyableImage::imageDesc.image_row_pitch = 65;
     ModifyableImage::imageFormat.image_channel_data_type = CL_UNORM_INT8;
@@ -982,7 +983,7 @@ TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchImageWhenDataIsTransferedFr
     delete imageNonZeroCopy;
 }
 
-TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchWithExtraBytes1DArrayImageWhenDataIsTransferedForthAndBackThenDataValidates) {
+TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchWithExtraBytes1DArrayImageWhenDataIsTransferredForthAndBackThenDataValidates) {
     ModifyableImage::imageDesc.image_type = CL_MEM_OBJECT_IMAGE1D_ARRAY;
     ModifyableImage::imageDesc.image_width = 5;
     ModifyableImage::imageDesc.image_row_pitch = 28; // == (4 * 5) row bytes + (4 * 2) extra bytes
@@ -1066,10 +1067,8 @@ TEST_F(ImageTransfer, GivenNonZeroCopyNonZeroRowPitchWithExtraBytes1DArrayImageW
                 if (row[pixelInRow] != pixelInRow) {
                     EXPECT_FALSE(1) << "Data under host_ptr did not validate, row: " << pixelInRow << " array: " << arrayIndex << "\n";
                 }
-            } else {
-                if (row[pixelInRow] != 55) {
-                    EXPECT_FALSE(1) << "Data under host_ptr corrupted in extra bytes, row: " << pixelInRow << " array: " << arrayIndex << "\n";
-                }
+            } else if (row[pixelInRow] != 55) {
+                EXPECT_FALSE(1) << "Data under host_ptr corrupted in extra bytes, row: " << pixelInRow << " array: " << arrayIndex << "\n";
             }
         }
         row = row + imageRowPitchInPixels;

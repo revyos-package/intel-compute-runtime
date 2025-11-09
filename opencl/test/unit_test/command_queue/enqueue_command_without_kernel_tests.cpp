@@ -111,9 +111,9 @@ HWTEST_F(EnqueueHandlerTimestampEnabledTest, givenProflingAndTimeStampPacketsEna
     EXPECT_NE(ev->submitTimeStamp.gpuTimeInNs, 0u);
     EXPECT_NE(ev->submitTimeStamp.gpuTimeStamp, 0u);
 
-    EXPECT_NE(ev->startTimeStamp.cpuTimeInNs, 0u);
-    EXPECT_NE(ev->startTimeStamp.gpuTimeInNs, 0u);
-    EXPECT_NE(ev->startTimeStamp.gpuTimeStamp, 0u);
+    EXPECT_EQ(ev->startTimeStamp.cpuTimeInNs, 0u);
+    EXPECT_EQ(ev->startTimeStamp.gpuTimeInNs, 0u);
+    EXPECT_EQ(ev->startTimeStamp.gpuTimeStamp, 0u);
     delete ev;
 }
 
@@ -573,6 +573,75 @@ HWTEST_F(EnqueueHandlerTest, GivenCommandStreamWithoutKernelAndZeroSurfacesWhenE
                                          MemoryConstants::cacheLineSize);
 
     EXPECT_EQ(mockCmdQ->getCS(0).getUsed(), requiredCmdStreamSize);
+}
+
+HWTEST_F(EnqueueHandlerTest, givenEnableL3FlushAfterPostSyncWithSignalingEventWhenEnqueueWithoutKernelIsCalledThenEventIsSetToWaitForTaskCount) {
+
+    DebugManagerStateRestore dbgRestorer;
+    debugManager.flags.EnableL3FlushAfterPostSync.set(1);
+
+    auto &productHelper = pClDevice->getDevice().getProductHelper();
+    if (!productHelper.isL3FlushAfterPostSyncSupported(true)) {
+        GTEST_SKIP();
+    }
+
+    auto &csr = pDevice->getUltCommandStreamReceiver<FamilyType>();
+    csr.timestampPacketWriteEnabled = true;
+    auto mockTagAllocator = new MockTagAllocator<>(csr.rootDeviceIndex, pDevice->getMemoryManager());
+    csr.timestampPacketAllocator.reset(mockTagAllocator);
+    auto mockCmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, pClDevice, nullptr);
+
+    auto event = std::make_unique<MockEvent<Event>>(context, nullptr, 0, 0, 0);
+    cl_event clEvent = event.get();
+
+    mockCmdQ->setPendingL3FlushForHostVisibleResources(true);
+
+    MultiDispatchInfo multiDispatch;
+    const auto enqueueResult = mockCmdQ->template enqueueHandler<CL_COMMAND_SVM_MAP>(nullptr, 0, false, multiDispatch, 0, nullptr, &clEvent);
+    EXPECT_EQ(CL_SUCCESS, enqueueResult);
+
+    auto eventObj = castToObject<Event>(clEvent);
+
+    EXPECT_TRUE(eventObj->getWaitForTaskCountRequired());
+
+    clReleaseEvent(clEvent);
+}
+
+HWTEST_F(EnqueueHandlerTest, givenL3FlushDeferredIfNeededWhenEnqueueWithoutKernelBlockingIsCalledThenPipeControlWithL3FlushIsProgrammed) {
+    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
+
+    DebugManagerStateRestore dbgRestorer;
+    debugManager.flags.EnableL3FlushAfterPostSync.set(1);
+
+    auto &productHelper = pClDevice->getDevice().getProductHelper();
+    if (!productHelper.isL3FlushAfterPostSyncSupported(true)) {
+        GTEST_SKIP();
+    }
+
+    auto &csr = pDevice->getUltCommandStreamReceiver<FamilyType>();
+    csr.timestampPacketWriteEnabled = true;
+    auto mockTagAllocator = new MockTagAllocator<>(csr.rootDeviceIndex, pDevice->getMemoryManager());
+    csr.timestampPacketAllocator.reset(mockTagAllocator);
+    auto mockCmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, pClDevice, nullptr);
+
+    mockCmdQ->setPendingL3FlushForHostVisibleResources(true);
+
+    MultiDispatchInfo multiDispatch;
+    auto finishCalledCountBefore = mockCmdQ->finishCalledCount;
+    auto taskCountBeforeFinish = csr.taskCount.load();
+
+    const auto enqueueResult = mockCmdQ->template enqueueHandler<CL_COMMAND_SVM_MAP>(nullptr, 0, true, multiDispatch, 0, nullptr, nullptr);
+    EXPECT_EQ(CL_SUCCESS, enqueueResult);
+
+    HardwareParse hwParser;
+    hwParser.parseCommands<FamilyType>(csr.commandStream, 0);
+    auto pipeControls = findAll<PIPE_CONTROL *>(hwParser.cmdList.begin(), hwParser.cmdList.end());
+    auto pipeControlCmd = genCmdCast<PIPE_CONTROL *>(*pipeControls.back());
+    EXPECT_TRUE(pipeControlCmd->getDcFlushEnable());
+
+    EXPECT_TRUE(csr.flushTagUpdateCalled);
+    EXPECT_EQ(finishCalledCountBefore + 1, mockCmdQ->finishCalledCount);
+    EXPECT_EQ(taskCountBeforeFinish + 1, mockCmdQ->latestTaskCountWaited);
 }
 
 HWTEST_F(EnqueueHandlerTest, givenTimestampPacketWriteEnabledAndCommandWithCacheFlushWhenEnqueueingHandlerThenObtainNewStamp) {

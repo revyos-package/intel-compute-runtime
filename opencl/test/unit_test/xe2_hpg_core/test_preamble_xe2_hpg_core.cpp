@@ -14,7 +14,7 @@ using PreambleCfeState = PreambleFixture;
 XE2_HPG_CORETEST_F(PreambleCfeState, givenXe2HpgCoreAndConcurrentKernelExecutionTypeWhenCallingProgramVFEStateThenSingleSpliceDispatchCcsModeIsEnabled) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
-    auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute);
+    auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute, nullptr);
     StreamProperties streamProperties{};
     streamProperties.initSupport(pDevice->getRootDeviceEnvironment());
     streamProperties.frontEndState.setPropertiesAll(true, false, false);
@@ -27,10 +27,10 @@ XE2_HPG_CORETEST_F(PreambleCfeState, givenXe2HpgCoreAndConcurrentKernelExecution
     EXPECT_FALSE(cfeState->getSingleSliceDispatchCcsMode());
 }
 
-XE2_HPG_CORETEST_F(PreambleCfeState, givenXe2HpgCoreAndDefaultKernelExecutionTypeWhenCallingProgramVFEStateThenSingleSpliceDispatchCcsModeIsDisabled) {
+XE2_HPG_CORETEST_F(PreambleCfeState, givenXe2HpgCoreAndDefaultKernelExecutionTypeWhenCallingProgramVFEStateThenSingleSliceDispatchCcsModeIsDisabled) {
     using CFE_STATE = typename FamilyType::CFE_STATE;
 
-    auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute);
+    auto pVfeCmd = PreambleHelper<FamilyType>::getSpaceForVfeState(&linearStream, *defaultHwInfo, EngineGroupType::renderCompute, nullptr);
     StreamProperties streamProperties{};
     streamProperties.initSupport(pDevice->getRootDeviceEnvironment());
     streamProperties.frontEndState.setPropertiesAll(false, false, false);

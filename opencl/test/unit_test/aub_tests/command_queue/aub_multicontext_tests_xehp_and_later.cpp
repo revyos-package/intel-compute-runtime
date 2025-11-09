@@ -234,7 +234,7 @@ struct EnqueueWithWalkerPartitionFourTilesTests : public FourTilesSingleContextT
         kernelIds |= (1 << 8);
 
         FourTilesSingleContextTest::SetUp();
-        SimpleKernelFixture::setUp(rootDevice.get(), context.get());
+        SimpleKernelFixture::setUp(rootDevice, context.get());
 
         rootCsr = rootDevice->getDefaultEngine().commandStreamReceiver;
         EXPECT_EQ(4u, rootCsr->getOsContext().getNumSupportedDevices());
@@ -278,7 +278,7 @@ struct DynamicWalkerPartitionFourTilesTests : EnqueueWithWalkerPartitionFourTile
 HWTEST2_F(DynamicWalkerPartitionFourTilesTests, whenWalkerPartitionIsEnabledForKernelWithAtomicThenOutputDataIsValid, SupportsMultiTile) {
     using MI_SEMAPHORE_WAIT = typename FamilyType::MI_SEMAPHORE_WAIT;
 
-    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice.get(), nullptr);
+    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice, nullptr);
 
     commandQueues[0][0].reset(mockCommandQueue);
 
@@ -336,7 +336,7 @@ HWTEST2_F(DynamicWalkerPartitionFourTilesTests, whenWalkerPartitionIsEnabledForK
 
 HWTEST2_F(DynamicWalkerPartitionFourTilesTests, whenWalkerPartitionIsEnabledForKernelWithoutAtomicThenOutputDataIsValid, SupportsMultiTile) {
 
-    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice.get(), nullptr);
+    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice, nullptr);
 
     commandQueues[0][0].reset(mockCommandQueue);
 
@@ -407,7 +407,7 @@ struct StaticWalkerPartitionFourTilesTests : EnqueueWithWalkerPartitionFourTiles
 
 HWTEST2_F(StaticWalkerPartitionFourTilesTests, givenFourTilesWhenStaticWalkerPartitionIsEnabledForKernelThenOutputDataIsValid, SupportsMultiTile) {
 
-    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice.get(), nullptr);
+    auto mockCommandQueue = new MockCommandQueueHw<FamilyType>(multiTileDefaultContext.get(), rootDevice, nullptr);
 
     commandQueues[0][0].reset(mockCommandQueue);
 
@@ -576,8 +576,8 @@ HWTEST2_F(SingleTileDualContextTest, givenSingleAllocationWhenUpdatedFromDiffere
     commandQueues[0][0]->enqueueWriteBuffer(buffer.get(), CL_FALSE, 0, halfBufferSize, writePattern1, nullptr, 0, nullptr, nullptr);
     commandQueues[0][1]->enqueueWriteBuffer(buffer.get(), CL_FALSE, halfBufferSize, halfBufferSize, writePattern2, nullptr, 0, nullptr, nullptr);
 
-    commandQueues[0][1]->finish(); // submit second enqueue first to make sure that residency flow is correct
-    commandQueues[0][0]->finish();
+    commandQueues[0][1]->finish(false); // submit second enqueue first to make sure that residency flow is correct
+    commandQueues[0][0]->finish(false);
 
     auto gpuPtr = reinterpret_cast<void *>(buffer->getGraphicsAllocation(rootDeviceIndex)->getGpuAddress() + buffer->getOffset());
     expectMemory<FamilyType>(gpuPtr, writePattern1, halfBufferSize, 0, 0);

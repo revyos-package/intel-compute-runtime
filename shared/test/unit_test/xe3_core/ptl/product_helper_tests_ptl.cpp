@@ -67,8 +67,8 @@ PTLTEST_F(PtlProductHelper, givenProductHelperWhenCallIsCachingOnCpuAvailableThe
     EXPECT_FALSE(productHelper->isCachingOnCpuAvailable());
 }
 
-PTLTEST_F(PtlProductHelper, givenProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnTrue) {
-    EXPECT_TRUE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
+PTLTEST_F(PtlProductHelper, givenProductHelperWhenIsInitBuiltinAsyncSupportedThenReturnFalse) {
+    EXPECT_FALSE(productHelper->isInitBuiltinAsyncSupported(*defaultHwInfo));
 }
 
 PTLTEST_F(PtlProductHelper, givenProductHelperWhenCallIsStagingBuffersEnabledThenReturnTrue) {
@@ -135,4 +135,8 @@ PTLTEST_F(PtlProductHelper, givenProductHelperWhenCheckingIsHostDeviceUsmPoolAll
         EXPECT_TRUE(productHelper->isHostUsmPoolAllocatorSupported());
         EXPECT_TRUE(productHelper->isDeviceUsmPoolAllocatorSupported());
     }
+}
+
+PTLTEST_F(PtlProductHelper, givenProductHelperWhenIsMisalignedUserPtr2WayCoherentThenReturnTrue) {
+    EXPECT_TRUE(productHelper->isMisalignedUserPtr2WayCoherent());
 }

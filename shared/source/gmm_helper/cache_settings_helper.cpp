@@ -56,12 +56,10 @@ GMM_RESOURCE_USAGE_TYPE_ENUM CacheSettingsHelper::getDefaultUsageTypeWithCaching
     }
 
     if (hwInfo->capabilityTable.isIntegratedDevice) {
-        if (productHelper.isResourceUncachedForCS(allocationType)) {
+        if (productHelper.isResourceUncachedForCS(allocationType) || AllocationType::tagBuffer == allocationType || AllocationType::hostFunction == allocationType) {
             return GMM_RESOURCE_USAGE_OCL_BUFFER_CSR_UC;
         } else if (AllocationType::semaphoreBuffer == allocationType) {
             return GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
-        } else if (AllocationType::tagBuffer == allocationType) {
-            return GMM_RESOURCE_USAGE_OCL_BUFFER;
         }
     }
 
@@ -95,6 +93,8 @@ GMM_RESOURCE_USAGE_TYPE_ENUM CacheSettingsHelper::getDefaultUsageTypeWithCaching
     case AllocationType::svmCpu:
     case AllocationType::svmZeroCopy:
     case AllocationType::tagBuffer:
+    case AllocationType::printfSurface:
+    case AllocationType::hostFunction:
         if (debugManager.flags.DisableCachingForStatefulBufferAccess.get()) {
             return getDefaultUsageTypeWithCachingDisabled(allocationType, productHelper);
         }
@@ -124,6 +124,10 @@ GMM_RESOURCE_USAGE_TYPE_ENUM CacheSettingsHelper::getDefaultUsageTypeWithCaching
 
 // Set 2-way coherency for allocations which are not aligned to cacheline
 GMM_RESOURCE_USAGE_TYPE_ENUM CacheSettingsHelper::getGmmUsageTypeForUserPtr(bool isCacheFlushRequired, const void *userPtr, size_t size, const ProductHelper &productHelper) {
+    if (debugManager.flags.Disable2WayCoherencyOverride.get()) {
+        return GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER;
+    }
+
     if (isCacheFlushRequired && !isL3Capable(userPtr, size) && productHelper.isMisalignedUserPtr2WayCoherent()) {
         return GMM_RESOURCE_USAGE_HW_CONTEXT;
     } else {

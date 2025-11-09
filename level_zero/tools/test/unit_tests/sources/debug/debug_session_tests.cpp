@@ -26,8 +26,106 @@
 #include "common/StateSaveAreaHeader.h"
 #include "encode_surface_state_args.h"
 
+namespace NEO {
+extern std::map<std::string, std::stringstream> virtualFileList;
+}
+
 namespace L0 {
 namespace ult {
+
+TEST(DebugSessionTest, GivenValidArgsWhenReadSipMemoryCalledThenReturnsSizeAndReadsMemory) {
+    zet_debug_config_t config = {};
+    config.pid = 0x1234;
+    auto hwInfo = *NEO::defaultHwInfo.get();
+    ze_result_t returnValue = ZE_RESULT_SUCCESS;
+    std::unique_ptr<DriverHandleImp> driverHandle(new DriverHandleImp);
+    auto neoDevice = std::unique_ptr<NEO::Device>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
+    auto device = std::unique_ptr<L0::Device>(Device::create(driverHandle.get(), neoDevice.release(), false, &returnValue));
+    ASSERT_NE(nullptr, device);
+    auto sessionMock = std::make_unique<MockDebugSession>(config, device.get());
+
+    DebugSessionImp::SipMemoryAccessArgs args = {};
+    args.debugSession = sessionMock.get();
+    args.contextHandle = 0x1234;
+    args.gpuVa = 0x1000;
+
+    constexpr uint32_t size = 16;
+    char destination[size] = {};
+    sessionMock->readGpuMemoryCallCount = 0;
+
+    uint32_t ret = DebugSessionImp::readSipMemory(&args, 0x10, size, destination);
+    EXPECT_EQ(size, ret);
+    EXPECT_EQ(1u, sessionMock->readGpuMemoryCallCount);
+}
+
+TEST(DebugSessionTest, GivenReadGpuMemoryFailsWhenReadSipMemoryCalledThenReturnsZero) {
+    zet_debug_config_t config = {};
+    config.pid = 0x1234;
+    auto hwInfo = *NEO::defaultHwInfo.get();
+    ze_result_t returnValue = ZE_RESULT_SUCCESS;
+    std::unique_ptr<DriverHandleImp> driverHandle(new DriverHandleImp);
+    auto neoDevice = std::unique_ptr<NEO::Device>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
+    auto device = std::unique_ptr<L0::Device>(Device::create(driverHandle.get(), neoDevice.release(), false, &returnValue));
+    ASSERT_NE(nullptr, device);
+    auto sessionMock = std::make_unique<MockDebugSession>(config, device.get());
+
+    DebugSessionImp::SipMemoryAccessArgs args = {};
+    args.debugSession = sessionMock.get();
+    args.contextHandle = 0x1234;
+    args.gpuVa = 0x1000;
+
+    sessionMock->forcereadGpuMemoryFailOnCount = 1;
+    char destination[8] = {};
+    uint32_t ret = DebugSessionImp::readSipMemory(&args, 0, 8, destination);
+    EXPECT_EQ(0u, ret);
+}
+
+TEST(DebugSessionTest, GivenValidArgsWhenWriteSipMemoryCalledThenReturnsSizeAndWritesMemory) {
+    zet_debug_config_t config = {};
+    config.pid = 0x1234;
+    auto hwInfo = *NEO::defaultHwInfo.get();
+    ze_result_t returnValue = ZE_RESULT_SUCCESS;
+    std::unique_ptr<DriverHandleImp> driverHandle(new DriverHandleImp);
+    auto neoDevice = std::unique_ptr<NEO::Device>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
+    auto device = std::unique_ptr<L0::Device>(Device::create(driverHandle.get(), neoDevice.release(), false, &returnValue));
+    ASSERT_NE(nullptr, device);
+    auto sessionMock = std::make_unique<MockDebugSession>(config, device.get());
+
+    DebugSessionImp::SipMemoryAccessArgs args = {};
+    args.debugSession = sessionMock.get();
+    args.contextHandle = 0x5678;
+    args.gpuVa = 0x2000;
+
+    constexpr uint32_t size = 32;
+    char source[size] = {1, 2, 3, 4};
+    sessionMock->writeGpuMemoryCallCount = 0;
+
+    uint32_t ret = DebugSessionImp::writeSipMemory(&args, 0x20, size, source);
+    EXPECT_EQ(size, ret);
+    EXPECT_EQ(1u, sessionMock->writeGpuMemoryCallCount);
+}
+
+TEST(DebugSessionTest, GivenWriteGpuMemoryFailsWhenWriteSipMemoryCalledThenReturnsZero) {
+    zet_debug_config_t config = {};
+    config.pid = 0x1234;
+    auto hwInfo = *NEO::defaultHwInfo.get();
+    ze_result_t returnValue = ZE_RESULT_SUCCESS;
+    std::unique_ptr<DriverHandleImp> driverHandle(new DriverHandleImp);
+    auto neoDevice = std::unique_ptr<NEO::Device>(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(&hwInfo, 0));
+    auto device = std::unique_ptr<L0::Device>(Device::create(driverHandle.get(), neoDevice.release(), false, &returnValue));
+    ASSERT_NE(nullptr, device);
+    auto sessionMock = std::make_unique<MockDebugSession>(config, device.get());
+
+    DebugSessionImp::SipMemoryAccessArgs args = {};
+    args.debugSession = sessionMock.get();
+    args.contextHandle = 0x5678;
+    args.gpuVa = 0x2000;
+
+    sessionMock->forceWriteGpuMemoryFailOnCount = 1;
+    char source[8] = {5, 6, 7, 8};
+    uint32_t ret = DebugSessionImp::writeSipMemory(&args, 0, 8, source);
+    EXPECT_EQ(0u, ret);
+}
 
 using DebugSessionTest = ::testing::Test;
 
@@ -107,7 +205,7 @@ TEST(DebugSessionTest, givenAllStoppedThreadsWhenInterruptCalledThenErrorNotAvai
 
     auto sessionMock = std::make_unique<MockDebugSession>(config, &deviceImp);
 
-    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount; i++) {
+    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.NumThreadsPerEu; i++) {
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         sessionMock->allThreads[thread]->stopThread(1u);
         sessionMock->allThreads[thread]->reportAsStopped();
@@ -977,7 +1075,7 @@ TEST(DebugSessionTest, givenSomeThreadsRunningWhenResumeCalledThenOnlyStoppedThr
 
     ze_device_thread_t thread = {0, 0, 0, UINT32_MAX};
 
-    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount; i++) {
+    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.NumThreadsPerEu; i++) {
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         sessionMock->allThreads[thread]->stopThread(1u);
         sessionMock->allThreads[thread]->reportAsStopped();
@@ -989,9 +1087,9 @@ TEST(DebugSessionTest, givenSomeThreadsRunningWhenResumeCalledThenOnlyStoppedThr
     auto result = sessionMock->resume(thread);
 
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    EXPECT_EQ(hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount - 1u, sessionMock->resumeThreadCount);
+    EXPECT_EQ(hwInfo.gtSystemInfo.NumThreadsPerEu - 1u, sessionMock->resumeThreadCount);
 
-    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount; i++) {
+    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.NumThreadsPerEu; i++) {
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         EXPECT_TRUE(sessionMock->allThreads[thread]->isRunning());
     }
@@ -1018,7 +1116,7 @@ TEST(DebugSessionTest, givenStoppedThreadsWhenResumeAllCalledThenOnlyReportedSto
         sessionMock->stateSaveAreaHeader.resize(size);
     }
 
-    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount; i++) {
+    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.NumThreadsPerEu; i++) {
         // set reportAsStopped threads from EU0
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         sessionMock->allThreads[thread]->stopThread(1u);
@@ -1034,9 +1132,9 @@ TEST(DebugSessionTest, givenStoppedThreadsWhenResumeAllCalledThenOnlyReportedSto
 
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
     // only threads from EU0 resumed
-    EXPECT_EQ(hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount, sessionMock->resumeThreadCount);
+    EXPECT_EQ(hwInfo.gtSystemInfo.NumThreadsPerEu, sessionMock->resumeThreadCount);
 
-    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount; i++) {
+    for (uint32_t i = 0; i < hwInfo.gtSystemInfo.NumThreadsPerEu; i++) {
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         EXPECT_TRUE(sessionMock->allThreads[thread]->isRunning());
 
@@ -1065,7 +1163,7 @@ TEST(DebugSessionTest, givenMultipleStoppedThreadsWhenResumeAllCalledThenStateSa
         sessionMock->stateSaveAreaHeader.resize(size);
     }
 
-    auto threadCount = hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount;
+    auto threadCount = hwInfo.gtSystemInfo.NumThreadsPerEu;
     for (uint32_t i = 0; i < threadCount; i++) {
         // set reportAsStopped threads from EU0
         EuThread::ThreadId thread(0, 0, 0, 0, i);
@@ -1137,7 +1235,7 @@ TEST(DebugSessionTest, givenMultipleStoppedThreadsWhenResumeAllCalledThenStateSa
                 pStateSaveAreaHeader->regHeader.state_save_size * 16;
     sessionMock->stateSaveAreaHeader.resize(size);
 
-    auto threadCount = hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount;
+    auto threadCount = hwInfo.gtSystemInfo.NumThreadsPerEu;
     for (uint32_t i = 0; i < threadCount; i++) {
         // set reportAsStopped threads from EU0
         EuThread::ThreadId thread(0, 0, 0, 0, i);
@@ -1183,9 +1281,9 @@ TEST(DebugSessionTest, givenMultipleStoppedThreadsAndInvalidStateSaveAreaWhenRes
     MockDeviceImp deviceImp(neoDevice);
 
     auto sessionMock = std::make_unique<MockDebugSession>(config, &deviceImp);
-    sessionMock->forceZeroStateSaveAreaSize = true;
+    sessionMock->forceStateSaveAreaSize = 0;
 
-    auto threadCount = hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount;
+    auto threadCount = hwInfo.gtSystemInfo.NumThreadsPerEu;
     for (uint32_t i = 0; i < threadCount; i++) {
         EuThread::ThreadId thread(0, 0, 0, 0, i);
         sessionMock->allThreads[thread]->stopThread(1u);
@@ -2120,6 +2218,54 @@ TEST_F(DebugSessionTest, GivenInvalidSwFifoNodeWhenCheckingIsValidNodeAndOnReadi
     SIP::fifo_node invalidNode = {0, 1, 1, 0, 0};
     session->readMemoryResult = ZE_RESULT_ERROR_UNKNOWN;
     EXPECT_EQ(ZE_RESULT_ERROR_UNKNOWN, session->isValidNode(0, reinterpret_cast<uint64_t>(session->readMemoryBuffer.data()), invalidNode));
+}
+
+TEST_F(DebugSessionTest, givenDumpDebugSurfaceFileWhenStateSaveAreaIsReadThenDebugSurfaceFileIsDumped) {
+    static constexpr const char *filePath = "test_dump_file.bin";
+    DebugManagerStateRestore restorer;
+    NEO::debugManager.flags.DumpDebugSurfaceFile.set(filePath);
+
+    const std::vector<uint8_t> stateSaveAreaContent = {0xaa, 0xbb, 0xcc, 0xdd};
+
+    MockDeviceImp deviceImp(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get(), 0));
+
+    auto session = std::make_unique<MockDebugSession>(zet_debug_config_t{}, &deviceImp);
+    session->readMemoryBuffer.assign(stateSaveAreaContent.cbegin(), stateSaveAreaContent.cend());
+    session->forceStateSaveAreaSize = session->readMemoryBuffer.size();
+    session->validateAndSetStateSaveAreaHeader(0, reinterpret_cast<uint64_t>(session->readMemoryBuffer.data()));
+
+    EXPECT_EQ(1u, NEO::virtualFileList.size());
+    EXPECT_TRUE(NEO::virtualFileList.find(filePath) != NEO::virtualFileList.end());
+    auto content = NEO::virtualFileList.at(filePath).str();
+    EXPECT_EQ(stateSaveAreaContent, std::vector<uint8_t>(content.cbegin(), content.cend()));
+}
+
+TEST_F(DebugSessionTest, givenNoDumpDebugSurfaceFileWhenStateSaveAreaIsReadThenDebugSurfaceFileIsNotDumped) {
+    const std::vector<uint8_t> stateSaveAreaContent = {0xaa, 0xbb, 0xcc, 0xdd};
+
+    MockDeviceImp deviceImp(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get(), 0));
+    auto session = std::make_unique<MockDebugSession>(zet_debug_config_t{}, &deviceImp);
+
+    session->readMemoryBuffer.assign(stateSaveAreaContent.cbegin(), stateSaveAreaContent.cend());
+    session->forceStateSaveAreaSize = session->readMemoryBuffer.size();
+
+    session->validateAndSetStateSaveAreaHeader(0, reinterpret_cast<uint64_t>(session->readMemoryBuffer.data()));
+
+    EXPECT_EQ(0u, NEO::virtualFileList.size());
+}
+
+TEST_F(DebugSessionTest, givenDumpDebugSurfaceFileWhenStateSaveAreaIsReadAndReadGpuMemoryFailsThenDebugSurfaceFileIsNotDumped) {
+    static constexpr const char *filePath = "test_dump_file.bin";
+    DebugManagerStateRestore restorer;
+    NEO::debugManager.flags.DumpDebugSurfaceFile.set(filePath);
+
+    MockDeviceImp deviceImp(NEO::MockDevice::createWithNewExecutionEnvironment<NEO::MockDevice>(NEO::defaultHwInfo.get(), 0));
+
+    auto session = std::make_unique<MockDebugSession>(zet_debug_config_t{}, &deviceImp);
+    session->readMemoryResult = ZE_RESULT_ERROR_UNKNOWN;
+    session->validateAndSetStateSaveAreaHeader(0, reinterpret_cast<uint64_t>(session->readMemoryBuffer.data()));
+
+    EXPECT_EQ(0u, NEO::virtualFileList.size());
 }
 
 TEST_F(DebugSessionTest, givenTssMagicCorruptedWhenStateSaveAreIsReadThenHeaderIsNotSet) {

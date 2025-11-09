@@ -325,19 +325,6 @@ HWTEST_F(TbxCommandStreamTests, givenTbxCommandStreamReceiverWhenFlushIsCalledTh
     memoryManager->freeGraphicsMemory(commandBuffer);
 }
 
-HWTEST_F(TbxCommandStreamTests, givenNoDbgDeviceIdFlagWhenTbxCsrIsCreatedThenUseDefaultDeviceId) {
-    const HardwareInfo &hwInfo = *defaultHwInfo;
-    TbxCommandStreamReceiverHw<FamilyType> *tbxCsr = reinterpret_cast<TbxCommandStreamReceiverHw<FamilyType> *>(pCommandStreamReceiver);
-    EXPECT_EQ(hwInfo.capabilityTable.aubDeviceId, tbxCsr->aubDeviceId);
-}
-
-HWTEST_F(TbxCommandStreamTests, givenDbgDeviceIdFlagIsSetWhenTbxCsrIsCreatedThenUseDebugDeviceId) {
-    DebugManagerStateRestore stateRestore;
-    debugManager.flags.OverrideAubDeviceId.set(9); // this is Hsw, not used
-    std::unique_ptr<TbxCommandStreamReceiverHw<FamilyType>> tbxCsr(reinterpret_cast<TbxCommandStreamReceiverHw<FamilyType> *>(TbxCommandStreamReceiver::create("", false, *pDevice->executionEnvironment, pDevice->getRootDeviceIndex(), pDevice->getDeviceBitfield())));
-    EXPECT_EQ(9u, tbxCsr->aubDeviceId);
-}
-
 HWTEST_F(TbxCommandSteamSimpleTest, givenTbxCsrWhenCallingMakeSurfacePackNonResidentThenOnlyResidentAllocationsAddedAllocationsForDownload) {
     MockTbxCsr<FamilyType> tbxCsr{*pDevice->executionEnvironment, pDevice->getDeviceBitfield()};
     MockOsContext osContext(0, EngineDescriptorHelper::getDefaultDescriptor(pDevice->getDeviceBitfield()));
@@ -783,7 +770,7 @@ HWTEST_F(TbxCommandStreamTests, givenTbxCsrWhenCreatedWithAubDumpThenOpenIsCalle
 }
 
 using SimulatedCsrTest = ::testing::Test;
-HWTEST_F(SimulatedCsrTest, givenTbxCsrTypeWhenCreateCommandStreamReceiverThenProperAubCenterIsInitalized) {
+HWTEST_F(SimulatedCsrTest, givenTbxCsrTypeWhenCreateCommandStreamReceiverThenProperAubCenterIsInitialized) {
     uint32_t expectedRootDeviceIndex = 10;
     MockExecutionEnvironment executionEnvironment(defaultHwInfo.get(), true, expectedRootDeviceIndex + 2);
     executionEnvironment.initializeMemoryManager();
@@ -1550,7 +1537,6 @@ HWTEST_F(TbxCommandStreamTests, givenTbxModeWhenPageFaultManagerIsNotAvailableTh
 }
 
 static constexpr std::array onceWritableAllocTypesForTbx{
-    AllocationType::pipe,
     AllocationType::constantSurface,
     AllocationType::globalSurface,
     AllocationType::kernelIsa,
@@ -1569,6 +1555,7 @@ static constexpr std::array onceWritableAllocTypesForTbx{
     AllocationType::tagBuffer,
     AllocationType::syncDispatchToken,
     AllocationType::bufferHostMemory,
+    AllocationType::hostFunction,
 };
 
 HWTEST_F(TbxCommandStreamTests, givenAubOneTimeWritableAllocWhenTbxFaultManagerIsAvailableAndAllocIsTbxFaultableThenTbxFaultableTypesShouldReturnTrue) {

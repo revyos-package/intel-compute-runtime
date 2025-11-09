@@ -36,7 +36,6 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy.h
     ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/casts.h
     ${CMAKE_CURRENT_SOURCE_DIR}/common_types.h
     ${CMAKE_CURRENT_SOURCE_DIR}/compiler_product_helper.h
@@ -58,6 +57,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/debug_helpers.h
     ${CMAKE_CURRENT_SOURCE_DIR}/deferred_deleter_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/device_bitfield.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/device_caps_reader.h
     ${CMAKE_CURRENT_SOURCE_DIR}/device_hierarchy_mode.h
     ${CMAKE_CURRENT_SOURCE_DIR}/driver_model_type.h
     ${CMAKE_CURRENT_SOURCE_DIR}/dirty_state_helpers.cpp
@@ -90,8 +90,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_bdw_to_dg2.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_bdw_to_icllp.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_tgllp_to_dg2.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_pvc_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu_page_fault_helper.cpp
@@ -133,6 +132,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/preamble.h
     ${CMAKE_CURRENT_SOURCE_DIR}/preamble_base.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/preprocessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/${BRANCH_DIR_SUFFIX}product_config_helper_extra.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/product_config_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/product_config_helper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/ptr_math.h
@@ -144,11 +144,7 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/sleep.h
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address.h
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_base.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_bdw.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_tgllp_and_later.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_helper.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_icllp_and_later.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/state_base_address_skl.inl
     ${CMAKE_CURRENT_SOURCE_DIR}/stdio.h
     ${CMAKE_CURRENT_SOURCE_DIR}/string.h
     ${CMAKE_CURRENT_SOURCE_DIR}/string_helpers.h
@@ -158,13 +154,16 @@ set(NEO_CORE_HELPERS
     ${CMAKE_CURRENT_SOURCE_DIR}/timestamp_packet.h
     ${CMAKE_CURRENT_SOURCE_DIR}/timestamp_packet_container.h
     ${CMAKE_CURRENT_SOURCE_DIR}/timestamp_packet_constants.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/topology.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topology_map.h
     ${CMAKE_CURRENT_SOURCE_DIR}/uint16_avx2.h
     ${CMAKE_CURRENT_SOURCE_DIR}/uint16_sse4.h
     ${CMAKE_CURRENT_SOURCE_DIR}/validators.h
     ${CMAKE_CURRENT_SOURCE_DIR}/vec.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/definitions${BRANCH_DIR_SUFFIX}hw_cmds.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/definitions${BRANCH_DIR_SUFFIX}blit_properties_ext.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions${BRANCH_DIR_SUFFIX}device_ids_configs.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/definitions${BRANCH_DIR_SUFFIX}hw_cmds.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/engine_group_types.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/command_encoder_args.h
     ${CMAKE_CURRENT_SOURCE_DIR}/definitions/indirect_detection_versions.h
@@ -179,6 +178,13 @@ if(WIN32)
 else()
   list(APPEND NEO_CORE_HELPERS
        ${CMAKE_CURRENT_SOURCE_DIR}/linux/path.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/linux/device_caps_reader.h
+  )
+endif()
+
+if(SUPPORT_GEN12LP)
+  list(APPEND NEO_CORE_HELPERS
+       ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy_gen12lp.inl
   )
 endif()
 
@@ -198,10 +204,15 @@ if(SUPPORT_XE_HPG_CORE OR SUPPORT_XE_HPC_CORE)
   )
 endif()
 
+if(SUPPORT_XE_HPG_CORE OR SUPPORT_XE_HPC_CORE OR SUPPORT_XE2_HPG_CORE OR SUPPORT_XE3_CORE)
+  list(APPEND NEO_CORE_HELPERS
+       ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy_from_xe_hpg_to_xe3.inl
+  )
+endif()
+
 if(SUPPORT_DG2_AND_LATER)
   list(APPEND NEO_CORE_HELPERS
        ${CMAKE_CURRENT_SOURCE_DIR}/gfx_core_helper_dg2_and_later.inl
-       ${CMAKE_CURRENT_SOURCE_DIR}/cache_policy_dg2_and_later.inl
   )
 endif()
 
@@ -225,7 +236,7 @@ if(SUPPORT_XE2_AND_LATER)
   )
 endif()
 
-if(SUPPORT_XE2_CORE OR SUPPORT_XE_2HPG_CORE)
+if(SUPPORT_XE2_HPG_CORE)
   list(APPEND NEO_CORE_HELPERS
        ${CMAKE_CURRENT_SOURCE_DIR}/preamble_xe2_hpg.inl
   )
@@ -244,14 +255,6 @@ if(SUPPORT_XE3_AND_BEFORE)
   )
 endif()
 
-set(NEO_CORE_HELPERS_GMM_CALLBACKS_WINDOWS
-    ${CMAKE_CURRENT_SOURCE_DIR}/windows/gmm_callbacks.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/windows/gmm_callbacks.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/windows/gmm_callbacks.inl
-    ${CMAKE_CURRENT_SOURCE_DIR}/windows/gmm_callbacks_tgllp_and_later.inl
-)
-
-set_property(GLOBAL PROPERTY NEO_CORE_HELPERS_GMM_CALLBACKS_WINDOWS ${NEO_CORE_HELPERS_GMM_CALLBACKS_WINDOWS})
 set_property(GLOBAL PROPERTY NEO_CORE_HELPERS ${NEO_CORE_HELPERS})
 
 add_subdirectories()

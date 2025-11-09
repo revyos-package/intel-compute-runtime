@@ -41,9 +41,13 @@ enum class AILEnumeration : uint32_t {
     disableHostPtrTracking,
     enableLegacyPlatformName,
     disableDirectSubmission,
-    disableDirectSubmissionAllEngines,
+    disableDirectSubmissionBcs,
+    directSubmissionControllerConfig,
     handleDivergentBarriers,
     disableBindlessAddressing,
+    disableZeroContract,
+    forceLocalOnlyForDeviceUSM,
+    customWmtpDataSize,
 };
 
 class AILConfiguration;

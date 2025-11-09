@@ -9,6 +9,7 @@
 
 #include "shared/source/helpers/vec.h"
 #include "shared/source/unified_memory/unified_memory.h"
+#include "shared/source/utilities/mem_lifetime.h"
 
 #include "level_zero/ze_api.h"
 
@@ -79,25 +80,24 @@ struct KernelMutableState : public KernelMutableStateDefaultCopyableParams {
     using Params = KernelMutableStateDefaultCopyableParams;
 
     KernelMutableState();
-    KernelMutableState(KernelMutableState &&orig);
+    KernelMutableState(const KernelMutableState &rhs);
+    KernelMutableState(KernelMutableState &&orig) noexcept;
     KernelMutableState &operator=(const KernelMutableState &rhs);
-    KernelMutableState &operator=(KernelMutableState &&rhs);
+    KernelMutableState &operator=(KernelMutableState &&rhs) noexcept;
     ~KernelMutableState();
+    void swap(KernelMutableState &rhs);
+    void moveMembersFrom(KernelMutableState &&orig);
 
     void reservePerThreadDataForWholeThreadGroup(uint32_t sizeNeeded);
 
-    std::unique_ptr<NEO::ImplicitArgs> pImplicitArgs;
+    Clonable<NEO::ImplicitArgs> pImplicitArgs;
     std::unique_ptr<KernelExt> pExtension;
-    std::unique_ptr<uint8_t[]> crossThreadData = nullptr;
-    std::unique_ptr<uint8_t[]> surfaceStateHeapData = nullptr;
-    std::unique_ptr<uint8_t[]> dynamicStateHeapData = nullptr;
+    std::vector<uint8_t> crossThreadData{};
+    std::vector<uint8_t> surfaceStateHeapData{};
+    std::vector<uint8_t> dynamicStateHeapData{};
 
     uint8_t *perThreadDataForWholeThreadGroup = nullptr;
     uint32_t perThreadDataSizeForWholeThreadGroup = 0U;
     uint32_t perThreadDataSizeForWholeThreadGroupAllocated = 0U;
-
-    uint32_t crossThreadDataSize = 0U;
-    uint32_t surfaceStateHeapDataSize = 0U;
-    uint32_t dynamicStateHeapDataSize = 0U;
 };
 } // namespace L0

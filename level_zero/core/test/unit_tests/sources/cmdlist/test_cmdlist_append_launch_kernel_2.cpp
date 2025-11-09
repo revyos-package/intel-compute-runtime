@@ -237,7 +237,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandListDualStorage, givenIndirectDispatchWithSh
     std::unique_ptr<L0::ult::Module> mockModule = std::make_unique<L0::ult::Module>(device, nullptr, ModuleType::builtin);
     Mock<::L0::KernelImp> kernel;
     kernel.module = mockModule.get();
-    kernel.state.crossThreadDataSize = 0x60u;
+    kernel.privateState.crossThreadData.resize(0x60U, 0x0);
     kernel.descriptor.kernelAttributes.flags.passInlineData = true;
 
     uint32_t globalWorkSizeXOffset = 0x40u;
@@ -869,8 +869,8 @@ struct CmdlistAppendLaunchKernelWithImplicitArgsTests : CmdlistAppendLaunchKerne
 
         ze_kernel_desc_t kernelDesc{ZE_STRUCTURE_TYPE_KERNEL_DESC};
         kernel->initialize(&kernelDesc);
-        kernel->state.kernelRequiresGenerationOfLocalIdsByRuntime = kernelRequiresGenerationOfLocalIdsByRuntime;
-        kernel->state.requiredWorkgroupOrder = requiredWorkgroupOrder;
+        kernel->privateState.kernelRequiresGenerationOfLocalIdsByRuntime = kernelRequiresGenerationOfLocalIdsByRuntime;
+        kernel->privateState.requiredWorkgroupOrder = requiredWorkgroupOrder;
         kernel->setCrossThreadData(sizeof(uint64_t));
 
         EXPECT_TRUE(kernel->getKernelDescriptor().kernelAttributes.flags.requiresImplicitArgs);
@@ -1219,7 +1219,7 @@ using CommandListAppendLaunchKernel = Test<ModuleFixture>;
 HWTEST_F(CommandListAppendLaunchKernel, givenCooperativeAndNonCooperativeKernelsWhenAppendLaunchCooperativeKernelIsCalledThenReturnSuccess) {
     Mock<::L0::KernelImp> kernel;
     std::unique_ptr<Module> pMockModule = std::make_unique<Mock<Module>>(device, nullptr);
-    kernel.module = pMockModule.get();
+    kernel.setModule(pMockModule.get());
 
     kernel.setGroupSize(4, 1, 1);
     ze_group_count_t groupCount{8, 1, 1};
@@ -1250,7 +1250,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenKernelWithSlmSizeExceedingLocalMemo
 
     Mock<::L0::KernelImp> kernel;
     std::unique_ptr<Module> pMockModule = std::make_unique<Mock<Module>>(device, nullptr);
-    kernel.module = pMockModule.get();
+    kernel.setModule(pMockModule.get());
 
     kernel.setGroupSize(4, 1, 1);
     ze_group_count_t groupCount{8, 1, 1};
@@ -1294,9 +1294,9 @@ HWTEST_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichTogether
     auto overAllocMinSize = static_cast<uint32_t>(devInfo.globalMemSize / kernelsNb / devInfo.computeUnitsUsedForScratch) + margin1KB;
     auto kernelNames = std::array<std::string, 2u>{"test1", "test2"};
 
-    auto &kernelImmDatas = this->module->kernelImmDatas;
+    auto &kernelImmData = this->module->kernelImmData;
     for (size_t i = 0; i < kernelsNb; i++) {
-        auto &kernelDesc = const_cast<KernelDescriptor &>(kernelImmDatas[i]->getDescriptor());
+        auto &kernelDesc = const_cast<KernelDescriptor &>(kernelImmData[i]->getDescriptor());
         kernelDesc.kernelAttributes.perHwThreadPrivateMemorySize = overAllocMinSize + static_cast<uint32_t>(i * MemoryConstants::cacheLineSize);
         kernelDesc.kernelAttributes.flags.usesPrintf = false;
         kernelDesc.kernelMetadata.kernelName = kernelNames[i];
@@ -1330,9 +1330,9 @@ HWTEST_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExce
     auto underAllocSize = static_cast<uint32_t>(devInfo.globalMemSize / kernelsNb / devInfo.computeUnitsUsedForScratch) - margin128KB;
     auto kernelNames = std::array<std::string, 2u>{"test1", "test2"};
 
-    auto &kernelImmDatas = this->module->kernelImmDatas;
+    auto &kernelImmData = this->module->kernelImmData;
     for (size_t i = 0; i < kernelsNb; i++) {
-        auto &kernelDesc = const_cast<KernelDescriptor &>(kernelImmDatas[i]->getDescriptor());
+        auto &kernelDesc = const_cast<KernelDescriptor &>(kernelImmData[i]->getDescriptor());
         kernelDesc.kernelAttributes.perHwThreadPrivateMemorySize = underAllocSize;
         kernelDesc.kernelAttributes.flags.usesPrintf = false;
         kernelDesc.kernelMetadata.kernelName = kernelNames[i];
@@ -1357,7 +1357,7 @@ HWTEST_F(CommandListAppendLaunchKernel, givenTwoKernelPrivateAllocsWhichDontExce
         EXPECT_EQ(pCommandList->getOwnedPrivateAllocationsSize(), 0u);
     }
 }
-HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, IsHeapfulSupported) {
+HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamPropertiesIsCalledThenCorrectThreadArbitrationPolicyIsSet, IsHeapfulRequired) {
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(1);
 
@@ -1367,7 +1367,7 @@ HWTEST2_F(CommandListAppendLaunchKernel, GivenDebugToggleSetWhenUpdateStreamProp
 
     Mock<::L0::KernelImp> kernel;
     std::unique_ptr<Module> pMockModule = std::make_unique<Mock<Module>>(device, nullptr);
-    kernel.module = pMockModule.get();
+    kernel.setModule(pMockModule.get());
 
     auto pCommandList = std::make_unique<WhiteBox<::L0::CommandListCoreFamily<FamilyType::gfxCoreFamily>>>();
     auto result = pCommandList->initialize(device, NEO::EngineGroupType::compute, 0u);
@@ -1406,7 +1406,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
     ze_result_t result = ZE_RESULT_SUCCESS;
     std::unique_ptr<L0::EventPool> eventPool(EventPool::create(device->getDriverHandle(), context, 1, &deviceHandle, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    std::unique_ptr<L0::Event> event(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     ze_event_handle_t hEventHandle = event->toHandle();
 
@@ -1438,7 +1438,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, MultiTileCommandListAppendLaunchKernelXeHpCoreTest,
     ze_result_t result = ZE_RESULT_SUCCESS;
     std::unique_ptr<L0::EventPool> eventPool(EventPool::create(device->getDriverHandle(), context, 1, &deviceHandle, &eventPoolDesc, result));
     EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    std::unique_ptr<L0::Event> event(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    std::unique_ptr<L0::Event> event(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, result));
 
     EXPECT_FALSE(event->isUsingContextEndOffset());
 
