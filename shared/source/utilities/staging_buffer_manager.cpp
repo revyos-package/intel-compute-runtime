@@ -45,9 +45,7 @@ StagingBufferManager::StagingBufferManager(SVMAllocsManager *svmAllocsManager, c
 }
 
 StagingBufferManager::~StagingBufferManager() {
-    for (auto &stagingBuffer : stagingBuffers) {
-        svmAllocsManager->freeSVMAlloc(stagingBuffer.getBaseAddress());
-    }
+    freeAllocations();
 }
 
 /*
@@ -182,7 +180,7 @@ StagingTransferStatus StagingBufferManager::performImageSlicesTransfer(StagingQu
 
 /*
  * This method orchestrates transfer operation for images with given origin and region.
- * Transfer is splitted into chunks, each chunk represents sub-region to transfer.
+ * Transfer is split into chunks, each chunk represents sub-region to transfer.
  * Each chunk contains staging buffer which should be used instead of non-usm memory during transfers on GPU.
  * Several slices and rows can be packed into single chunk if size of such chunk does not exceeds maximum chunk size (2MB).
  * Caller provides actual function to enqueue read/write operation for single chunk.
@@ -395,12 +393,12 @@ bool StagingBufferManager::isValidForCopy(const Device &device, void *dstPtr, co
     if (usmDstData) {
         isUsedByOsContext = usmDstData->gpuAllocations.getGraphicsAllocation(device.getRootDeviceIndex())->isUsedByOsContext(osContextId);
     }
-    return this->isValidForStaging(device, srcPtr, size, hasDependencies) && hostToUsmCopy && (isUsedByOsContext || size <= chunkSize);
+    return hostToUsmCopy && (isUsedByOsContext || size <= chunkSize) && this->isValidForStaging(device, srcPtr, size, hasDependencies);
 }
 
 bool StagingBufferManager::isValidForStagingTransfer(const Device &device, const void *ptr, size_t size, bool hasDependencies) {
     auto nonUsmPtr = ptr != nullptr && svmAllocsManager->getSVMAlloc(ptr) == nullptr;
-    return this->isValidForStaging(device, ptr, size, hasDependencies) && nonUsmPtr;
+    return nonUsmPtr && this->isValidForStaging(device, ptr, size, hasDependencies);
 }
 
 // Common checks for usm, buffers and images
@@ -409,11 +407,9 @@ bool StagingBufferManager::isValidForStaging(const Device &device, const void *p
     if (debugManager.flags.EnableCopyWithStagingBuffers.get() != -1) {
         stagingCopyEnabled = debugManager.flags.EnableCopyWithStagingBuffers.get();
     }
-    auto isIntegrated = device.getRootDeviceEnvironment().getHardwareInfo()->capabilityTable.isIntegratedDevice;
     auto osInterface = device.getRootDeviceEnvironment().osInterface.get();
-    bool sizeWithinThreshold = osInterface ? osInterface->isSizeWithinThresholdForStaging(size, isIntegrated) : true;
-    auto detectedHostPtr = this->registerHostPtr(ptr);
-    return stagingCopyEnabled && !hasDependencies && !detectedHostPtr && sizeWithinThreshold;
+    bool sizeWithinThreshold = osInterface ? osInterface->isSizeWithinThresholdForStaging(ptr, size) : true;
+    return stagingCopyEnabled && !hasDependencies && sizeWithinThreshold && !this->registerHostPtr(ptr);
 }
 
 void StagingBufferManager::clearTrackedChunks() {
@@ -442,6 +438,15 @@ bool StagingBufferManager::registerHostPtr(const void *ptr) {
 void StagingBufferManager::resetDetectedPtrs() {
     auto lock = std::lock_guard<std::mutex>(mtx);
     detectedHostPtrs.clear();
+}
+
+void StagingBufferManager::freeAllocations() {
+    auto lock = std::lock_guard<std::mutex>(mtx);
+    for (auto &stagingBuffer : stagingBuffers) {
+        svmAllocsManager->freeSVMAlloc(stagingBuffer.getBaseAddress());
+    }
+    stagingBuffers.clear();
+    trackers.clear();
 }
 
 } // namespace NEO

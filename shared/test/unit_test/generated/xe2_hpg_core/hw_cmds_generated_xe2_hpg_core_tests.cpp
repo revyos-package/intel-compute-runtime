@@ -2433,8 +2433,8 @@ XE2_HPG_CORETEST_F(CommandsXe2HpgCoreTest, GivenPostsyncDataWhenInitCalledThenFi
     EXPECT_EQ(0x0u, cmd.TheStructure.Common.MocsIndexToMocsTables);
     EXPECT_EQ(0x0u, cmd.TheStructure.Common.SystemMemoryFenceRequest);
     EXPECT_EQ(0x0u, cmd.TheStructure.Common.DataportSubsliceCacheFlush);
-    EXPECT_EQ(0x0ull, cmd.TheStructure.Common.DestinationAddress);
-    EXPECT_EQ(0x0ull, cmd.TheStructure.Common.ImmediateData);
+    EXPECT_EQ_VAL(0x0ull, cmd.TheStructure.Common.DestinationAddress); // patched
+    EXPECT_EQ_VAL(0x0ull, cmd.TheStructure.Common.ImmediateData);      // patched
 }
 
 XE2_HPG_CORETEST_F(CommandsXe2HpgCoreTest, GivenPostsyncDataWhenSetterUsedThenGetterReturnsValidValue) {
@@ -3596,8 +3596,7 @@ XE2_HPG_CORETEST_F(CommandsXe2HpgCoreTest, GivenMemSetWhenSetterUsedThenGetterRe
     cmd.setMode(MEM_SET::MODE_FILL_MODE);
     EXPECT_EQ(MEM_SET::MODE_FILL_MODE, cmd.getMode());
 
-    cmd.setMode(MEM_SET::MODE_EVICT_MODE);
-    EXPECT_EQ(MEM_SET::MODE_EVICT_MODE, cmd.getMode());
+    EXPECT_THROW(cmd.setMode(MEM_SET::MODE_EVICT_MODE), std::exception);
 
     cmd.setInstructionTargetOpcode(MEM_SET::INSTRUCTION_TARGETOPCODE_MEM_SET);
     EXPECT_EQ(MEM_SET::INSTRUCTION_TARGETOPCODE_MEM_SET, cmd.getInstructionTargetOpcode());
@@ -4361,8 +4360,8 @@ XE2_HPG_CORETEST_F(CommandsXe2HpgCoreTest, GivenMiFlushDwWhenInitCalledThenField
     EXPECT_EQ(MI_FLUSH_DW::MI_COMMAND_OPCODE_MI_FLUSH_DW, cmd.TheStructure.Common.MiCommandOpcode);
     EXPECT_EQ(MI_FLUSH_DW::COMMAND_TYPE_MI_COMMAND, cmd.TheStructure.Common.CommandType);
     EXPECT_EQ(MI_FLUSH_DW::DESTINATION_ADDRESS_TYPE_PPGTT, cmd.TheStructure.Common.DestinationAddressType);
-    EXPECT_EQ(0x0ull, cmd.TheStructure.Common.DestinationAddress);
-    EXPECT_EQ(0x0ull, cmd.TheStructure.Common.ImmediateData);
+    EXPECT_EQ_VAL(0x0ull, cmd.TheStructure.Common.DestinationAddress); // patched
+    EXPECT_EQ_VAL(0x0ull, cmd.TheStructure.Common.ImmediateData);      // patched
 }
 
 XE2_HPG_CORETEST_F(CommandsXe2HpgCoreTest, GivenMiFlushDwWhenSetterUsedThenGetterReturnsValidValue) {

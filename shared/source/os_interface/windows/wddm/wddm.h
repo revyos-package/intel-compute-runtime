@@ -37,7 +37,6 @@ class WddmResidentAllocationsContainer;
 struct AllocationStorageData;
 struct FeatureTable;
 struct HardwareInfo;
-struct KmDafListener;
 struct MonitoredFence;
 struct OsHandleStorage;
 struct OSMemory;
@@ -48,6 +47,7 @@ enum class HeapIndex : uint32_t;
 unsigned int readEnablePreemptionRegKey();
 bool isShutdownInProgress();
 CREATECONTEXT_PVTDATA initPrivateData(OsContextWin &osContext);
+CREATEHWQUEUE_PVTDATA initHwQueuePrivateData(OsContextWin &osContext);
 
 class Wddm : public DriverModel {
   public:
@@ -74,6 +74,7 @@ class Wddm : public DriverModel {
     MOCKABLE_VIRTUAL uint64_t freeGmmGpuVirtualAddress(Gmm *gmm, D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size);
     MOCKABLE_VIRTUAL bool freeGpuVirtualAddress(D3DGPU_VIRTUAL_ADDRESS &gpuPtr, uint64_t size);
     MOCKABLE_VIRTUAL NTSTATUS createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle);
+    MOCKABLE_VIRTUAL NTSTATUS createAllocation(const void *cpuPtr, const Gmm *gmm, D3DKMT_HANDLE &outHandle, D3DKMT_HANDLE &outResourceHandle, uint64_t *outSharedHandle, bool createNTHandle);
     MOCKABLE_VIRTUAL bool createAllocation(const Gmm *gmm, D3DKMT_HANDLE &outHandle);
     MOCKABLE_VIRTUAL NTSTATUS createAllocationsAndMapGpuVa(OsHandleStorage &osHandles);
     MOCKABLE_VIRTUAL bool destroyAllocations(const D3DKMT_HANDLE *handles, uint32_t allocationCount, D3DKMT_HANDLE resourceHandle);
@@ -83,14 +84,13 @@ class Wddm : public DriverModel {
     bool openNTHandle(const MemoryManager::OsHandleData &osHandleData, WddmAllocation *alloc);
     MOCKABLE_VIRTUAL void *lockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock, size_t size);
     MOCKABLE_VIRTUAL void unlockResource(const D3DKMT_HANDLE &handle, bool applyMakeResidentPriorToLock);
-    MOCKABLE_VIRTUAL void kmDafLock(D3DKMT_HANDLE handle);
-    MOCKABLE_VIRTUAL bool isKmDafEnabled() const;
 
     MOCKABLE_VIRTUAL bool setAllocationPriority(const D3DKMT_HANDLE *handles, uint32_t allocationCount, uint32_t priority);
 
     MOCKABLE_VIRTUAL bool destroyContext(D3DKMT_HANDLE context);
     MOCKABLE_VIRTUAL bool queryAdapterInfo();
     MOCKABLE_VIRTUAL NTSTATUS createNTHandle(const D3DKMT_HANDLE *resourceHandle, HANDLE *ntHandle);
+    MOCKABLE_VIRTUAL HANDLE getSharedHandle(const MemoryManager::OsHandleData &osHandleData);
 
     MOCKABLE_VIRTUAL bool submit(uint64_t commandBuffer, size_t size, void *commandHeader, WddmSubmitArguments &submitArguments);
     MOCKABLE_VIRTUAL bool waitFromCpu(uint64_t lastFenceValue, const MonitoredFence &monitoredFence, bool busyWait);
@@ -231,6 +231,7 @@ class Wddm : public DriverModel {
 
     bool getDeviceExecutionState(D3DKMT_DEVICESTATE_TYPE stateType, void *privateData);
     MOCKABLE_VIRTUAL bool getDeviceState();
+    bool needsNotifyAubCaptureCallback() const;
 
   protected:
     bool translateTopologyInfo(TopologyMapping &mapping);
@@ -284,7 +285,6 @@ class Wddm : public DriverModel {
 
     std::unique_ptr<HwDeviceIdWddm> hwDeviceId;
     std::unique_ptr<GmmMemory> gmmMemory;
-    std::unique_ptr<KmDafListener> kmDafListener;
     std::unique_ptr<WddmInterface> wddmInterface;
     std::unique_ptr<WddmResidentAllocationsContainer> temporaryResources;
     std::unique_ptr<WddmResidencyLogger> residencyLogger;

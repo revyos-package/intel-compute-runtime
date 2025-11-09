@@ -25,7 +25,6 @@ if(WIN32)
                  ${NEO_SHARED_DIRECTORY}/dll/direct_submission_controller_enabled.cpp
                  ${NEO_SHARED_DIRECTORY}/dll/get_devices.cpp
                  ${NEO_SHARED_DIRECTORY}/dll/unified_memory_reuse_cleaner_enabled.cpp
-                 ${NEO_SHARED_DIRECTORY}/dll/windows/os_interface.cpp
                  ${NEO_SHARED_DIRECTORY}/dll/create_command_stream.cpp
                  ${NEO_SHARED_DIRECTORY}/dll/wddm/wddm_create.cpp
                  ${NEO_SHARED_TEST_DIRECTORY}/common/mocks/mock_wddm.cpp
@@ -37,6 +36,7 @@ if(WIN32)
                  ${NEO_SHARED_TEST_DIRECTORY}/common/os_interface/windows/sys_calls_winmm.cpp
                  ${NEO_SHARED_TEST_DIRECTORY}/common/os_interface/windows/wddm_calls.cpp
                  ${NEO_SHARED_TEST_DIRECTORY}/common/mocks/mock_get_staging_buffer_size.cpp
+                 ${NEO_SHARED_TEST_DIRECTORY}/common/mocks/mock_usm_pool_size.cpp
                  ${NEO_SOURCE_DIR}/opencl/test/unit_test/test_macros/test_checks_ocl.cpp
   )
 

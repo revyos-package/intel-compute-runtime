@@ -11,7 +11,6 @@
 #include "shared/test/common/helpers/unit_test_helper.h"
 #include "shared/test/common/mocks/mock_allocation_properties.h"
 #include "shared/test/common/test_macros/test.h"
-#include "shared/test/common/test_macros/test_checks_shared.h"
 
 #include "opencl/source/event/user_event.h"
 #include "opencl/source/helpers/cl_memory_properties_helpers.h"
@@ -415,7 +414,7 @@ HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEvent
     *pTagMemory = 5;
 
     auto &commandStreamReceiver = pCmdQ->getGpgpuCommandStreamReceiver();
-    const auto commandStreamReceiverTaskCountBefore = commandStreamReceiver.peekTaskCount();
+    auto commandStreamReceiverTaskCountBefore = commandStreamReceiver.peekTaskCount();
 
     EXPECT_EQ(pCmdQ->getHeaplessStateInitEnabled() ? 2u : 1u, commandStreamReceiver.peekTaskCount());
     auto ptr = pCmdQ->enqueueMapImage(image, false, mapFlags, origin, region, nullptr, nullptr, 0,
@@ -433,6 +432,10 @@ HWTEST_F(EnqueueMapImageTest, givenReadOnlyMapWithOutEventWhenMappedThenSetEvent
 
     retVal = clEnqueueUnmapMemObject(pCmdQ, image, ptr, 0, nullptr, &unmapEventReturned);
     EXPECT_EQ(CL_SUCCESS, retVal);
+
+    if (commandStreamReceiver.peekTimestampPacketWriteEnabled()) {
+        commandStreamReceiverTaskCountBefore++;
+    }
 
     EXPECT_EQ(commandStreamReceiverTaskCountBefore + 1, commandStreamReceiver.peekTaskCount());
 
@@ -570,12 +573,12 @@ TEST_F(EnqueueMapImageTest, GivenNonZeroCopyImageWhenMappedWithOffsetThenCorrect
         nullptr,
         &retVal);
 
-    float *hostPtrOffseted = (float *)Image1dDefaults::hostPtr + 1; //
+    float *hostPtrOffset = (float *)Image1dDefaults::hostPtr + 1; //
 
     EXPECT_NE(nullptr, ptr);
 
     if (!image->isTiledAllocation()) {
-        EXPECT_EQ(hostPtrOffseted, ptr); // Returned pointer should be offseted
+        EXPECT_EQ(hostPtrOffset, ptr); // Returned pointer should be offset
     }
 
     EXPECT_EQ(CL_SUCCESS, retVal);
@@ -938,9 +941,6 @@ TEST_F(EnqueueMapImageTest, givenImage1DArrayWhenEnqueueMapImageIsCalledThenRetu
         }
 
         void setImageArg(void *memory, bool isMediaBlockImage, uint32_t mipLevel, uint32_t rootDeviceIndex) override {}
-        void setMediaImageArg(void *memory, uint32_t rootDeviceIndex) override {}
-        void setMediaSurfaceRotation(void *memory) override {}
-        void setSurfaceMemoryObjectControlState(void *memory, uint32_t value) override {}
         void transformImage2dArrayTo3d(void *memory) override {}
         void transformImage3dTo2dArray(void *memory) override {}
     };

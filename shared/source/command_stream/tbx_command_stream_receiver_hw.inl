@@ -61,10 +61,6 @@ TbxCommandStreamReceiverHw<GfxFamily>::TbxCommandStreamReceiverHw(ExecutionEnvir
     ppgtt = std::make_unique<std::conditional<is64bit, PML4, PDPE>::type>(physicalAddressAllocator.get());
     ggtt = std::make_unique<PDPE>(physicalAddressAllocator.get());
 
-    auto debugDeviceId = debugManager.flags.OverrideAubDeviceId.get();
-    this->aubDeviceId = debugDeviceId == -1
-                            ? this->peekHwInfo().capabilityTable.aubDeviceId
-                            : static_cast<uint32_t>(debugDeviceId);
     this->downloadAllocationImpl = [this](GraphicsAllocation &graphicsAllocation) {
         this->downloadAllocationTbx(graphicsAllocation);
     };
@@ -133,13 +129,14 @@ void TbxCommandStreamReceiverHw<GfxFamily>::protectCPUMemoryFromWritesIfTbxFault
 
 template <typename GfxFamily>
 void TbxCommandStreamReceiverHw<GfxFamily>::initializeEngine() {
-    isEngineInitialized = true;
+    if (!isEngineInitialized) {
+        isEngineInitialized = true;
 
-    if (hardwareContextController) {
-        hardwareContextController->initialize();
-        return;
+        if (hardwareContextController) {
+            hardwareContextController->initialize();
+            return;
+        }
     }
-    DEBUG_BREAK_IF(this->aubManager);
 }
 
 template <typename GfxFamily>
@@ -274,9 +271,7 @@ bool TbxCommandStreamReceiverHw<GfxFamily>::writeMemory(GraphicsAllocation &gfxA
 
     this->protectCPUMemoryFromWritesIfTbxFaultable(&gfxAllocation, cpuAddress, size);
 
-    if (!isEngineInitialized) {
-        initializeEngine();
-    }
+    initializeEngine();
 
     if (aubManager) {
         this->writeMemoryWithAubManager(gfxAllocation, isChunkCopy, gpuVaChunkOffset, chunkSize);
@@ -360,6 +355,7 @@ WaitStatus TbxCommandStreamReceiverHw<GfxFamily>::waitForCompletionWithTimeout(c
 
 template <typename GfxFamily>
 void TbxCommandStreamReceiverHw<GfxFamily>::processEviction() {
+    auto lockCSR = this->obtainUniqueOwnership();
     this->allocationsForDownload.insert(this->getEvictionAllocations().begin(), this->getEvictionAllocations().end());
     BaseClass::processEviction();
 }

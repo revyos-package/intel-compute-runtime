@@ -203,6 +203,13 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
                                                              std::unique_lock<std::mutex> *outerLockForIndirect);
     ze_result_t appendCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *phCommandLists,
                                    ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
+    ze_result_t appendHostFunction(
+        void *pHostFunction,
+        void *pUserData,
+        void *pNext,
+        ze_event_handle_t hSignalEvent,
+        uint32_t numWaitEvents,
+        ze_event_handle_t *phWaitEvents) override;
 
     NEO::CompletionStamp flushRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation, bool requireTaskCountUpdate);
     NEO::CompletionStamp flushImmediateRegularTask(NEO::LinearStream &cmdStreamTask, size_t taskStartOffset, bool hasStallingCmds, bool hasRelaxedOrderingDependencies, NEO::AppendOperations appendOperation, bool requireTaskCountUpdate);
@@ -232,6 +239,7 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
     bool isBarrierRequired();
     bool isRelaxedOrderingDispatchAllowed(uint32_t numWaitEvents, bool copyOffload) override;
     bool skipInOrderNonWalkerSignalingAllowed(ze_event_handle_t signalEvent) const override;
+    void setPatchingPreamble(bool patching, bool saveWait) override;
 
   protected:
     using BaseClass::inOrderExecInfo;
@@ -250,13 +258,15 @@ struct CommandListCoreFamilyImmediate : public CommandListCoreFamily<gfxCoreFami
     bool isValidForStagingTransfer(const void *dstptr, const void *srcptr, size_t size, bool hasDependencies);
     ze_result_t appendStagingMemoryCopy(void *dstptr, const void *srcptr, size_t size, ze_event_handle_t hSignalEvent, CmdListMemoryCopyParams &memoryCopyParams);
     ze_result_t stagingStatusToL0(const NEO::StagingTransferStatus &status) const;
+    size_t estimateAdditionalSizeAppendRegularCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *phCommandLists);
+    void setupFlagsForBcsSplit(CmdListMemoryCopyParams &memoryCopyParams, bool &hasStallingCmds, bool &copyOffloadFlush, const void *srcPtr, void *dstPtr, size_t srcSize, size_t dstSize);
+    void tryResetKernelWithAssertFlag();
 
     MOCKABLE_VIRTUAL void checkAssert();
     ComputeFlushMethodType computeFlushMethod = nullptr;
     uint64_t relaxedOrderingCounter = 0;
     std::atomic<bool> dependenciesPresent{false};
     bool latestFlushIsHostVisible = false;
-    bool latestFlushIsDualCopyOffload = false;
     bool keepRelaxedOrderingEnabled = false;
 };
 

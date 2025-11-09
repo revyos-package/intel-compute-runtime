@@ -82,6 +82,10 @@ HWTEST_F(CommandEncoderTests, givenDifferentInputParamsWhenCreatingStandaloneInO
     EXPECT_TRUE(inOrderExecInfo->isExternalMemoryExecInfo());
     EXPECT_EQ(2u, inOrderExecInfo->getNumDevicePartitionsToWait());
     EXPECT_EQ(3u, inOrderExecInfo->getNumHostPartitionsToWait());
+    EXPECT_EQ(0u, inOrderExecInfo->getDeviceNodeWriteSize());
+    EXPECT_EQ(0u, inOrderExecInfo->getHostNodeWriteSize());
+    EXPECT_EQ(0u, inOrderExecInfo->getDeviceNodeGpuAddress());
+    EXPECT_EQ(0u, inOrderExecInfo->getHostNodeGpuAddress());
 
     inOrderExecInfo->reset();
 
@@ -215,11 +219,17 @@ HWTEST_F(CommandEncoderTests, givenDifferentInputParamsWhenCreatingInOrderExecIn
         DebugManagerStateRestore restore;
         debugManager.flags.InOrderDuplicatedCounterStorageEnabled.set(1);
 
-        auto inOrderExecInfo = InOrderExecInfo::create(deviceNode, hostNode, mockDevice, 2, false);
+        constexpr uint32_t partitionCount = 2u;
+        auto inOrderExecInfo = InOrderExecInfo::create(deviceNode, hostNode, mockDevice, partitionCount, false);
 
         EXPECT_EQ(inOrderExecInfo->getBaseHostGpuAddress(), hostNode->getGpuAddress());
         EXPECT_NE(inOrderExecInfo->getDeviceCounterAllocation(), inOrderExecInfo->getHostCounterAllocation());
         EXPECT_NE(deviceNode->getBaseGraphicsAllocation()->getGraphicsAllocation(0), inOrderExecInfo->getHostCounterAllocation());
+        EXPECT_NE(0u, inOrderExecInfo->getDeviceNodeGpuAddress());
+        size_t deviceNodeSize = sizeof(uint64_t) * (mockDevice.getGfxCoreHelper().inOrderAtomicSignallingEnabled(mockDevice.getRootDeviceEnvironment()) ? 1u : partitionCount);
+        EXPECT_EQ(deviceNodeSize, inOrderExecInfo->getDeviceNodeWriteSize());
+        EXPECT_NE(0u, inOrderExecInfo->getHostNodeGpuAddress());
+        EXPECT_EQ(sizeof(uint64_t) * partitionCount, inOrderExecInfo->getHostNodeWriteSize());
 
         EXPECT_NE(deviceNode->getCpuBase(), inOrderExecInfo->getBaseHostAddress());
         EXPECT_EQ(ptrOffset(inOrderExecInfo->getHostCounterAllocation()->getUnderlyingBuffer(), offset), inOrderExecInfo->getBaseHostAddress());
@@ -679,8 +689,13 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandEncoderTests, givenDebugFlagSetWhenProgrammi
 
     using MI_ARB_CHECK = typename FamilyType::MI_ARB_CHECK;
 
+    alignas(4) uint8_t arbCheckBuffer[sizeof(MI_ARB_CHECK)];
+    void *arbCheckBufferPtr = arbCheckBuffer;
+
     for (int32_t value : {-1, 0, 1}) {
         debugManager.flags.ForcePreParserEnabledForMiArbCheck.set(value);
+
+        memset(arbCheckBuffer, 0, sizeof(arbCheckBuffer));
 
         MI_ARB_CHECK buffer[2] = {};
         LinearStream linearStream(buffer, sizeof(buffer));
@@ -689,12 +704,14 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, CommandEncoderTests, givenDebugFlagSetWhenProgrammi
         rootDeviceEnvironment.initGmm();
 
         EncodeMiArbCheck<FamilyType>::program(linearStream, false);
+        EncodeMiArbCheck<FamilyType>::program(arbCheckBufferPtr, false);
 
         if (value == 0) {
             EXPECT_TRUE(buffer[0].getPreParserDisable());
         } else {
             EXPECT_FALSE(buffer[0].getPreParserDisable());
         }
+        EXPECT_EQ(0, memcmp(arbCheckBufferPtr, &buffer[0], sizeof(MI_ARB_CHECK)));
     }
 }
 

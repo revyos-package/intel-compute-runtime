@@ -102,6 +102,7 @@ struct EventDescriptor {
     bool kernelMappedTsPoolFlag = false;
     bool importedIpcPool = false;
     bool ipcPool = false;
+    bool graphExternalEvent = false;
 };
 
 struct Event : _ze_event_handle_t {
@@ -130,13 +131,13 @@ struct Event : _ze_event_handle_t {
         // For default flow (API)
         initiallyDisabled,
         explicitlyEnabled,
-        // For internal convertion (Immediate CL)
+        // For internal conversion (Immediate CL)
         implicitlyEnabled,
         implicitlyDisabled
     };
 
     template <typename TagSizeT>
-    static Event *create(EventPool *eventPool, const ze_event_desc_t *desc, Device *device);
+    static Event *create(EventPool *eventPool, const ze_event_desc_t *desc, Device *device, ze_result_t &result);
 
     template <typename TagSizeT>
     static Event *create(const EventDescriptor &eventDescriptor, Device *device, ze_result_t &result);
@@ -213,13 +214,13 @@ struct Event : _ze_event_handle_t {
         }
         this->csrs[0] = csr;
     }
-    void appendAdditionalCsr(NEO::CommandStreamReceiver *additonalCsr) {
+    void appendAdditionalCsr(NEO::CommandStreamReceiver *additionalCsr) {
         for (const auto &csr : csrs) {
-            if (csr == additonalCsr) {
+            if (csr == additionalCsr) {
                 return;
             }
         }
-        csrs.push_back(additonalCsr);
+        csrs.push_back(additionalCsr);
     }
 
     void increaseKernelCount();
@@ -232,7 +233,7 @@ struct Event : _ze_event_handle_t {
     void setKernelCount(uint32_t newKernelCount) {
         kernelCount = newKernelCount;
     }
-    bool getL3FlushForCurrenKernel() {
+    bool getL3FlushForCurrentKernel() {
         return l3FlushAppliedOnKernel.test(kernelCount - 1);
     }
     void setL3FlushForCurrentKernel() {
@@ -298,7 +299,7 @@ struct Event : _ze_event_handle_t {
     void setMetricNotification(MetricCollectorEventNotify *metricNotification) {
         this->metricNotification = metricNotification;
     }
-    void updateInOrderExecState(std::shared_ptr<NEO::InOrderExecInfo> &newInOrderExecInfo, uint64_t signalValue, uint32_t allocationOffset);
+    void updateInOrderExecState(const std::shared_ptr<NEO::InOrderExecInfo> &newInOrderExecInfo, uint64_t signalValue, uint32_t allocationOffset);
     bool isCounterBased() const { return ((counterBasedMode == CounterBasedMode::explicitlyEnabled) || (counterBasedMode == CounterBasedMode::implicitlyEnabled)); }
     bool isCounterBasedExplicitlyEnabled() const { return (counterBasedMode == CounterBasedMode::explicitlyEnabled); }
     void enableCounterBasedMode(bool apiRequest, uint32_t flags);
@@ -306,7 +307,7 @@ struct Event : _ze_event_handle_t {
     uint64_t getInOrderExecSignalValueWithSubmissionCounter() const;
     uint64_t getInOrderExecBaseSignalValue() const { return inOrderExecSignalValue; }
     uint32_t getInOrderAllocationOffset() const { return inOrderAllocationOffset; }
-    uint64_t getInOrderIncrementValue() const { return inOrderIncrementValue; }
+    uint64_t getInOrderIncrementValue(uint32_t partitionCount) const;
     void setLatestUsedCmdQueue(CommandQueue *newCmdQ);
     NEO::TimeStampData *peekReferenceTs() {
         return static_cast<NEO::TimeStampData *>(ptrOffset(getHostAddress(), getMaxPacketsCount() * getSinglePacketSize()));
@@ -348,7 +349,7 @@ struct Event : _ze_event_handle_t {
         this->isEventOnBarrierOptimized = value;
     }
 
-    static bool isAggregatedEvent(const Event *event) { return (event && event->getInOrderIncrementValue() > 0); }
+    static bool isAggregatedEvent(const Event *event) { return (event && event->getInOrderIncrementValue(1) > 0); }
 
     CommandList *getRecordedSignalFrom() const {
         return this->recordedSignalFrom;
@@ -358,17 +359,29 @@ struct Event : _ze_event_handle_t {
         this->recordedSignalFrom = cmdlist;
     }
 
+    void setOptimizedCbEvent(bool value) {
+        this->optimizedCbEvent = value;
+    }
+
+    bool isGraphExternalEvent() const {
+        return this->graphExternalEvent;
+    }
+
   protected:
     Event(int index, Device *device) : device(device), index(index) {}
 
     ze_result_t enableExtensions(const EventDescriptor &eventDescriptor);
     NEO::GraphicsAllocation *getExternalCounterAllocationFromAddress(uint64_t *address) const;
+    MOCKABLE_VIRTUAL uint64_t getCompletionTimeout() const { return completionTimeoutMs; }
 
     void unsetCmdQueue();
     void releaseTempInOrderTimestampNodes();
     virtual void clearTimestampTagData(uint32_t partitionCount, NEO::TagNodeBase *newNode) = 0;
 
+    static const uint64_t completionTimeoutMs;
+
     EventPool *eventPool = nullptr;
+    CommandList *recordedSignalFrom = nullptr;
 
     uint64_t timestampRefreshIntervalInNanoSec = 0;
 
@@ -436,10 +449,8 @@ struct Event : _ze_event_handle_t {
     bool mitigateHostVisibleSignal = false;
     bool reportEmptyCbEventAsReady = true;
     bool isEventOnBarrierOptimized = false;
-
-    static const uint64_t completionTimeoutMs;
-
-    CommandList *recordedSignalFrom = nullptr;
+    bool optimizedCbEvent = false;
+    bool graphExternalEvent = false;
 };
 
 struct EventPool : _ze_event_pool_handle_t {

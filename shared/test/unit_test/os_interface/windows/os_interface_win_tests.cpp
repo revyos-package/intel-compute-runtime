@@ -58,10 +58,6 @@ TEST_F(OsInterfaceTest, GivenWindowsOsWhenCheckForGpuIdleImplicitFlushSupportThe
     EXPECT_FALSE(OSInterface::gpuIdleImplicitFlush);
 }
 
-TEST_F(OsInterfaceTest, GivenDefaultOsInterfaceThenLocalMemoryEnabled) {
-    EXPECT_TRUE(OSInterface::osEnableLocalMemory);
-}
-
 TEST(OsInterfaceSimpleTest, GivenOsInterfaceWhenCallingGetAggregatedProcessCountThenCallReturnsZero) {
     OSInterface osInterface;
     EXPECT_EQ(0u, osInterface.getAggregatedProcessCount());
@@ -161,6 +157,6 @@ TEST_F(OsInterfaceTest, whenGetThresholdForStagingCalledThenReturnNoThreshold) {
     EXPECT_EQ(nullptr, rootDeviceEnvironment.osInterface.get());
     wddm->init();
     EXPECT_NE(nullptr, rootDeviceEnvironment.osInterface.get());
-    EXPECT_TRUE(rootDeviceEnvironment.osInterface->isSizeWithinThresholdForStaging(MemoryConstants::gigaByte, false));
-    EXPECT_TRUE(rootDeviceEnvironment.osInterface->isSizeWithinThresholdForStaging(MemoryConstants::gigaByte, true));
+    auto alignedPtr = reinterpret_cast<const void *>(2 * MemoryConstants::megaByte);
+    EXPECT_TRUE(rootDeviceEnvironment.osInterface->isSizeWithinThresholdForStaging(alignedPtr, MemoryConstants::gigaByte));
 }

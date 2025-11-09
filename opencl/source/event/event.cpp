@@ -88,7 +88,7 @@ Event::Event(
 
 Event::~Event() {
     DBG_LOG(EventsDebugEnable, "~Event()", this);
-    // no commands should be registred
+    // no commands should be registered
     DEBUG_BREAK_IF(this->cmdToSubmit.load());
 
     submitCommand(true);
@@ -115,6 +115,8 @@ Event::~Event() {
         {
             TakeOwnershipWrapper<CommandQueue> queueOwnership(*cmdQueue);
             cmdQueue->handlePostCompletionOperations(true);
+
+            this->cmdQueue->getGpgpuCommandStreamReceiver().downloadAllocations(true);
         }
         if (timeStampNode != nullptr) {
             timeStampNode->returnTag();
@@ -319,7 +321,7 @@ uint64_t Event::getProfilingInfoData(const ProfilingInfo &profilingInfo) const {
 bool Event::calcProfilingData() {
     if (!dataCalculated && !profilingCpuPath) {
         if (timestampPacketContainer && timestampPacketContainer->peekNodes().size() > 0) {
-            const auto timestamps = timestampPacketContainer->peekNodes();
+            const auto &timestamps = timestampPacketContainer->peekNodes();
 
             if (debugManager.flags.PrintTimestampPacketContents.get()) {
 
@@ -456,7 +458,7 @@ void Event::calculateProfilingDataInternal(uint64_t contextStartTS, uint64_t con
 }
 
 void Event::getBoundaryTimestampValues(TimestampPacketContainer *timestampContainer, uint64_t &globalStartTS, uint64_t &globalEndTS) {
-    const auto timestamps = timestampContainer->peekNodes();
+    const auto &timestamps = timestampContainer->peekNodes();
 
     globalStartTS = timestamps[0]->getGlobalStartValue(0);
     globalEndTS = timestamps[0]->getGlobalEndValue(0);
@@ -485,8 +487,14 @@ inline WaitStatus Event::wait(bool blocking, bool useQuickKmdSleep) {
 
     std::span<CopyEngineState> states{&bcsState, bcsState.isValid() ? 1u : 0u};
     auto waitStatus = WaitStatus::notReady;
-    auto waitedOnTimestamps = cmdQueue->waitForTimestamps(states, waitStatus, this->timestampPacketContainer.get(), nullptr);
-    waitStatus = cmdQueue->waitUntilComplete(taskCount.load(), states, flushStamp->peekStamp(), useQuickKmdSleep, true, waitedOnTimestamps);
+    auto skipWaitOnTaskCount = cmdQueue->waitForTimestamps(states, waitStatus, this->timestampPacketContainer.get(), nullptr);
+
+    if (this->getWaitForTaskCountRequired()) {
+        skipWaitOnTaskCount = false;
+        this->setWaitForTaskCountRequired(false);
+    }
+
+    waitStatus = cmdQueue->waitUntilComplete(taskCount.load(), states, flushStamp->peekStamp(), useQuickKmdSleep, true, skipWaitOnTaskCount);
     if (waitStatus == WaitStatus::gpuHang) {
         return WaitStatus::gpuHang;
     }
@@ -500,7 +508,7 @@ inline WaitStatus Event::wait(bool blocking, bool useQuickKmdSleep) {
     {
         TakeOwnershipWrapper<CommandQueue> queueOwnership(*cmdQueue);
 
-        bool checkQueueCompletionForPostSyncOperations = !(waitedOnTimestamps && !cmdQueue->isOOQEnabled() &&
+        bool checkQueueCompletionForPostSyncOperations = !(skipWaitOnTaskCount && !cmdQueue->isOOQEnabled() &&
                                                            (this->timestampPacketContainer->peekNodes() == cmdQueue->getTimestampPacketContainer()->peekNodes()));
 
         cmdQueue->handlePostCompletionOperations(checkQueueCompletionForPostSyncOperations);
@@ -885,7 +893,7 @@ inline void Event::unblockEventBy(Event &event, TaskCountType taskLevel, int32_t
     }
     setStatus(statusToPropagate);
 
-    // event may be completed after this operation, transtition the state to not block others.
+    // event may be completed after this operation, transition the state to not block others.
     this->updateExecutionStatus();
 }
 
@@ -909,7 +917,7 @@ void Event::addCallback(Callback::ClbFuncT fn, cl_int type, void *data) {
     // Note from spec :
     //    "All callbacks registered for an event object must be called.
     //     All enqueued callbacks shall be called before the event object is destroyed."
-    // That's why each registered calback increments the internal refcount
+    // That's why each registered callback increments the internal refcount
     incRefInternal();
     DBG_LOG(EventsDebugEnable, "event", this, "addCallback", "ECallbackTarget", static_cast<uint32_t>(type));
     callbacks[static_cast<uint32_t>(target)].pushFrontOne(*new Callback(this, fn, type, data));

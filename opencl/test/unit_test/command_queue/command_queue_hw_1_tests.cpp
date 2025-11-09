@@ -415,7 +415,7 @@ HWTEST_F(CommandQueueHwTest, GivenNonEmptyQueueOnBlockingWhenMappingBufferThenWi
             : CommandQueueHw<FamilyType>(context, device, 0, false) {
             finishWasCalled = false;
         }
-        cl_int finish() override {
+        cl_int finish(bool resolvePendingL3Flushes) override {
             finishWasCalled = true;
             return 0;
         }
@@ -462,7 +462,7 @@ HWTEST2_F(CommandQueueHwTest, GivenFillBufferBlockedOnUserEventWhenEventIsAborte
     auto waitingEvent = castToObject<Event>(clWaitingEvent);
 
     clSetUserEventStatus(clUserEvent, CL_INVALID_VALUE);
-    cmdQ.finish();
+    cmdQ.finish(false);
 
     auto timestampPacketNodes = waitingEvent->getTimestampPacketNodes();
     ASSERT_NE(timestampPacketNodes, nullptr);
@@ -695,7 +695,7 @@ HWTEST_F(CommandQueueHwRefCountTest, givenBlockedCmdQWhenNewBlockedEnqueueReplac
     EXPECT_EQ(3, mockCmdQ->getRefInternalCount());
 
     userEvent.setStatus(CL_COMPLETE);
-    // UserEvent is set to complete and event tree is unblocked, queue has only 1 refference to itself after this operation
+    // UserEvent is set to complete and event tree is unblocked, queue has only 1 reference to itself after this operation
     EXPECT_EQ(2, mockCmdQ->getRefInternalCount());
 
     // this call will release the queue
@@ -1177,7 +1177,7 @@ HWTEST_F(CommandQueueHwTest, givenCsrClientWhenCallingSyncPointsThenUnregister) 
 
     EXPECT_EQ(baseNumClients + 1, csr.getNumClients());
 
-    mockCmdQueueHw.finish();
+    mockCmdQueueHw.finish(false);
 
     EXPECT_EQ(baseNumClients, csr.getNumClients()); // queue synchronized
 
@@ -1242,11 +1242,7 @@ HWTEST_F(CommandQueueHwTest, givenKernelSplitEnqueueReadBufferWhenBlockedThenEnq
     pCmdQ->isQueueBlocked();
 }
 
-HWTEST_F(CommandQueueHwTest, givenDefaultHwCommandQueueThenCacheFlushAfterWalkerIsNotNeeded) {
-    EXPECT_FALSE(pCmdQ->getRequiresCacheFlushAfterWalker());
-}
-
-HWTEST_F(CommandQueueHwTest, givenSizeWhenForceStatelessIsCalledThenCorrectValueIsReturned) {
+HWTEST_F(CommandQueueHwTest, givenSizeAndIsForceStatelessDisabledWhenForceStatelessIsCalledThenCorrectValueIsReturned) {
 
     if (is32bit) {
         GTEST_SKIP();
@@ -1254,14 +1250,36 @@ HWTEST_F(CommandQueueHwTest, givenSizeWhenForceStatelessIsCalledThenCorrectValue
 
     struct MockCommandQueueHw : public CommandQueueHw<FamilyType> {
         using CommandQueueHw<FamilyType>::forceStateless;
+        using CommandQueueHw<FamilyType>::isForceStateless;
     };
 
     MockCommandQueueHw *pCmdQHw = reinterpret_cast<MockCommandQueueHw *>(pCmdQ);
+    pCmdQHw->isForceStateless = false;
     uint64_t bigSize = 4ull * MemoryConstants::gigaByte;
     EXPECT_TRUE(pCmdQHw->forceStateless(static_cast<size_t>(bigSize)));
 
     uint64_t smallSize = bigSize - 1;
     EXPECT_FALSE(pCmdQHw->forceStateless(static_cast<size_t>(smallSize)));
+}
+
+HWTEST_F(CommandQueueHwTest, givenSizeAndIsForceStatelessEnabledWhenForceStatelessIsCalledThenCorrectValueIsReturned) {
+
+    if (is32bit) {
+        GTEST_SKIP();
+    }
+
+    struct MockCommandQueueHw : public CommandQueueHw<FamilyType> {
+        using CommandQueueHw<FamilyType>::forceStateless;
+        using CommandQueueHw<FamilyType>::isForceStateless;
+    };
+
+    MockCommandQueueHw *pCmdQHw = reinterpret_cast<MockCommandQueueHw *>(pCmdQ);
+    pCmdQHw->isForceStateless = true;
+    uint64_t bigSize = 4ull * MemoryConstants::gigaByte;
+    EXPECT_TRUE(pCmdQHw->forceStateless(static_cast<size_t>(bigSize)));
+
+    uint64_t smallSize = bigSize - 1;
+    EXPECT_TRUE(pCmdQHw->forceStateless(static_cast<size_t>(smallSize)));
 }
 
 HWTEST_F(CommandQueueHwTest, givenFlushWhenFlushBatchedSubmissionsFailsThenErrorIsRetured) {
@@ -1276,7 +1294,7 @@ HWTEST_F(CommandQueueHwTest, givenFinishWhenFlushBatchedSubmissionsFailsThenErro
     MockCommandQueueHwWithOverwrittenCsr<FamilyType> cmdQueue(context, pClDevice, nullptr, false);
     MockCommandStreamReceiverWithFailingFlushBatchedSubmission csr(*pDevice->executionEnvironment, 0, pDevice->getDeviceBitfield());
     cmdQueue.csr = &csr;
-    cl_int errorCode = cmdQueue.finish();
+    cl_int errorCode = cmdQueue.finish(false);
     EXPECT_EQ(CL_OUT_OF_RESOURCES, errorCode);
 }
 
@@ -1286,7 +1304,7 @@ HWTEST_F(CommandQueueHwTest, givenGpuHangWhenFinishingCommandQueueHwThenWaitForE
     mockCmdQueueHw.waitForAllEnginesReturnValue = WaitStatus::gpuHang;
     mockCmdQueueHw.getUltCommandStreamReceiver().shouldFlushBatchedSubmissionsReturnSuccess = true;
 
-    const auto finishResult = mockCmdQueueHw.finish();
+    const auto finishResult = mockCmdQueueHw.finish(false);
     EXPECT_EQ(1, mockCmdQueueHw.waitForAllEnginesCalledCount);
     EXPECT_EQ(CL_OUT_OF_RESOURCES, finishResult);
 }
@@ -1297,7 +1315,7 @@ HWTEST_F(CommandQueueHwTest, givenNoGpuHangWhenFinishingCommandQueueHwThenWaitFo
     mockCmdQueueHw.waitForAllEnginesReturnValue = WaitStatus::ready;
     mockCmdQueueHw.getUltCommandStreamReceiver().shouldFlushBatchedSubmissionsReturnSuccess = true;
 
-    const auto finishResult = mockCmdQueueHw.finish();
+    const auto finishResult = mockCmdQueueHw.finish(false);
     EXPECT_EQ(1, mockCmdQueueHw.waitForAllEnginesCalledCount);
     EXPECT_EQ(CL_SUCCESS, finishResult);
 }
@@ -1526,6 +1544,6 @@ HWTEST_F(CommandQueueHwTest, givenDirectSubmissionAndSharedDisplayableImageWhenR
     result = mockCmdQueueHw.enqueueReleaseSharedObjects(numObjects, memObjects, 0, nullptr, nullptr, 0);
     EXPECT_EQ(result, CL_SUCCESS);
     EXPECT_TRUE(ultCsr.renderStateCacheFlushed);
-    EXPECT_EQ(finishCalledBefore + 1u, mockCmdQueueHw.finishCalledCount);
+    EXPECT_EQ(finishCalledBefore + 2u, mockCmdQueueHw.finishCalledCount);
     EXPECT_EQ(taskCountBefore + 1u, mockCmdQueueHw.taskCount);
 }

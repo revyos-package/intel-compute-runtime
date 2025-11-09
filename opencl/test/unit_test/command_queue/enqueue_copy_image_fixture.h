@@ -7,7 +7,6 @@
 
 #pragma once
 #include "shared/source/helpers/ptr_math.h"
-#include "shared/test/common/test_macros/test_checks_shared.h"
 
 #include "opencl/test/unit_test/command_queue/command_enqueue_fixture.h"
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
@@ -56,7 +55,7 @@ struct EnqueueCopyImageTest : public CommandEnqueueFixture,
 
 struct EnqueueCopyImageMipMapTest : public CommandEnqueueFixture,
                                     public ::testing::Test,
-                                    public ::testing::WithParamInterface<std::tuple<uint32_t, uint32_t, bool>> {
+                                    public ::testing::WithParamInterface<std::tuple<uint32_t, uint32_t>> {
 
     void SetUp(void) override {
         REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);

@@ -29,12 +29,11 @@ void CpuPageFaultManager::transferToGpu(void *ptr, void *cmdQ) {
     memoryData[ptr].unifiedMemoryManager->insertSvmMapOperation(ptr, memoryData[ptr].size, ptr, 0, false);
     auto retVal = commandQueue->enqueueSVMUnmap(ptr, 0, nullptr, nullptr, false);
     UNRECOVERABLE_IF(retVal);
-    retVal = commandQueue->finish();
+    retVal = commandQueue->finish(false);
     UNRECOVERABLE_IF(retVal);
 
     auto allocData = memoryData[ptr].unifiedMemoryManager->getSVMAlloc(ptr);
     UNRECOVERABLE_IF(allocData == nullptr);
-    this->evictMemoryAfterImplCopy(allocData->cpuAllocation, &commandQueue->getDevice());
 }
 void CpuPageFaultManager::allowCPUMemoryEviction(bool evict, void *ptr, PageFaultData &pageFaultData) {
     auto commandQueue = static_cast<CommandQueue *>(pageFaultData.cmdQ);

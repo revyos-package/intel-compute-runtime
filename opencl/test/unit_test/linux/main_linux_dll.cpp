@@ -12,6 +12,7 @@
 #include "shared/source/helpers/basic_math.h"
 #include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/memory_manager/memory_manager.h"
+#include "shared/source/memory_manager/usm_pool_params.h"
 #include "shared/source/os_interface/driver_info.h"
 #include "shared/source/os_interface/linux/allocator_helper.h"
 #include "shared/source/os_interface/linux/i915.h"
@@ -641,6 +642,13 @@ TEST(AllocatorHelper, givenExpectedSizeToReserveWhenGetSizeToReserveCalledThenEx
     EXPECT_EQ((maxNBitValue(47) + 1) / 4, NEO::getSizeToReserve());
 }
 
+TEST(UsmPoolTest, whenGetUsmPoolSizeCalledThenReturnCorrectSize) {
+    MockExecutionEnvironment mockExecutionEnvironment;
+    auto &gfxCoreHelper = mockExecutionEnvironment.rootDeviceEnvironments[0]->getHelper<GfxCoreHelper>();
+    auto usmPoolSize = gfxCoreHelper.isExtendedUsmPoolSizeEnabled() ? 32 * MemoryConstants::megaByte : 2 * MemoryConstants::megaByte;
+    EXPECT_EQ(usmPoolSize, NEO::UsmPoolParams::getUsmPoolSize(gfxCoreHelper));
+}
+
 TEST(DrmMemoryManagerCreate, whenCallCreateMemoryManagerThenDrmMemoryManagerIsCreated) {
     DebugManagerStateRestore restorer;
     debugManager.flags.OverridePatIndex.set(0);
@@ -677,10 +685,6 @@ TEST(DrmMemoryManagerCreate, givenEnableHostPtrValidationSetToZeroWhenCreateDrmM
     EXPECT_NE(nullptr, drmMemoryManager.get());
     EXPECT_FALSE(static_cast<DrmMemoryManager *>(drmMemoryManager.get())->isValidateHostMemoryEnabled());
     mockExecutionEnvironment.memoryManager = std::move(drmMemoryManager);
-}
-
-TEST(OsInterfaceTests, givenOsInterfaceWhenEnableLocalMemoryIsSpecifiedThenItIsSetToTrueOn64Bit) {
-    EXPECT_TRUE(OSInterface::osEnableLocalMemory);
 }
 
 TEST_F(DrmTests, whenDrmIsCreatedWithMultipleSubDevicesThenCreateMultipleVirtualMemoryAddressSpaces) {

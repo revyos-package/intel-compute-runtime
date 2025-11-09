@@ -19,6 +19,9 @@ class ProductHelperHw : public ProductHelper {
         return productHelper;
     }
 
+    std::unique_ptr<DeviceCapsReader> getDeviceCapsReader(const DriverModel &driverModel) const override;
+    std::unique_ptr<DeviceCapsReader> getDeviceCapsReader(aub_stream::AubManager &aubManager) const override;
+    bool setupHardwareInfo(HardwareInfo &hwInfo, const DeviceCapsReader &capsReader) const override;
     int configureHardwareCustom(HardwareInfo *hwInfo, OSInterface *osIface) const override;
     void adjustPlatformForProductFamily(HardwareInfo *hwInfo) override;
     void adjustSamplerState(void *sampler, const HardwareInfo &hwInfo) const override;
@@ -56,6 +59,7 @@ class ProductHelperHw : public ProductHelper {
     std::pair<bool, bool> isPipeControlPriorToNonPipelinedStateCommandsWARequired(const HardwareInfo &hwInfo, bool isRcs, const ReleaseHelper *releaseHelper) const override;
     bool heapInLocalMem(const HardwareInfo &hwInfo) const override;
     void setCapabilityCoherencyFlag(const HardwareInfo &hwInfo, bool &coherencyFlag) const override;
+    bool canShareMemoryWithoutNTHandle() const override;
     bool isAdditionalMediaSamplerProgrammingRequired() const override;
     bool isInitialFlagsProgrammingRequired() const override;
     bool isReturnedCmdSizeForMediaSamplerAdjustmentRequired() const override;
@@ -184,7 +188,7 @@ class ProductHelperHw : public ProductHelper {
     uint32_t getMaxLocalSubRegionSize(const HardwareInfo &hwInfo) const override;
     bool localDispatchSizeQuerySupported() const override;
     bool isDeviceToHostCopySignalingFenceRequired() const override;
-    size_t getMaxFillPaternSizeForCopyEngine() const override;
+    size_t getMaxFillPatternSizeForCopyEngine() const override;
     bool isAvailableExtendedScratch() const override;
     std::optional<bool> isCoherentAllocation(uint64_t patIndex) const override;
     bool isStagingBuffersEnabled() const override;
@@ -194,9 +198,10 @@ class ProductHelperHw : public ProductHelper {
     uint32_t getNumCacheRegions() const override;
     uint32_t adjustMaxThreadsPerThreadGroup(uint32_t maxThreadsPerThreadGroup, uint32_t simt, uint32_t grfCount, bool isHeaplessModeEnabled) const override;
     uint64_t getPatIndex(CacheRegion cacheRegion, CachePolicy cachePolicy) const override;
+    uint64_t getSharedSystemPatIndex() const override;
     uint32_t getGmmResourceUsageOverride(uint32_t usageType) const override;
     bool isSharingWith3dOrMediaAllowed() const override;
-    bool isL3FlushAfterPostSyncRequired(bool heaplessEnabled) const override;
+    bool isL3FlushAfterPostSyncSupported(bool heaplessEnabled) const override;
     void overrideDirectSubmissionTimeouts(uint64_t &timeoutUs, uint64_t &maxTimeoutUs) const override;
     bool isMisalignedUserPtr2WayCoherent() const override;
     bool isSvmHeapReservationSupported() const override;
@@ -209,6 +214,8 @@ class ProductHelperHw : public ProductHelper {
     bool isPidFdOrSocketForIpcSupported() const override;
     bool checkBcsForDirectSubmissionStop() const override;
     bool shouldRegisterEnqueuedWalkerWithProfiling() const override;
+    bool isInterruptSupported() const override;
+    bool isCompressionFormatFromGmmRequired() const override;
 
     ~ProductHelperHw() override = default;
 

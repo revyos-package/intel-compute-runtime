@@ -168,6 +168,13 @@ size_t BlitCommandsHelper<GfxFamily>::estimateBlitCommandsSize(const BlitPropert
         if (blitProperties.multiRootDeviceEventSync != nullptr) {
             size += EncodeMiFlushDW<GfxFamily>::getCommandSizeWithWa(waArgs);
         }
+
+        bool deviceToHostPostSyncFenceRequired = rootDeviceEnvironment.getProductHelper().isDeviceToHostCopySignalingFenceRequired() &&
+                                                 (blitProperties.dstAllocation && !blitProperties.dstAllocation->isAllocatedInLocalMemoryPool()) &&
+                                                 (blitProperties.srcAllocation && blitProperties.srcAllocation->isAllocatedInLocalMemoryPool());
+        if (deviceToHostPostSyncFenceRequired) {
+            size += MemorySynchronizationCommands<GfxFamily>::getSizeForAdditionalSynchronization(NEO::FenceType::release, rootDeviceEnvironment);
+        }
     }
     waArgs.isWaRequired = true;
     size += BlitCommandsHelper<GfxFamily>::getWaCmdsSize(blitPropertiesContainer);
@@ -576,7 +583,7 @@ size_t BlitCommandsHelper<GfxFamily>::getNumberOfBlitsForCopyPerRow(const Vec3<s
     const auto maxHeight = getMaxBlitHeight(rootDeviceEnvironment, isSystemMemoryPoolUsed);
 
     while (sizeToBlit != 0) {
-        if (sizeToBlit > getMaxBlitWidth(rootDeviceEnvironment)) {
+        if (sizeToBlit > maxWidth) {
             // dispatch 2D blit: maxBlitWidth x (1 .. maxBlitHeight)
             width = maxWidth;
             height = std::min((sizeToBlit / width), maxHeight);

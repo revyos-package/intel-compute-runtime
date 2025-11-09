@@ -16,9 +16,12 @@
 #include "shared/source/os_interface/linux/os_context_linux.h"
 #include "shared/source/os_interface/linux/os_inc.h"
 #include "shared/source/os_interface/os_interface.h"
+#include "shared/source/unified_memory/usm_memory_support.h"
+#include "shared/source/utilities/cpu_info.h"
 #include "shared/source/utilities/directory.h"
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/helpers/default_hw_info.h"
+#include "shared/test/common/helpers/device_caps_reader_test_helper.h"
 #include "shared/test/common/helpers/engine_descriptor_helper.h"
 #include "shared/test/common/helpers/raii_gfx_core_helper.h"
 #include "shared/test/common/helpers/stream_capture.h"
@@ -28,6 +31,7 @@
 #include "shared/test/common/mocks/linux/mock_ioctl_helper.h"
 #include "shared/test/common/mocks/linux/mock_os_context_linux.h"
 #include "shared/test/common/mocks/mock_execution_environment.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/os_interface/linux/drm_mock_memory_info.h"
 #include "shared/test/common/os_interface/linux/sys_calls_linux_ult.h"
 #include "shared/test/common/test_macros/hw_test.h"
@@ -143,6 +147,30 @@ TEST(DrmTest, GivenValidSysfsNodeWhenGetDeviceMemoryMaxClockRateInMhzIsCalledThe
     uint32_t clkRate = 0;
     EXPECT_TRUE(drm.getDeviceMemoryMaxClockRateInMhz(0, clkRate));
     EXPECT_EQ(clkRate, 800u);
+}
+
+TEST(DrmTest, givenFailedProductHelperSetupHardwareInfoWhenDrmSetupHardwareInfoCalledThenFailureIsReturned) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+
+    struct MyMockProductHelper : MockProductHelper {
+        std::unique_ptr<DeviceCapsReader> getDeviceCapsReader(const DriverModel &driverModel) const override {
+            std::vector<uint32_t> caps;
+            return std::make_unique<DeviceCapsReaderMock>(caps);
+        }
+    };
+
+    auto productHelper = new MyMockProductHelper();
+    productHelper->setupHardwareInfoResult = false;
+
+    executionEnvironment->rootDeviceEnvironments[0]->productHelper.reset(productHelper);
+
+    auto setupHardwareInfo = [](HardwareInfo *hwInfo, bool, const ReleaseHelper *) {};
+    DeviceDescriptor device = {0, defaultHwInfo.get(), setupHardwareInfo};
+
+    auto rc = drm.setupHardwareInfo(&device, false);
+    EXPECT_EQ(-1, rc);
+    EXPECT_EQ(1u, productHelper->setupHardwareInfoCalled);
 }
 
 struct MockIoctlHelperForSmallBar : public IoctlHelperUpstream {
@@ -2282,6 +2310,30 @@ TEST(DrmHwInfoTest, givenTopologyDataWithSingleSliceAndNoCommonSubSliceMaskWhenS
     EXPECT_GE(GfxCoreHelper::getHighestEnabledDualSubSlice(*hwInfo), 2u * ioctlHelper->topologyDataToSet.maxSubSlicesPerSlice);
 }
 
+TEST(DrmHwInfoTest, givenOverrideMaxSlicesSupportedIsFalseThenMaxSlicesSupportedIsNotSetToSliceCount) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    drm.ioctlHelper = std::make_unique<MockIoctlHelper>(drm);
+    auto ioctlHelper = static_cast<MockIoctlHelper *>(drm.ioctlHelper.get());
+    ioctlHelper->overrideMaxSlicesSupportedResult = false;
+
+    ioctlHelper->topologyDataToSet.sliceCount = 4;
+    ioctlHelper->topologyDataToSet.maxEusPerSubSlice = 8;
+    ioctlHelper->topologyDataToSet.maxSubSlicesPerSlice = 8;
+    ioctlHelper->topologyDataToSet.euCount = 64;
+    ioctlHelper->topologyDataToSet.subSliceCount = 8;
+
+    auto hwInfo = executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo();
+
+    hwInfo->gtSystemInfo = {};
+    auto setupHardwareInfo = [](HardwareInfo *hwInfo, bool, const ReleaseHelper *) {
+        hwInfo->gtSystemInfo.MaxSlicesSupported = 8;
+    };
+    DeviceDescriptor device = {0, hwInfo, setupHardwareInfo};
+    EXPECT_EQ(0, drm.setupHardwareInfo(&device, false));
+    EXPECT_EQ(8u, hwInfo->gtSystemInfo.MaxSlicesSupported);
+}
+
 TEST(DrmHwInfoTest, givenTopologyDataWithSingleSliceAndMoreSubslicesThanMaxSubslicePerSliceWhenSettingHwInfoThenNoSubSliceInfoIsSet) {
     auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
     DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
@@ -2527,6 +2579,47 @@ TEST(DrmTest, GivenSysFsPciPathWhenCallinggetSysFsPciPathBaseNameThenResultIsCor
     EXPECT_STREQ("card7", drm.getSysFsPciPathBaseName().c_str());
     drm.mockSysFsPciPath = "card8";
     EXPECT_STREQ("card8", drm.getSysFsPciPathBaseName().c_str());
+}
+
+TEST(DrmTest, GivenSharedSystemAllocNotEnabledByKmdSharedSystemAllocAddressRangeReturnsZero) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.gpuAddressSpace = maxNBitValue(48);
+    drm.setSharedSystemAllocEnable(false);
+    drm.adjustSharedSystemMemCapabilities();
+    EXPECT_FALSE(drm.isSharedSystemAllocEnabled());
+    uint64_t sharedSystemRange = drm.getSharedSystemAllocAddressRange();
+    EXPECT_EQ(0lu, sharedSystemRange);
+}
+
+TEST(DrmTest, GivenGpuAddressRangeAndCpuAddressRangeSharedSystemAllocEnableIsTrue) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.gpuAddressSpace = maxNBitValue(48);
+    drm.setSharedSystemAllocEnable(true);
+    uint64_t caps = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+    executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities = caps;
+    drm.adjustSharedSystemMemCapabilities();
+    EXPECT_TRUE(drm.isSharedSystemAllocEnabled());
+    EXPECT_EQ(caps, executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities);
+    EXPECT_TRUE(drm.hasPageFaultSupport());
+    uint64_t sharedSystemRange = drm.getSharedSystemAllocAddressRange();
+    EXPECT_EQ((maxNBitValue(48) + 1), sharedSystemRange);
+}
+
+TEST(DrmTest, GivenGpuAddressRangeAndCpuAddressRangeSharedSystemAllocEnableIsFalse) {
+    auto executionEnvironment = std::make_unique<MockExecutionEnvironment>();
+    DrmMock drm{*executionEnvironment->rootDeviceEnvironments[0]};
+    executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.gpuAddressSpace = maxNBitValue(32);
+    drm.setSharedSystemAllocEnable(true);
+    uint64_t caps = (UnifiedSharedMemoryFlags::access | UnifiedSharedMemoryFlags::atomicAccess | UnifiedSharedMemoryFlags::concurrentAccess | UnifiedSharedMemoryFlags::concurrentAtomicAccess);
+    executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities = caps;
+    drm.adjustSharedSystemMemCapabilities();
+    EXPECT_FALSE(drm.isSharedSystemAllocEnabled());
+    EXPECT_EQ(0lu, executionEnvironment->rootDeviceEnvironments[0]->getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities);
+    EXPECT_FALSE(drm.hasPageFaultSupport());
+    uint64_t sharedSystemRange = drm.getSharedSystemAllocAddressRange();
+    EXPECT_EQ(0lu, sharedSystemRange);
 }
 
 using DrmHwTest = ::testing::Test;

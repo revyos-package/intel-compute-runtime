@@ -195,10 +195,10 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenPointerWithOffsetPassedThenProperDataRet
     auto ptr = svmManager->createUnifiedMemoryAllocation(4096, unifiedMemoryProperties);
     EXPECT_NE(nullptr, ptr);
 
-    auto offsetedPointer = ptrOffset(ptr, 4u);
+    auto offsetPointer = ptrOffset(ptr, 4u);
     auto usmAllocationData = svmManager->getSVMAlloc(ptr);
     ASSERT_NE(nullptr, usmAllocationData);
-    auto usmAllocationData2 = svmManager->getSVMAlloc(offsetedPointer);
+    auto usmAllocationData2 = svmManager->getSVMAlloc(offsetPointer);
     ASSERT_NE(nullptr, usmAllocationData2);
     EXPECT_EQ(usmAllocationData2, usmAllocationData);
     svmManager->freeSVMAlloc(ptr, true);
@@ -227,11 +227,11 @@ TEST_F(SVMLocalMemoryAllocatorTest, whenMultiplePointerWithOffsetPassedThenPrope
     allocationData.gpuAllocations.addAllocation(&mockAllocation);
     svmManager->svmAllocs.insert(unalignedPointer, allocationData);
 
-    auto offsetedPointer = ptrOffset(ptr, 2048);
-    auto usmAllocationData = svmManager->getSVMAlloc(offsetedPointer);
+    auto offsetPointer = ptrOffset(ptr, 2048);
+    auto usmAllocationData = svmManager->getSVMAlloc(offsetPointer);
     EXPECT_EQ(nullptr, usmAllocationData);
-    offsetedPointer = ptrOffset(ptr2, 2048);
-    usmAllocationData = svmManager->getSVMAlloc(offsetedPointer);
+    offsetPointer = ptrOffset(ptr2, 2048);
+    usmAllocationData = svmManager->getSVMAlloc(offsetPointer);
     EXPECT_EQ(nullptr, usmAllocationData);
     usmAllocationData = svmManager->getSVMAlloc(unalignedPointer);
     EXPECT_NE(nullptr, usmAllocationData);
@@ -410,6 +410,24 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenSharedSystemA
     free(ptr);
 }
 
+TEST_F(SVMLocalMemoryAllocatorTest, givenSharedSystemAllocationWhenGetSharedSystemAtomicAccessIsCalledThenMemoryManagerGetSharedSystemAtomicAccessIsCalledAndFails) {
+
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(device->getMemoryManager());
+    auto mockMemoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    mockMemoryManager->failGetSharedSystemAtomicAccess = true;
+
+    auto ptr = malloc(4096);
+    EXPECT_NE(nullptr, ptr);
+    auto ret = svmManager->getSharedSystemAtomicAccess(*device, ptr, 4096);
+    EXPECT_EQ(AtomicAccessMode::invalid, ret);
+
+    EXPECT_TRUE(mockMemoryManager->getSharedSystemAtomicAccessCalled);
+
+    free(ptr);
+}
+
 TEST_F(SVMLocalMemoryAllocatorTest, givenForceMemoryPrefetchForKmdMigratedSharedAllocationsWhenSVMAllocsIsCalledThenPrefetchSharedUnifiedMemoryInSvmAllocsManager) {
     DebugManagerStateRestore restore;
     debugManager.flags.UseKmdMigration.set(1);
@@ -486,6 +504,24 @@ TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentThenHostUnifiedMemoryAllocatio
         EXPECT_EQ(svmManager->getSVMAlloc(ptr)->pageSizeForAlignment, MemoryConstants::pageSize);
         svmManager->freeSVMAlloc(ptr);
     } while (alignment != 0);
+}
+
+TEST_F(SVMLocalMemoryAllocatorTest, givenUncachedHostAllocationThenSetAllocationAsUncached) {
+    std::unique_ptr<UltDeviceFactory> deviceFactory(new UltDeviceFactory(1, 2));
+    auto device = deviceFactory->rootDevices[0];
+    auto memoryManager = static_cast<MockMemoryManager *>(device->getMemoryManager());
+    auto svmManager = std::make_unique<MockSVMAllocsManager>(memoryManager);
+    auto csr = std::make_unique<MockCommandStreamReceiver>(*device->getExecutionEnvironment(), device->getRootDeviceIndex(), device->getDeviceBitfield());
+    csr->setupContext(*device->getDefaultEngine().osContext);
+    SVMAllocsManager::UnifiedMemoryProperties unifiedMemoryProperties(InternalMemoryType::hostUnifiedMemory, 0ull, rootDeviceIndices, deviceBitfields);
+
+    unifiedMemoryProperties.allocationFlags.flags.locallyUncachedResource = true;
+    auto ptr = svmManager->createHostUnifiedMemoryAllocation(1, unifiedMemoryProperties);
+    EXPECT_NE(nullptr, ptr);
+    auto mockedAllocation = static_cast<MemoryAllocation *>(svmManager->getSVMAlloc(ptr)->gpuAllocations.getDefaultGraphicsAllocation());
+    EXPECT_TRUE(mockedAllocation->uncacheable);
+
+    svmManager->freeSVMAlloc(ptr);
 }
 
 TEST_F(SVMLocalMemoryAllocatorTest, givenAlignmentThenSharedUnifiedMemoryAllocationsAreAlignedCorrectly) {

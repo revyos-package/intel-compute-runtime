@@ -90,13 +90,15 @@ uint32_t MutableCommandListCoreFamily<gfxCoreFamily>::getIohSizeForPrefetch(cons
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-void MutableCommandListCoreFamily<gfxCoreFamily>::addKernelIsaMemoryPrefetchPadding(NEO::LinearStream &cmdStream, const Kernel &kernel, uint64_t cmdId) {
+void MutableCommandListCoreFamily<gfxCoreFamily>::addKernelIsaMemoryPrefetchPadding(NEO::LinearStream &cmdStream, const Kernel &kernel, uint32_t isaPrefetchSizeLimit, uint64_t cmdId) {
     auto kernelGroup = getKernelGroupForPrefetch(cmdId);
     if (!kernelGroup) {
         return;
     }
 
-    auto remainingSize = kernelGroup->getMaxIsaSize() - kernel.getImmutableData()->getIsaSize();
+    auto maxSize = std::min(isaPrefetchSizeLimit, kernelGroup->getMaxIsaSize());
+
+    auto remainingSize = maxSize - kernel.getImmutableData()->getIsaSize();
 
     auto paddingSize = NEO::EncodeMemoryPrefetch<GfxFamily>::getSizeForMemoryPrefetch(remainingSize, this->device->getNEODevice()->getRootDeviceEnvironment());
     NEO::EncodeNoop<GfxFamily>::emitNoop(cmdStream, paddingSize);
@@ -144,7 +146,7 @@ ze_result_t MutableCommandListCoreFamily<gfxCoreFamily>::initialize(Device *devi
     this->mutableWalkerCmds.reserve(estimatedMutableAppendCount * estimatedDifferentKernelUsed); // product of appends and possible kernels in kernel groups
 
     // this is a unique ptr storage for all kernel data used at any given append/dispatch (offsets, sizes, addresses)
-    this->dispatchs.reserve(estimatedMutableAppendCount);
+    this->dispatches.reserve(estimatedMutableAppendCount);
     // number of mutation points, aggregate pointers to all objects stored as pointers in different other classes
     this->kernelMutations.reserve(estimatedMutableAppendCount);
     this->eventMutations.reserve(estimatedMutableAppendCount);
@@ -401,7 +403,7 @@ inline ze_result_t MutableCommandListCoreFamily<gfxCoreFamily>::appendLaunchKern
     }
 
     if (this->nextAppendKernelMutable) {
-        auto appendKernelDispatch = (*dispatchs.rbegin()).get();
+        auto appendKernelDispatch = (*dispatches.rbegin()).get();
         if (appendKernelDispatch->syncBuffer != nullptr) {
             size_t threadGroupCount = threadGroupDimensions.groupCountX * threadGroupDimensions.groupCountY * threadGroupDimensions.groupCountZ;
             appendKernelDispatch->syncBufferSize = NEO::KernelHelper::getSyncBufferSize(threadGroupCount);
@@ -578,7 +580,7 @@ ze_result_t MutableCommandListCoreFamily<gfxCoreFamily>::reset() {
     this->variableStorage.clear();
     this->variableMap.clear();
     this->kernelData.clear();
-    this->dispatchs.clear();
+    this->dispatches.clear();
     this->sbaVec.clear();
     this->kernelMutations.clear();
     this->eventMutations.clear();
@@ -826,7 +828,7 @@ void MutableCommandListCoreFamily<gfxCoreFamily>::storeSignalEventVariable(Mutab
             if (CommandListImp::isInOrderExecutionEnabled()) {
                 mutableEventParams.eventInsideInOrder = true;
                 mutableEventParams.counterBasedEvent = event->isCounterBased();
-                mutableEventParams.inOrderIncrementEvent = event->getInOrderIncrementValue() > 0;
+                mutableEventParams.inOrderIncrementEvent = event->getInOrderIncrementValue(this->partitionCount) > 0;
                 if (mutableEventParams.counterBasedEvent && CommandListCoreFamily<gfxCoreFamily>::duplicatedInOrderCounterStorageEnabled) {
                     mutableEventParams.counterBasedTimestampEvent = event->isEventTimestampFlagSet();
                 }
@@ -842,11 +844,9 @@ void MutableCommandListCoreFamily<gfxCoreFamily>::storeSignalEventVariable(Mutab
                         if (mutableEventParams.l3FlushEvent) {
                             mutableEventParams.l3FlushEventTimestampSyncCmds = true;
                         }
-                    } else {
-                        if (mutableEventParams.l3FlushEvent) {
-                            launchParams.outSyncCommand = &mutableEventParams.signalCmd;
-                            mutableEventParams.l3FlushEventSyncCmd = true;
-                        }
+                    } else if (mutableEventParams.l3FlushEvent) {
+                        launchParams.outSyncCommand = &mutableEventParams.signalCmd;
+                        mutableEventParams.l3FlushEventSyncCmd = true;
                     }
                 }
                 launchParams.omitAddingEventResidency |= (mutableEventParams.l3FlushEvent || mutableEventParams.counterBasedTimestampEvent);
@@ -921,7 +921,7 @@ ze_result_t MutableCommandListCoreFamily<gfxCoreFamily>::captureKernelGroupVaria
     if (retVal != ZE_RESULT_SUCCESS) {
         return retVal;
     }
-    auto viewKernelDispatch = (*dispatchs.rbegin()).get();
+    auto viewKernelDispatch = (*dispatches.rbegin()).get();
 
     mutableKernel->setComputeWalker(viewKernelMutableComputeWalker);
     mutableKernel->setKernelDispatch(viewKernelDispatch);
@@ -970,26 +970,43 @@ ze_result_t MutableCommandListCoreFamily<gfxCoreFamily>::captureKernelGroupVaria
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-void MutableCommandListCoreFamily<gfxCoreFamily>::updateCmdListNoopPatchData(size_t noopPatchIndex, void *newCpuPtr, size_t newPatchSize, size_t newOffset) {
+void MutableCommandListCoreFamily<gfxCoreFamily>::updateCmdListNoopPatchData(size_t noopPatchIndex, void *newCpuPtr, size_t newPatchSize, size_t newOffset, uint64_t newGpuAddress) {
     auto &commandsToPatch = CommandListCoreFamily<gfxCoreFamily>::commandsToPatch;
+    auto &totalNoopSpace = CommandListCoreFamily<gfxCoreFamily>::totalNoopSpace;
     UNRECOVERABLE_IF(noopPatchIndex >= commandsToPatch.size());
     auto &noopPatch = commandsToPatch[noopPatchIndex];
+
+    if (noopPatch.pDestination == nullptr) {
+        totalNoopSpace += newPatchSize;
+    } else {
+        if (newPatchSize > noopPatch.patchSize) {
+            totalNoopSpace += (newPatchSize - noopPatch.patchSize);
+        } else {
+            totalNoopSpace -= (noopPatch.patchSize - newPatchSize);
+        }
+    }
 
     noopPatch.pDestination = newCpuPtr;
     noopPatch.patchSize = newPatchSize;
     noopPatch.offset = newOffset;
+    noopPatch.gpuAddress = newGpuAddress;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-size_t MutableCommandListCoreFamily<gfxCoreFamily>::createNewCmdListNoopPatchData(void *newCpuPtr, size_t newPatchSize, size_t newOffset) {
+size_t MutableCommandListCoreFamily<gfxCoreFamily>::createNewCmdListNoopPatchData(void *newCpuPtr, size_t newPatchSize, size_t newOffset, uint64_t newGpuAddress) {
     auto &commandsToPatch = CommandListCoreFamily<gfxCoreFamily>::commandsToPatch;
+    auto &totalNoopSpace = CommandListCoreFamily<gfxCoreFamily>::totalNoopSpace;
+
     size_t noopPatchIndex = commandsToPatch.size();
+
+    totalNoopSpace += newPatchSize;
 
     CommandToPatch noopPatch;
     noopPatch.type = CommandToPatch::NoopSpace;
     noopPatch.offset = newOffset;
     noopPatch.pDestination = newCpuPtr;
     noopPatch.patchSize = newPatchSize;
+    noopPatch.gpuAddress = newGpuAddress;
 
     commandsToPatch.push_back(noopPatch);
 
@@ -997,7 +1014,7 @@ size_t MutableCommandListCoreFamily<gfxCoreFamily>::createNewCmdListNoopPatchDat
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-void MutableCommandListCoreFamily<gfxCoreFamily>::fillCmdListNoopPatchData(size_t noopPatchIndex, void *&cpuPtr, size_t &patchSize, size_t &offset) {
+void MutableCommandListCoreFamily<gfxCoreFamily>::fillCmdListNoopPatchData(size_t noopPatchIndex, void *&cpuPtr, size_t &patchSize, size_t &offset, uint64_t &gpuAddress) {
     auto &commandsToPatch = CommandListCoreFamily<gfxCoreFamily>::commandsToPatch;
     UNRECOVERABLE_IF(noopPatchIndex >= commandsToPatch.size());
     auto &noopPatch = commandsToPatch[noopPatchIndex];
@@ -1005,15 +1022,21 @@ void MutableCommandListCoreFamily<gfxCoreFamily>::fillCmdListNoopPatchData(size_
     cpuPtr = noopPatch.pDestination;
     patchSize = noopPatch.patchSize;
     offset = noopPatch.offset;
+    gpuAddress = noopPatch.gpuAddress;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 void MutableCommandListCoreFamily<gfxCoreFamily>::disableAddressNoopPatch(size_t noopPatchIndex) {
     auto &commandsToPatch = CommandListCoreFamily<gfxCoreFamily>::commandsToPatch;
+    auto &totalNoopSpace = CommandListCoreFamily<gfxCoreFamily>::totalNoopSpace;
+
     UNRECOVERABLE_IF(noopPatchIndex >= commandsToPatch.size());
     auto &noopPatch = commandsToPatch[noopPatchIndex];
 
     noopPatch.pDestination = nullptr;
+
+    UNRECOVERABLE_IF(totalNoopSpace < noopPatch.patchSize);
+    totalNoopSpace -= noopPatch.patchSize;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>

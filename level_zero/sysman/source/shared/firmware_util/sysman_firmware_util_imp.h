@@ -19,12 +19,15 @@
 
 namespace L0 {
 namespace Sysman {
+
 typedef int (*pIgscDeviceInitByDevice)(struct igsc_device_handle *handle,
                                        const char *devicePath);
 typedef int (*pIgscDeviceGetDeviceInfo)(struct igsc_device_handle *handle,
                                         struct igsc_info_device *info);
 typedef int (*pIgscDeviceFwVersion)(struct igsc_device_handle *handle,
                                     struct igsc_fw_version *version);
+typedef int (*pIgscDeviceFwDataVersion)(struct igsc_device_handle *handle,
+                                        struct igsc_fwdata_version *version);
 typedef int (*pIgscDeviceIteratorCreate)(struct igsc_device_iterator **iter);
 typedef int (*pIgscDeviceIteratorNext)(struct igsc_device_iterator *iter,
                                        IgscDeviceInfo *info);
@@ -34,6 +37,11 @@ typedef int (*pIgscDeviceFwUpdate)(struct igsc_device_handle *handle,
                                    const uint32_t bufferLen,
                                    igsc_progress_func_t progressFunc,
                                    void *ctx);
+typedef int (*pIgscDeviceFwDataUpdate)(struct igsc_device_handle *handle,
+                                       const uint8_t *buffer,
+                                       const uint32_t bufferLen,
+                                       igsc_progress_func_t progressFunc,
+                                       void *ctx);
 typedef int (*pIgscImageOpromInit)(struct igsc_oprom_image **img,
                                    const uint8_t *buffer,
                                    uint32_t bufferLen);
@@ -92,16 +100,19 @@ typedef int (*pIgscGfspHeciCmd)(struct igsc_device_handle *handle,
                                 size_t *actualOutBufferSize);
 
 extern const std::string fwDeviceFwVersion;
+extern const std::string fwDeviceFwDataVersion;
 extern const std::string fwDeviceOpromVersion;
 extern const std::string fwDevicePscVersion;
 
 extern pIgscDeviceInitByDevice deviceInitByDevice;
 extern pIgscDeviceGetDeviceInfo deviceGetDeviceInfo;
 extern pIgscDeviceFwVersion deviceGetFwVersion;
+extern pIgscDeviceFwDataVersion deviceGetFwDataVersion;
 extern pIgscDeviceIteratorCreate deviceIteratorCreate;
 extern pIgscDeviceIteratorNext deviceItreatorNext;
 extern pIgscDeviceIteratorDestroy deviceItreatorDestroy;
 extern pIgscDeviceFwUpdate deviceFwUpdate;
+extern pIgscDeviceFwDataUpdate deviceFwDataUpdate;
 extern pIgscImageOpromInit imageOpromInit;
 extern pIgscImageOpromType imageOpromType;
 extern pIgscDeviceOpromUpdate deviceOpromUpdate;
@@ -123,39 +134,6 @@ typedef struct {
     std::mutex fwProgressLock;
 } FlashProgressInfo;
 
-namespace GfspHeciConstants {
-enum Cmd {
-    setConfigurationCmd8 = 0x8,
-    getConfigurationCmd9 = 0x9,
-    setConfigurationCmd15 = 0xf,
-    getConfigurationCmd16 = 0x10
-};
-
-enum SetCmd15BytePostition {
-    request = 0,
-    response = 0
-};
-
-enum SetEccCmd8BytePostition {
-    setRequest = 0,
-    responseCurrentState = 0,
-    responsePendingState = 1
-};
-
-enum GetEccCmd16BytePostition {
-    eccAvailable = 0,
-    eccCurrentState = 4,
-    eccConfigurable = 8,
-    eccPendingState = 12,
-    eccDefaultState = 16
-};
-
-enum GetEccCmd9BytePostition {
-    currentState = 0,
-    pendingState = 1
-};
-} // namespace GfspHeciConstants
-
 class FirmwareUtilImp : public FirmwareUtil, NEO::NonCopyableAndNonMovableClass {
   public:
     FirmwareUtilImp(uint16_t domain, uint8_t bus, uint8_t device, uint8_t function);
@@ -172,7 +150,8 @@ class FirmwareUtilImp : public FirmwareUtil, NEO::NonCopyableAndNonMovableClass 
     ze_result_t fwGetEccConfigurable(ze_bool_t *pConfigurable) override;
     ze_result_t fwGetEccConfig(uint8_t *currentState, uint8_t *pendingState, uint8_t *defaultState) override;
     ze_result_t fwSetEccConfig(uint8_t newState, uint8_t *currentState, uint8_t *pendingState) override;
-    ze_result_t fwSetDowngradeConfig(uint8_t newState, uint8_t *pendingState) override;
+    ze_result_t fwSetGfspConfig(uint32_t gfspHeciCmdCode, std::vector<uint8_t> inBuf, std::vector<uint8_t> &outBuf) override;
+    ze_result_t fwGetGfspConfig(uint32_t gfspHeciCmdCode, std::vector<uint8_t> &outBuf) override;
     void getDeviceSupportedFwTypes(std::vector<std::string> &fwTypes) override;
     void fwGetMemoryHealthIndicator(zes_mem_health_t *health) override;
     void getLateBindingSupportedFwTypes(std::vector<std::string> &fwTypes) override;
@@ -188,9 +167,11 @@ class FirmwareUtilImp : public FirmwareUtil, NEO::NonCopyableAndNonMovableClass 
   protected:
     ze_result_t getFirstDevice(IgscDeviceInfo *);
     ze_result_t fwGetVersion(std::string &fwVersion);
+    ze_result_t fwDataGetVersion(std::string &fwDataVersion);
     ze_result_t opromGetVersion(std::string &fwVersion);
     ze_result_t pscGetVersion(std::string &fwVersion);
     ze_result_t fwFlashGSC(void *pImage, uint32_t size);
+    ze_result_t fwFlashGfxData(void *pImage, uint32_t size);
     ze_result_t fwFlashOprom(void *pImage, uint32_t size);
     ze_result_t fwFlashIafPsc(void *pImage, uint32_t size);
     ze_result_t fwFlashLateBinding(void *pImage, uint32_t size, std::string fwType);

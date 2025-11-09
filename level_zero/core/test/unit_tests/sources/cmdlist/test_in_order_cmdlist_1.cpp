@@ -8,6 +8,7 @@
 #include "shared/source/command_container/command_encoder.h"
 #include "shared/source/direct_submission/dispatchers/blitter_dispatcher.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
+#include "shared/source/helpers/blit_commands_helper.h"
 #include "shared/source/helpers/compiler_product_helper.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/register_offsets.h"
@@ -20,6 +21,7 @@
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_direct_submission_hw.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/mocks/mock_timestamp_container.h"
 #include "shared/test/common/mocks/ult_device_factory.h"
 
@@ -34,6 +36,10 @@
 #include <type_traits>
 #include <variant>
 
+namespace CpuIntrinsicsTests {
+extern std::atomic<uint32_t> pauseCounter;
+}
+
 namespace L0 {
 namespace ult {
 
@@ -43,7 +49,6 @@ HWTEST_F(InOrderCmdListExtensionsTests, givenDriverHandleWhenAskingForExtensions
     verifyExtensionDefinition(ZE_EVENT_POOL_COUNTER_BASED_EXP_NAME, ZE_EVENT_POOL_COUNTER_BASED_EXP_VERSION_CURRENT);
     verifyExtensionDefinition(ZEX_COUNTER_BASED_EVENT_EXT_NAME, ZEX_COUNTER_BASED_EVENT_VERSION_1_0);
     verifyExtensionDefinition(ZE_INTEL_COMMAND_LIST_MEMORY_SYNC, ZE_INTEL_COMMAND_LIST_MEMORY_SYNC_EXP_VERSION_CURRENT);
-    verifyExtensionDefinition(ZEX_INTEL_EVENT_SYNC_MODE_EXP_NAME, ZEX_INTEL_EVENT_SYNC_MODE_EXP_VERSION_CURRENT);
 }
 
 using InOrderCmdListTests = InOrderCmdListFixture;
@@ -65,7 +70,7 @@ HWTEST_F(InOrderCmdListTests, givenInvalidPnextStructWhenCreatingEventThenIgnore
     ze_event_desc_t eventDesc = {};
     eventDesc.pNext = &extStruct;
 
-    auto event0 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event0 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
 
     EXPECT_NE(nullptr, event0.get());
 }
@@ -81,39 +86,50 @@ HWTEST_F(InOrderCmdListTests, givenEventSyncModeDescPassedWhenCreatingEventThenE
     ze_event_desc_t eventDesc = {};
     eventDesc.pNext = &syncModeDesc;
 
+    auto mockProductHelper = new MockProductHelper;
+    mockProductHelper->isInterruptSupportedResult = true;
+    neoDevice->executionEnvironment->rootDeviceEnvironments[0]->productHelper.reset(mockProductHelper);
+
     eventDesc.index = 0;
     syncModeDesc.syncModeFlags = 0;
-    auto event0 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event0 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_FALSE(event0->isInterruptModeEnabled());
     EXPECT_FALSE(event0->isKmdWaitModeEnabled());
 
     eventDesc.index = 1;
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT;
-    auto event1 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event1 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_TRUE(event1->isInterruptModeEnabled());
     EXPECT_FALSE(event1->isKmdWaitModeEnabled());
 
     eventDesc.index = 2;
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_LOW_POWER_WAIT;
-    auto event2 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event2 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_FALSE(event2->isInterruptModeEnabled());
     EXPECT_FALSE(event2->isKmdWaitModeEnabled());
 
     eventDesc.index = 3;
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT | ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_LOW_POWER_WAIT;
-    auto event3 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event3 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_TRUE(event3->isInterruptModeEnabled());
     EXPECT_TRUE(event3->isKmdWaitModeEnabled());
 
     eventDesc.index = 4;
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT;
     syncModeDesc.externalInterruptId = 123;
-    auto event4 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event4 = DestroyableZeUniquePtr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_EQ(NEO::InterruptId::notUsed, event4->externalInterruptId);
 
     eventDesc.index = 5;
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_EXTERNAL_INTERRUPT_WAIT;
-    EXPECT_ANY_THROW(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device));
+    EXPECT_ANY_THROW(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue));
+
+    mockProductHelper->isInterruptSupportedResult = false;
+    eventDesc.index = 6;
+    syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT;
+    auto event5 = Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue);
+    EXPECT_EQ(event5, nullptr);
+    EXPECT_EQ(returnValue, ZE_RESULT_ERROR_UNSUPPORTED_FEATURE);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenQueueFlagWhenCreatingCmdListThenEnableRelaxedOrdering) {
@@ -126,6 +142,8 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenQueueFlagWhenCreatingCmdL
     EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListCreateImmediate(context, device, &cmdQueueDesc, &cmdList));
 
     EXPECT_TRUE(static_cast<CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily> *>(cmdList)->isInOrderExecutionEnabled());
+    auto flags = static_cast<CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily> *>(cmdList)->getCmdListFlags();
+    EXPECT_EQ(static_cast<ze_command_list_flags_t>(ZE_COMMAND_LIST_FLAG_IN_ORDER), flags);
 
     EXPECT_EQ(ZE_RESULT_SUCCESS, zeCommandListDestroy(cmdList));
 }
@@ -145,7 +163,7 @@ HWTEST_F(InOrderCmdListTests, givenNotSignaledInOrderEventWhenAddedToWaitListThe
     eventDesc.signal = ZE_EVENT_SCOPE_FLAG_HOST;
 
     eventDesc.index = 0;
-    auto event = std::unique_ptr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device)));
+    auto event = std::unique_ptr<InOrderFixtureMockEvent>(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPool.get(), &eventDesc, device, returnValue)));
     EXPECT_TRUE(event->isCounterBased());
 
     auto handle = event->toHandle();
@@ -215,10 +233,10 @@ HWTEST_F(InOrderCmdListTests, givenIpcPoolEventWhenTryingToImplicitlyConverToCou
     ze_event_desc_t eventDesc = {};
     eventDesc.signal = ZE_EVENT_SCOPE_FLAG_HOST;
 
-    DestroyableZeUniquePtr<InOrderFixtureMockEvent> event0(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPoolForExport.get(), &eventDesc, device)));
+    DestroyableZeUniquePtr<InOrderFixtureMockEvent> event0(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPoolForExport.get(), &eventDesc, device, returnValue)));
     EXPECT_EQ(Event::CounterBasedMode::implicitlyDisabled, event0->counterBasedMode);
 
-    DestroyableZeUniquePtr<InOrderFixtureMockEvent> event1(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPoolImported.get(), &eventDesc, device)));
+    DestroyableZeUniquePtr<InOrderFixtureMockEvent> event1(static_cast<InOrderFixtureMockEvent *>(Event::create<typename FamilyType::TimestampPacketType>(eventPoolImported.get(), &eventDesc, device, returnValue)));
     EXPECT_EQ(Event::CounterBasedMode::implicitlyDisabled, event1->counterBasedMode);
 }
 
@@ -475,6 +493,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenCounterBasedTimestampEven
 
             L0::EventImp<uint64_t>::assignKernelEventCompletionData(address);
         }
+        uint64_t getCompletionTimeout() const override { return std::numeric_limits<uint64_t>::max(); } // no timeout to avoid timing issues
     };
 
     auto cmdList = createImmCmdList<FamilyType::gfxCoreFamily>();
@@ -1135,7 +1154,7 @@ HWTEST_F(InOrderCmdListTests, givenDependencyFromDifferentRootDeviceWhenAppendCa
     auto immCmdList0 = createCmdList(device0);
     auto immCmdList1 = createCmdList(device1);
 
-    immCmdList0->appendSignalEvent(eventH, false);
+    immCmdList0->appendLaunchKernel(kernel->toHandle(), groupCount, eventH, 0, nullptr, launchParams);
 
     auto &cmdContainer1 = immCmdList1->getCmdContainer();
     auto cmdStream = cmdContainer1.getCommandStream();
@@ -1176,6 +1195,7 @@ HWTEST_F(InOrderCmdListTests, givenTimestmapEventWhenProgrammingBarrierThenDontA
 
     auto eventPool = createEvents<FamilyType>(1, true);
     auto eventHandle = events[0]->toHandle();
+    events[0]->signalScope = 0;
 
     auto immCmdList = createImmCmdList<FamilyType::gfxCoreFamily>();
 
@@ -1752,7 +1772,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenImmediateCmdListWhenDispa
     }
 
     events[0]->makeCounterBasedInitiallyDisabled(eventPool->getAllocation());
-    copyOnlyCmdList->appendMemoryCopyBlitRegion(&allocationData, &allocationData, region, region, {0, 0, 0}, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}, events[0].get(), 0, nullptr, false, false);
+    copyOnlyCmdList->appendMemoryCopyBlitRegion(&allocationData, &allocationData, region, region, {0, 0, 0}, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}, events[0].get(), 0, nullptr, copyParams, false);
     if (dcFlushRequired) {
         EXPECT_EQ(Event::CounterBasedMode::initiallyDisabled, events[0]->counterBasedMode);
     } else {
@@ -1906,7 +1926,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenNonInOrderCmdListWhenPass
     const void **ranges = reinterpret_cast<const void **>(&copyData[0]);
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, immCmdList->appendMemoryRangesBarrier(1, &rangeSizes, ranges, eventHandle, 0, nullptr));
 
-    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, copyOnlyCmdList->appendMemoryCopyBlitRegion(&allocationData, &allocationData, region, region, {0, 0, 0}, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}, events[0].get(), 0, nullptr, false, false));
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, copyOnlyCmdList->appendMemoryCopyBlitRegion(&allocationData, &allocationData, region, region, {0, 0, 0}, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}, events[0].get(), 0, nullptr, copyParams, false));
 
     EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, immCmdList->appendMemoryCopy(&copyData, &copyData, 1, eventHandle, 0, nullptr, copyParams));
 
@@ -2225,7 +2245,7 @@ HWTEST2_F(InOrderCmdListTests, givenRelaxedOrderingEnabledWhenSignalEventCalledT
     auto immCmdList1 = createImmCmdList<FamilyType::gfxCoreFamily>();
     auto immCmdList2 = createImmCmdList<FamilyType::gfxCoreFamily>();
 
-    auto eventPool = createEvents<FamilyType>(2, false);
+    auto eventPool = createEvents<FamilyType>(2, true);
     events[1]->makeCounterBasedInitiallyDisabled(eventPool->getAllocation());
     auto nonCbEvent = events[1]->toHandle();
 
@@ -2696,7 +2716,7 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenInOrderModeWhenProgrammin
 
             auto releaseHelper = device->getNEODevice()->getReleaseHelper();
             const bool textureFlushRequired = releaseHelper && releaseHelper->isPostImageWriteFlushRequired() &&
-                                              kernel->kernelImmData->getKernelInfo()->kernelDescriptor.kernelAttributes.hasImageWriteArg;
+                                              kernel->getImmutableData()->getKernelInfo()->kernelDescriptor.kernelAttributes.hasImageWriteArg;
             EXPECT_EQ(textureFlushRequired, pcCmd->getTextureCacheInvalidationEnable());
         } else {
             if (!immCmdList->inOrderExecInfo->isAtomicDeviceSignalling()) {
@@ -2944,6 +2964,32 @@ HWTEST2_F(InOrderCmdListTests, givenRelaxedOrderingWhenProgrammingTimestampEvent
         EXPECT_EQ(immCmdList->isQwordInOrderCounter(), sdiCmd->getStoreQword());
         EXPECT_EQ(2u, sdiCmd->getDataDword0());
     }
+}
+
+HWTEST_F(InOrderCmdListTests, givenCbEventWhenAppendSignalEventCalledThenFallbackToAppendBarrier) {
+    class MyMockCmdList : public WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>> {
+      public:
+        using BaseClass = WhiteBox<L0::CommandListCoreFamilyImmediate<FamilyType::gfxCoreFamily>>;
+        using BaseClass::BaseClass;
+
+        ze_result_t appendBarrier(ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) override {
+            appendBarrierCalled++;
+            return BaseClass::appendBarrier(hSignalEvent, numWaitEvents, phWaitEvents, relaxedOrderingDispatch);
+        }
+
+        uint32_t appendBarrierCalled = 0;
+    };
+
+    auto immCmdList = createImmCmdListImpl<FamilyType::gfxCoreFamily, MyMockCmdList>(false);
+
+    auto eventPool = createEvents<FamilyType>(2, true);
+    events[0]->makeCounterBasedInitiallyDisabled(eventPool->getAllocation());
+
+    immCmdList->appendSignalEvent(events[0]->toHandle(), false);
+    EXPECT_EQ(0u, immCmdList->appendBarrierCalled);
+
+    immCmdList->appendSignalEvent(events[1]->toHandle(), false);
+    EXPECT_EQ(1u, immCmdList->appendBarrierCalled);
 }
 
 HWTEST2_F(InOrderCmdListTests, givenRelaxedOrderingWhenProgrammingTimestampEventCbThenClearOnHstAndChainWithSyncAllocSignalingAsTwoSeparateSubmissions, IsAtLeastXeHpcCore) {
@@ -4393,7 +4439,12 @@ HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenInOrderModeWhenProgrammin
         EXPECT_EQ(0u, postSync.getImmediateData());
     }
 
-    EXPECT_EQ(0u, postSync.getDestinationAddress());
+    auto l3FlushAfterPostSyncEnabled = this->neoDevice->getProductHelper().isL3FlushAfterPostSyncSupported(true);
+    if (l3FlushAfterPostSyncEnabled) {
+        EXPECT_NE(0u, postSync.getDestinationAddress());
+    } else {
+        EXPECT_EQ(0u, postSync.getDestinationAddress());
+    }
 
     context->freeMem(data);
 }
@@ -4911,6 +4962,32 @@ HWTEST_F(InOrderCmdListTests, givenEventCounterNotReusedFromPreviousAppendWhenHo
     events[0]->hostSynchronize(std::numeric_limits<uint64_t>::max());
     EXPECT_FALSE(ultCsr->flushTagUpdateCalled);
     EXPECT_EQ(2u, events[0]->inOrderExecSignalValue);
+}
+
+HWTEST_F(InOrderCmdListTests, givenTsCbEventWhenAppendNonKernelOperationOnNonHeaplessNonDcFlushPlatformThenWaitOnCounter) {
+    if (device->getProductHelper().isDcFlushAllowed()) {
+        GTEST_SKIP();
+    }
+
+    auto ultCsr = static_cast<UltCommandStreamReceiver<FamilyType> *>(device->getNEODevice()->getDefaultEngine().commandStreamReceiver);
+    auto cmdList = createImmCmdList<FamilyType::gfxCoreFamily>();
+    if (cmdList->isHeaplessModeEnabled()) {
+        GTEST_SKIP();
+    }
+
+    CpuIntrinsicsTests::pauseCounter = 0u;
+
+    auto eventPool = createEvents<FamilyType>(1, true);
+    auto eventHandle = events[0]->toHandle();
+    cmdList->appendBarrier(eventHandle, 0, nullptr, false);
+
+    EXPECT_FALSE(ultCsr->flushTagUpdateCalled);
+    events[0]->hostSynchronize(std::numeric_limits<uint64_t>::max());
+
+    EXPECT_FALSE(ultCsr->flushTagUpdateCalled);
+    EXPECT_EQ(0u, ultCsr->waitForCompletionWithTimeoutTaskCountCalled);
+    EXPECT_EQ(1u, CpuIntrinsicsTests::pauseCounter);
+    EXPECT_EQ(1u, events[0]->inOrderExecSignalValue);
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, givenInOrderModeWhenProgrammingAppendBarrierWithDifferentEventsThenDontInherit) {
@@ -5495,11 +5572,11 @@ HWTEST_F(InOrderCmdListTests, givenCorrectInputParamsWhenCreatingCbEventThenRetu
     EXPECT_EQ(hostAddress, eventObj->getInOrderExecInfo()->getBaseHostAddress());
     EXPECT_EQ(castToUint64(gpuAddress), eventObj->getInOrderExecInfo()->getBaseDeviceAddress());
 
-    uint64_t addresss = 0;
+    uint64_t address = 0;
     uint64_t value = 0;
-    zexEventGetDeviceAddress(handle, &value, &addresss);
+    zexEventGetDeviceAddress(handle, &value, &address);
 
-    EXPECT_EQ(addresss, eventObj->getInOrderExecInfo()->getBaseDeviceAddress());
+    EXPECT_EQ(address, eventObj->getInOrderExecInfo()->getBaseDeviceAddress());
     EXPECT_EQ(value, counterValue);
 
     zeEventDestroy(handle);
@@ -5639,7 +5716,7 @@ HWTEST_F(InOrderCmdListTests, givenExternalSyncStorageWhenCreatingCounterBasedEv
 
     auto inOrderExecInfo = eventObj->getInOrderExecInfo();
 
-    EXPECT_EQ(incValue, eventObj->getInOrderIncrementValue());
+    EXPECT_EQ(incValue, eventObj->getInOrderIncrementValue(1));
     EXPECT_EQ(counterValue, inOrderExecInfo->getCounterValue());
     EXPECT_EQ(castToUint64(externalStorageAllocProperties.deviceAddress), inOrderExecInfo->getBaseDeviceAddress());
     EXPECT_NE(nullptr, inOrderExecInfo->getDeviceCounterAllocation());
@@ -5698,7 +5775,7 @@ HWTEST_F(InOrderCmdListTests, givenExternalSyncStorageWhenCallingAppendThenDontR
     EXPECT_EQ(inOrderExecInfo, eventObj->getInOrderExecInfo());
     EXPECT_EQ(counterValue, eventObj->getInOrderExecInfo()->getCounterValue());
     EXPECT_EQ(counterValue, eventObj->getInOrderExecSignalValueWithSubmissionCounter());
-    EXPECT_EQ(incValue, eventObj->getInOrderIncrementValue());
+    EXPECT_EQ(incValue, eventObj->getInOrderIncrementValue(1));
 
     context->freeMem(devAddress);
 }
@@ -5921,7 +5998,7 @@ HWTEST_F(InOrderCmdListTests, givenExternalSyncStorageWhenCallingAppendSignalInO
 
     auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
     immCmdList->inOrderAtomicSignalingEnabled = false;
-    immCmdList->appendSignalInOrderDependencyCounter(eventObj.get(), false, false, false);
+    immCmdList->appendSignalInOrderDependencyCounter(eventObj.get(), false, false, false, false);
 
     GenCmdList cmdList;
     ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, cmdStream->getCpuBase(), cmdStream->getUsed()));
@@ -5938,6 +6015,49 @@ HWTEST_F(InOrderCmdListTests, givenExternalSyncStorageWhenCallingAppendSignalInO
     EXPECT_EQ(castToUint64(devAddress), NEO::UnitTestHelper<FamilyType>::getAtomicMemoryAddress(*miAtomic));
 
     context->freeMem(devAddress);
+}
+
+HWTEST_F(InOrderCmdListTests, givenCopyOnlyCmdListAndDebugFlagWhenCounterSignaledThenProgramMiFlush) {
+    using MI_FLUSH_DW = typename FamilyType::MI_FLUSH_DW;
+
+    auto immCmdList = createCopyOnlyImmCmdList<FamilyType::gfxCoreFamily>();
+
+    auto cmdStream = immCmdList->getCmdContainer().getCommandStream();
+    auto offset = cmdStream->getUsed();
+
+    immCmdList->appendSignalInOrderDependencyCounter(nullptr, false, false, false, false);
+
+    {
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream->getCpuBase(), offset), (cmdStream->getUsed() - offset)));
+
+        if (immCmdList->useAdditionalBlitProperties) {
+            auto it = find<MI_FLUSH_DW *>(cmdList.begin(), cmdList.end());
+
+            EXPECT_EQ(cmdList.end(), it);
+        } else {
+            auto it = cmdList.begin();
+            if (BlitCommandsHelper<FamilyType>::isDummyBlitWaNeeded(immCmdList->dummyBlitWa)) {
+                it++;
+            }
+
+            auto miFlush = genCmdCast<MI_FLUSH_DW *>(*it);
+            EXPECT_NE(nullptr, miFlush);
+        }
+    }
+
+    debugManager.flags.InOrderCopyMiFlushSync.set(0);
+
+    offset = cmdStream->getUsed();
+    immCmdList->appendSignalInOrderDependencyCounter(nullptr, false, false, false, false);
+
+    {
+        GenCmdList cmdList;
+        ASSERT_TRUE(FamilyType::Parse::parseCommandBuffer(cmdList, ptrOffset(cmdStream->getCpuBase(), offset), (cmdStream->getUsed() - offset)));
+
+        auto it = find<MI_FLUSH_DW *>(cmdList.begin(), cmdList.end());
+        EXPECT_EQ(cmdList.end(), it);
+    }
 }
 
 HWTEST_F(InOrderCmdListTests, givenExternalSyncStorageAndCopyOnlyCmdListWhenCallingAppendMemoryCopyWithDisabledInOrderSignalingThenSignalAtomicStorage) {
@@ -6125,6 +6245,10 @@ HWTEST_F(InOrderCmdListTests, givenCounterBasedTimestampHostVisibleSignalWhenCal
 HWTEST_F(InOrderCmdListTests, givenStandaloneCbEventWhenPassingExternalInterruptIdThenAssign) {
     zex_intel_event_sync_mode_exp_desc_t syncModeDesc = {ZEX_INTEL_STRUCTURE_TYPE_EVENT_SYNC_MODE_EXP_DESC};
     syncModeDesc.externalInterruptId = 123;
+
+    auto mockProductHelper = new MockProductHelper;
+    mockProductHelper->isInterruptSupportedResult = true;
+    neoDevice->executionEnvironment->rootDeviceEnvironments[0]->productHelper.reset(mockProductHelper);
 
     syncModeDesc.syncModeFlags = ZEX_INTEL_EVENT_SYNC_MODE_EXP_FLAG_SIGNAL_INTERRUPT;
     auto event1 = createStandaloneCbEvent(reinterpret_cast<const ze_base_desc_t *>(&syncModeDesc));
@@ -6324,6 +6448,12 @@ HWTEST_F(InOrderCmdListTests, givenCounterBasedEventWhenAskingForEventAddressAnd
     EXPECT_EQ(ZE_RESULT_SUCCESS, zexEventGetDeviceAddress(eventHandle, &counterValue, &address));
     EXPECT_EQ(2u, counterValue);
     EXPECT_EQ(deviceAlloc->getGpuAddress() + events[0]->inOrderAllocationOffset, address);
+}
+
+HWTEST_F(InOrderCmdListTests, givenIncorrectArgumentswhenCallingZexDeviceGetAggregatedCopyOffloadIncrementValueThenReturnError) {
+    uint32_t incValue = 0;
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, zexDeviceGetAggregatedCopyOffloadIncrementValue(device->toHandle(), nullptr));
+    EXPECT_EQ(ZE_RESULT_ERROR_INVALID_ARGUMENT, zexDeviceGetAggregatedCopyOffloadIncrementValue(nullptr, &incValue));
 }
 
 HWCMDTEST_F(IGFX_XE_HP_CORE, InOrderCmdListTests, wWhenUsingImmediateCmdListThenDontAddCmdsToPatch) {

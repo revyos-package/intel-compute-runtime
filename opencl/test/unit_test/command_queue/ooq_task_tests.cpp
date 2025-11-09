@@ -7,7 +7,6 @@
 
 #include "shared/test/common/helpers/debug_manager_state_restore.h"
 #include "shared/test/common/mocks/mock_csr.h"
-#include "shared/test/common/test_macros/test_checks_shared.h"
 #include "shared/test/common/utilities/base_object_utils.h"
 
 #include "opencl/test/unit_test/command_queue/enqueue_fixture.h"
@@ -65,7 +64,7 @@ TYPED_TEST_P(OOQTaskTypedTests, givenNonBlockingCallWhenDoneOnOutOfOrderQueueThe
         taskLevelClosed = 0u;
     }
 
-    // for non blocking calls make sure that resources are added to defer free list instaed of being destructed in place
+    // for non blocking calls make sure that resources are added to defer free list instead of being destructed in place
     if (!blockingCall) {
         *tagAddress = 0;
     }
@@ -91,7 +90,7 @@ TYPED_TEST_P(OOQTaskTypedTests, givenTaskWhenEnqueuedOnOutOfOrderQueueThenTaskCo
     auto tagAddress = commandStreamReceiver.getTagAddress();
     auto blockingCall = isBlockingCall(TypeParam::Traits::cmdType);
 
-    // for non blocking calls make sure that resources are added to defer free list instaed of being destructed in place
+    // for non blocking calls make sure that resources are added to defer free list instead of being destructed in place
     if (!blockingCall) {
         *tagAddress = 0;
     }
@@ -305,7 +304,7 @@ HWTEST_F(OOQTaskTests, GivenBlockingAndNonBlockedOnUserEventWhenReadingBufferThe
     retVal = clSetUserEventStatus(userEvent, CL_COMPLETE);
     ASSERT_EQ(CL_SUCCESS, retVal);
 
-    buffer->forceDisallowCPUCopy = true; // no task level incrasing when cpu copy
+    buffer->forceDisallowCPUCopy = true; // no task level increasing when cpu copy
     retVal = EnqueueReadBufferHelper<>::enqueueReadBuffer(pCmdQ,
                                                           buffer.get(),
                                                           CL_FALSE,
@@ -357,29 +356,6 @@ HWTEST_F(OOQTaskTests, givenSkipDcFlushOnBarrierWithEventsEnabledWhenEnqueingBar
 
     EXPECT_TRUE(pCmdQ->isStallingCommandsOnNextFlushRequired());
     EXPECT_FALSE(pCmdQ->isDcFlushRequiredOnStallingCommandsOnNextFlush());
-}
-
-HWTEST_F(OOQTaskTests, givenSkipDcFlushOnBarrierWithEventsEnabledWhenEnqueingBarrierWithWaitListWithEventThenDcFlushSet) {
-    auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
-    if (false == commandStreamReceiver.peekTimestampPacketWriteEnabled()) {
-        GTEST_SKIP();
-    }
-    DebugManagerStateRestore restorer;
-    debugManager.flags.SkipDcFlushOnBarrierWithoutEvents.set(1);
-
-    const cl_uint numEventsInWaitList = 0;
-    const cl_event *eventWaitList = nullptr;
-    cl_event clEvent{};
-    auto retVal = pCmdQ->enqueueBarrierWithWaitList(
-        numEventsInWaitList,
-        eventWaitList,
-        &clEvent);
-    EXPECT_EQ(CL_SUCCESS, retVal);
-
-    EXPECT_TRUE(pCmdQ->isStallingCommandsOnNextFlushRequired());
-    EXPECT_TRUE(pCmdQ->isDcFlushRequiredOnStallingCommandsOnNextFlush());
-    auto outEvent = castToObject<Event>(clEvent);
-    outEvent->release();
 }
 
 HWTEST_F(OOQTaskTests, givenSkipDcFlushOnBarrierWithoutEventsDisabledWhenEnqueingBarrierWithWaitListThenDcFlushSet) {

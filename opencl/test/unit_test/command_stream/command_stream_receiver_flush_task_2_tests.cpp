@@ -36,7 +36,6 @@
 #include "test_traits_common.h"
 
 using namespace NEO;
-#include "shared/test/common/test_macros/header/heapful_test_definitions.h"
 #include "shared/test/common/test_macros/header/heapless_matchers.h"
 
 using CommandStreamReceiverFlushTaskTests = UltCommandStreamReceiverTest;
@@ -182,9 +181,9 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenEmptyQueueWhenFinishingThenTa
     commandStreamReceiver.taskCount = taskCount;
 
     EXPECT_EQ(commandStreamReceiver.heaplessStateInitialized ? 1u : 0u, commandStreamReceiver.peekLatestSentTaskCount());
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
     EXPECT_EQ(commandStreamReceiver.heaplessStateInitialized ? 1u : 0u, commandStreamReceiver.peekLatestSentTaskCount());
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
     // nothings sent to the HW, no need to bump tags
     EXPECT_EQ(commandStreamReceiver.heaplessStateInitialized ? 1u : 0u, commandStreamReceiver.peekLatestSentTaskCount());
     EXPECT_EQ(0u, mockCmdQueue.latestTaskCountWaited);
@@ -223,13 +222,13 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenNonDcFlushWithInitialTaskCoun
 
     // finish after enqueued kernel(cmdq task count = 1)
     mockCmdQueue.enqueueKernel(kernel, 1, nullptr, &gws, nullptr, 0, nullptr, nullptr);
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
     EXPECT_EQ(1u, commandStreamReceiver.peekLatestSentTaskCount());
     EXPECT_EQ(1u, mockCmdQueue.latestTaskCountWaited);
     EXPECT_EQ(1u, commandStreamReceiver.peekTaskCount());
 
     // finish again - dont call flush task
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
     EXPECT_EQ(1u, commandStreamReceiver.peekLatestSentTaskCount());
     EXPECT_EQ(1u, mockCmdQueue.latestTaskCountWaited);
     EXPECT_EQ(1u, commandStreamReceiver.peekTaskCount());
@@ -264,12 +263,12 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenDcFlushWhenFinishingThenTaskC
     EXPECT_EQ(1u, commandStreamReceiver.peekLatestSentTaskCount());
 
     // cmdQ task count = 2, finish again
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
 
     EXPECT_EQ(1u, commandStreamReceiver.peekLatestSentTaskCount());
 
     // finish again - dont flush task again
-    mockCmdQueue.finish();
+    mockCmdQueue.finish(false);
 
     EXPECT_EQ(1u, commandStreamReceiver.peekLatestSentTaskCount());
 
@@ -371,7 +370,7 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenNonBlockingMapEnqueueWhenFini
 
     EXPECT_EQ(expectedTaskCount, commandStreamReceiver.peekLatestSentTaskCount());
 
-    commandQueue.finish();
+    commandQueue.finish(false);
 
     EXPECT_EQ(expectedTaskCount, commandStreamReceiver.peekLatestSentTaskCount());
 
@@ -768,7 +767,7 @@ HWCMDTEST_TEMPLATED_F(IGFX_GEN12LP_CORE, CommandStreamReceiverFlushTaskTestsWith
     auto gsHaddress = (uintptr_t)sba->getGeneralStateBaseAddress();
     uint64_t graphicsAddress = 0;
 
-    // Get address ( offset in 32 bit addressing ) of sratch
+    // Get address ( offset in 32 bit addressing ) of scratch
     graphicsAddress = (uint64_t)graphicsAllocationScratch->getGpuAddressToPatch();
 
     if (sharedDeviceInfo.force32BitAddresses && is64bit) {
@@ -881,7 +880,7 @@ HWCMDTEST_TEMPLATED_F(IGFX_GEN12LP_CORE, CommandStreamReceiverFlushTaskTestsWith
     auto gsHaddress = (uintptr_t)sba->getGeneralStateBaseAddress();
     uint64_t graphicsAddress = 0;
 
-    // Get address ( offset in 32 bit addressing ) of sratch
+    // Get address ( offset in 32 bit addressing ) of scratch
     graphicsAddress = (uint64_t)graphicsAllocationScratch->getGpuAddressToPatch();
 
     if (sharedDeviceInfo.force32BitAddresses && is64bit) {
@@ -957,7 +956,7 @@ HWCMDTEST_TEMPLATED_F(IGFX_GEN12LP_CORE, CommandStreamReceiverFlushTaskTestsWith
     }
 }
 
-HEAPFUL_HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenForced32BitAllocationsModeStore32bitWhenFlushingTaskThenScratchAllocationIsNotReused) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenForced32BitAllocationsModeStore32bitWhenFlushingTaskThenScratchAllocationIsNotReused, IsHeapfulRequired) {
     DebugManagerStateRestore dbgRestorer;
     debugManager.flags.Force32bitAddressing.set(true);
 
@@ -991,7 +990,7 @@ HEAPFUL_HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenForced32BitAllocation
     }
 }
 
-HEAPFUL_HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenForced32BitAllocationsModeStore32bitWhenFlushingTaskThenScratchAllocationStoredOnTemporaryAllocationList) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenForced32BitAllocationsModeStore32bitWhenFlushingTaskThenScratchAllocationStoredOnTemporaryAllocationList, IsHeapfulRequired) {
     if constexpr (is64bit) {
         DebugManagerStateRestore dbgRestorer;
         debugManager.flags.Force32bitAddressing.set(true);
@@ -1075,7 +1074,7 @@ HWCMDTEST_F(IGFX_GEN12LP_CORE, CommandStreamReceiverFlushTaskTests, GivenPreambl
     expectedUsed = alignUp(expectedUsed, MemoryConstants::cacheLineSize);
 
     commandStreamReceiver.streamProperties.stateComputeMode.setPropertiesAll(false, flushTaskFlags.numGrfRequired,
-                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled);
+                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled, false);
     commandStreamReceiver.flushTask(commandStream, 0, &dsh, &ioh, &ssh, taskLevel, flushTaskFlags, *pDevice);
 
     // Verify that we didn't grab a new CS buffer
@@ -1254,17 +1253,10 @@ HWTEST_TEMPLATED_F(CommandStreamReceiverFlushTaskTestsWithMockCsrHw2, givenPageT
     EXPECT_FALSE(bcsCsr->pageTableManagerInitialized);
     EXPECT_FALSE(bcsCsr2->pageTableManagerInitialized);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(graphicsAllocation,               // dstAllocation
-                                                                     graphicsAllocation,               // srcAllocation
-                                                                     0,                                // dstOffset
-                                                                     0,                                // srcOffset
-                                                                     0,                                // copySize
-                                                                     0,                                // srcRowPitch
-                                                                     0,                                // srcSlicePitch
-                                                                     0,                                // dstRowPitch
-                                                                     0,                                // dstSlicePitch
-                                                                     bcsCsr->getClearColorAllocation() // clearColorAllocation
-    );
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(
+        graphicsAllocation, 0,
+        graphicsAllocation, 0,
+        0, 0, 0, 0, 0, 0, 0, bcsCsr->getClearColorAllocation());
     BlitPropertiesContainer container;
     container.push_back(blitProperties);
 
@@ -1298,8 +1290,8 @@ HWTEST_TEMPLATED_F(CommandStreamReceiverFlushTaskTestsWithMockCsrHw2, givenPageT
 
     EXPECT_FALSE(bcsCsr->pageTableManagerInitialized);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(graphicsAllocation,               // dstAllocation
-                                                                     graphicsAllocation,               // srcAllocation
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(graphicsAllocation, 0,            // dstAllocation
+                                                                     graphicsAllocation, 0,            // srcAllocation
                                                                      0,                                // dstOffset
                                                                      0,                                // srcOffset
                                                                      0,                                // copySize
@@ -1338,8 +1330,8 @@ HWTEST_TEMPLATED_F(CommandStreamReceiverFlushTaskTestsWithMockCsrHw2, givenNullP
     EXPECT_FALSE(bcsCsr->pageTableManagerInitialized);
     EXPECT_FALSE(bcsCsr2->pageTableManagerInitialized);
 
-    auto blitProperties = BlitProperties::constructPropertiesForCopy(graphicsAllocation,               // dstAllocation
-                                                                     graphicsAllocation,               // srcAllocation
+    auto blitProperties = BlitProperties::constructPropertiesForCopy(graphicsAllocation, 0,            // dstAllocation
+                                                                     graphicsAllocation, 0,            // srcAllocation
                                                                      0,                                // dstOffset
                                                                      0,                                // srcOffset
                                                                      0,                                // copySize

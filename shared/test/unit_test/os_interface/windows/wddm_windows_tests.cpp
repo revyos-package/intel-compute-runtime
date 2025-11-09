@@ -6,6 +6,7 @@
  */
 
 #include "shared/source/debug_settings/debug_settings_manager.h"
+#include "shared/source/gmm_helper/gmm_callbacks.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
 #include "shared/source/os_interface/windows/driver_info_windows.h"
 #include "shared/source/os_interface/windows/dxgi_wrapper.h"
@@ -33,6 +34,9 @@ extern SysCalls::ProcessPowerThrottlingState setProcessPowerThrottlingStateLastV
 extern size_t setThreadPriorityCalled;
 extern SysCalls::ThreadPriority setThreadPriorityLastValue;
 extern MEMORY_BASIC_INFORMATION virtualQueryMemoryBasicInformation;
+extern size_t closeHandleCalled;
+extern BOOL (*sysCallsDuplicateHandle)(HANDLE hSourceProcessHandle, HANDLE hSourceHandle, HANDLE hTargetProcessHandle, LPHANDLE lpTargetHandle, DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwOptions);
+extern HANDLE (*sysCallsOpenProcess)(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId);
 } // namespace SysCalls
 extern uint32_t numRootDevicesToEnum;
 extern bool gCreateAllocation2FailOnReadOnlyAllocation;
@@ -181,11 +185,7 @@ TEST(WddmGfxPartitionTests, WhenInitializingGfxPartitionThen64KBHeapsAreUsed) {
     EXPECT_EQ(wddm->gfxPartition.Standard64KB.Base + rootDeviceIndex * heapStandard64KBSize, gfxPartition.getHeapBase(HeapIndex::heapStandard64KB));
 }
 
-namespace NEO {
-long __stdcall notifyAubCapture(void *csrHandle, uint64_t gfxAddress, size_t gfxSize, bool allocate);
-}
-
-TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksArePassedToGmmMemory) {
+TEST_F(Wddm20WithMockGdiDllTests, givenDefaultScenarioWhenSetDeviceInfoSucceedsThenDeviceCallbacksWithoutNotifyAubCaptureArePassedToGmmMemory) {
     GMM_DEVICE_CALLBACKS_INT expectedDeviceCb{};
     wddm->init();
     auto gdi = wddm->getGdi();
@@ -210,7 +210,7 @@ TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksAr
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnUnLock = gdi->unlock2;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEscape = gdi->escape;
     expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA = gdi->freeGpuVirtualAddress;
-    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture = notifyAubCapture;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture = nullptr;
 
     EXPECT_EQ(expectedDeviceCb.Adapter.KmtHandle, gmmMemory->deviceCallbacks.Adapter.KmtHandle);
     EXPECT_EQ(expectedDeviceCb.hDevice.KmtHandle, gmmMemory->deviceCallbacks.hDevice.KmtHandle);
@@ -231,6 +231,58 @@ TEST_F(Wddm20WithMockGdiDllTests, whenSetDeviceInfoSucceedsThenDeviceCallbacksAr
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEscape, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnEscape);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA);
     EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture);
+}
+
+TEST_F(Wddm20WithMockGdiDllTests, givenHwWithAubCaptureWhenSetDeviceInfoSucceedsThenNotifyAubCaptureDeviceCallbackIsPassedToGmmMemory) {
+
+    DebugManagerStateRestore restorer{};
+    debugManager.flags.SetCommandStreamReceiver.set(3);
+    GMM_DEVICE_CALLBACKS_INT expectedDeviceCb{};
+    wddm->init();
+    auto gdi = wddm->getGdi();
+    auto gmmMemory = static_cast<MockGmmMemoryBase *>(wddm->getGmmMemory());
+
+    expectedDeviceCb.Adapter.KmtHandle = wddm->getAdapter();
+    expectedDeviceCb.hDevice.KmtHandle = wddm->getDeviceHandle();
+    expectedDeviceCb.hCsr = nullptr;
+    expectedDeviceCb.PagingQueue = wddm->getPagingQueue();
+    expectedDeviceCb.PagingFence = wddm->getPagingQueueSyncObject();
+
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnAllocate = gdi->createAllocation;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate = gdi->destroyAllocation;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate2 = gdi->destroyAllocation2;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA = gdi->mapGpuVirtualAddress;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMakeResident = gdi->makeResident;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEvict = gdi->evict;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnReserveGPUVA = gdi->reserveGpuVirtualAddress;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnUpdateGPUVA = gdi->updateGpuVirtualAddress;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnWaitFromCpu = gdi->waitForSynchronizationObjectFromCpu;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnLock = gdi->lock2;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnUnLock = gdi->unlock2;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEscape = gdi->escape;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA = gdi->freeGpuVirtualAddress;
+    expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture = notifyAubCaptureFuncFactory[defaultHwInfo->platform.eRenderCoreFamily];
+
+    EXPECT_EQ(expectedDeviceCb.Adapter.KmtHandle, gmmMemory->deviceCallbacks.Adapter.KmtHandle);
+    EXPECT_EQ(expectedDeviceCb.hDevice.KmtHandle, gmmMemory->deviceCallbacks.hDevice.KmtHandle);
+    EXPECT_EQ(expectedDeviceCb.hCsr, gmmMemory->deviceCallbacks.hCsr);
+    EXPECT_EQ(expectedDeviceCb.PagingQueue, gmmMemory->deviceCallbacks.PagingQueue);
+    EXPECT_EQ(expectedDeviceCb.PagingFence, gmmMemory->deviceCallbacks.PagingFence);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnAllocate, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnAllocate);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnDeallocate);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnDeallocate2, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnDeallocate2);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnMapGPUVA);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnMakeResident, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnMakeResident);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEvict, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnEvict);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnReserveGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnReserveGPUVA);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnUpdateGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnUpdateGPUVA);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnWaitFromCpu, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnWaitFromCpu);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnLock, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnLock);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnUnLock, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnUnLock);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnEscape, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnEscape);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnFreeGPUVA);
+    EXPECT_EQ(expectedDeviceCb.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture);
+    EXPECT_NE(nullptr, gmmMemory->deviceCallbacks.DevCbPtrs.KmtCbPtrs.pfnNotifyAubCapture);
 }
 
 class MockGmmMemoryWindows : public MockGmmMemoryBase {
@@ -460,4 +512,100 @@ TEST_F(WddmTestWithMockGdiDll, whenGettingReadOnlyFlagThenReturnTrueOnlyForPageM
 
 TEST_F(WddmTestWithMockGdiDll, whenGettingReadOnlyFlagFallbackSupportThenTrueIsReturned) {
     EXPECT_TRUE(wddm->isReadOnlyFlagFallbackSupported());
+}
+
+TEST_F(WddmTestWithMockGdiDll, givenOsHandleDataWithoutParentProcessWhenGettingSharedHandleThenReturnOriginalHandle) {
+    uint64_t originalHandle = 0x12345678;
+    MemoryManager::OsHandleData osHandleData(originalHandle);
+
+    HANDLE sharedHandle = wddm->getSharedHandle(osHandleData);
+
+    EXPECT_EQ(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(originalHandle)), sharedHandle);
+}
+
+TEST_F(WddmTestWithMockGdiDll, givenOsHandleDataWithParentProcessWhenGettingSharedHandleThenDuplicateHandleFromParentProcess) {
+    uint64_t originalHandle = 0x12345678;
+    uint32_t parentProcessId = 1234;
+    MemoryManager::OsHandleData osHandleData(originalHandle);
+    osHandleData.parentProcessId = parentProcessId;
+
+    HANDLE mockDuplicatedHandle = reinterpret_cast<HANDLE>(0x8888);
+
+    // Mock openProcess to return a valid handle
+    SysCalls::sysCallsOpenProcess = [](DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId) -> HANDLE {
+        EXPECT_EQ(static_cast<DWORD>(PROCESS_DUP_HANDLE), dwDesiredAccess);
+        EXPECT_EQ(FALSE, bInheritHandle);
+        EXPECT_EQ(1234u, dwProcessId);
+        return reinterpret_cast<HANDLE>(0x9999);
+    };
+
+    // Mock duplicateHandle to succeed
+    SysCalls::sysCallsDuplicateHandle = [](HANDLE hSourceProcessHandle, HANDLE hSourceHandle, HANDLE hTargetProcessHandle, LPHANDLE lpTargetHandle, DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwOptions) -> BOOL {
+        EXPECT_EQ(reinterpret_cast<HANDLE>(0x9999), hSourceProcessHandle);
+        EXPECT_EQ(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x12345678)), hSourceHandle);
+        EXPECT_EQ(GetCurrentProcess(), hTargetProcessHandle);
+        EXPECT_EQ(GENERIC_READ | GENERIC_WRITE, dwDesiredAccess);
+        EXPECT_EQ(FALSE, bInheritHandle);
+        EXPECT_EQ(0u, dwOptions);
+        *lpTargetHandle = reinterpret_cast<HANDLE>(0x8888);
+        return TRUE;
+    };
+
+    size_t closeHandleCallsBefore = SysCalls::closeHandleCalled;
+
+    HANDLE sharedHandle = wddm->getSharedHandle(osHandleData);
+
+    EXPECT_EQ(mockDuplicatedHandle, sharedHandle);
+    EXPECT_EQ(closeHandleCallsBefore + 1, SysCalls::closeHandleCalled); // Parent process handle should be closed
+
+    // Cleanup
+    SysCalls::sysCallsOpenProcess = nullptr;
+    SysCalls::sysCallsDuplicateHandle = nullptr;
+}
+
+TEST_F(WddmTestWithMockGdiDll, givenOsHandleDataWithParentProcessWhenOpenProcessFailsThenReturnOriginalHandle) {
+    uint64_t originalHandle = 0x12345678;
+    uint32_t parentProcessId = 1234;
+    MemoryManager::OsHandleData osHandleData(originalHandle);
+    osHandleData.parentProcessId = parentProcessId;
+
+    // Mock openProcess to fail
+    SysCalls::sysCallsOpenProcess = [](DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId) -> HANDLE {
+        return nullptr;
+    };
+
+    HANDLE sharedHandle = wddm->getSharedHandle(osHandleData);
+
+    EXPECT_EQ(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(originalHandle)), sharedHandle);
+
+    // Cleanup
+    SysCalls::sysCallsOpenProcess = nullptr;
+}
+
+TEST_F(WddmTestWithMockGdiDll, givenOsHandleDataWithParentProcessWhenDuplicateHandleFailsThenReturnOriginalHandle) {
+    uint64_t originalHandle = 0x12345678;
+    uint32_t parentProcessId = 1234;
+    MemoryManager::OsHandleData osHandleData(originalHandle);
+    osHandleData.parentProcessId = parentProcessId;
+
+    // Mock openProcess to succeed
+    SysCalls::sysCallsOpenProcess = [](DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId) -> HANDLE {
+        return reinterpret_cast<HANDLE>(0x9999);
+    };
+
+    // Mock duplicateHandle to fail
+    SysCalls::sysCallsDuplicateHandle = [](HANDLE hSourceProcessHandle, HANDLE hSourceHandle, HANDLE hTargetProcessHandle, LPHANDLE lpTargetHandle, DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwOptions) -> BOOL {
+        return FALSE;
+    };
+
+    size_t closeHandleCallsBefore = SysCalls::closeHandleCalled;
+
+    HANDLE sharedHandle = wddm->getSharedHandle(osHandleData);
+
+    EXPECT_EQ(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(originalHandle)), sharedHandle);
+    EXPECT_EQ(closeHandleCallsBefore + 1, SysCalls::closeHandleCalled); // Parent process handle should still be closed
+
+    // Cleanup
+    SysCalls::sysCallsOpenProcess = nullptr;
+    SysCalls::sysCallsDuplicateHandle = nullptr;
 }

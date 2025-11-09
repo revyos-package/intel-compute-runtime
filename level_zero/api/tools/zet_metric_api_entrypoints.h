@@ -158,12 +158,12 @@ zetMetricGroupGetExportDataExp(
 }
 
 ze_result_t ZE_APICALL
-zetDriverCalculateMetricExportDataExp(
+zetMetricGroupCalculateMetricExportDataExp(
     ze_driver_handle_t hDriver,
     zet_metric_group_calculation_type_t type,
     size_t exportDataSize,
     const uint8_t *pExportData,
-    zet_metric_calculate_exp_desc_t *pCalculateDescriptor,
+    zet_metric_calculate_exp_desc_t *pCalculationDescriptor,
     uint32_t *pSetCount,
     uint32_t *pTotalMetricValueCount,
     uint32_t *pMetricCounts,
@@ -406,6 +406,14 @@ zetDeviceDisableMetricsExp(
     return L0::metricsDisable(hDevice);
 }
 
+ze_result_t ZE_APICALL
+zetCommandListAppendMarkerExp(
+    zet_command_list_handle_t hCommandList,
+    zet_metric_group_handle_t hMetricGroup,
+    uint32_t value) {
+    return L0::metricAppendMarker(hCommandList, hMetricGroup, value);
+}
+
 } // namespace L0
 
 extern "C" {
@@ -608,18 +616,18 @@ zetMetricGroupGetExportDataExp(
 }
 
 ZE_APIEXPORT ze_result_t ZE_APICALL
-zetDriverCalculateMetricExportDataExp(
+zetMetricGroupCalculateMetricExportDataExp(
     ze_driver_handle_t hDriver,
     zet_metric_group_calculation_type_t type,
     size_t exportDataSize,
     const uint8_t *pExportData,
-    zet_metric_calculate_exp_desc_t *pCalculateDescriptor,
+    zet_metric_calculate_exp_desc_t *pCalculationDescriptor,
     uint32_t *pSetCount,
     uint32_t *pTotalMetricValueCount,
     uint32_t *pMetricCounts,
     zet_typed_value_t *pMetricValues) {
-    return L0::zetDriverCalculateMetricExportDataExp(hDriver, type, exportDataSize, pExportData, pCalculateDescriptor,
-                                                     pSetCount, pTotalMetricValueCount, pMetricCounts, pMetricValues);
+    return L0::zetMetricGroupCalculateMetricExportDataExp(hDriver, type, exportDataSize, pExportData, pCalculationDescriptor,
+                                                          pSetCount, pTotalMetricValueCount, pMetricCounts, pMetricValues);
 }
 
 ZE_APIEXPORT ze_result_t ZE_APICALL
@@ -875,5 +883,13 @@ ZE_APIEXPORT ze_result_t ZE_APICALL
 zetDeviceDisableMetricsExp(
     zet_device_handle_t hDevice) {
     return L0::zetDeviceDisableMetricsExp(hDevice);
+}
+
+ZE_APIEXPORT ze_result_t ZE_APICALL
+zetCommandListAppendMarkerExp(
+    zet_command_list_handle_t hCommandList,
+    zet_metric_group_handle_t hMetricGroup,
+    uint32_t value) {
+    return L0::zetCommandListAppendMarkerExp(hCommandList, hMetricGroup, value);
 }
 } // extern "C"

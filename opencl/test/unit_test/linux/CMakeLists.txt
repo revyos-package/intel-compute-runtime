@@ -28,10 +28,10 @@ add_executable(igdrcl_${target_name}
                ${NEO_SHARED_DIRECTORY}/dll/device_dll.cpp
                ${NEO_SHARED_DIRECTORY}/dll/direct_submission_controller_enabled.cpp
                ${NEO_SHARED_DIRECTORY}/dll/unified_memory_reuse_cleaner_enabled.cpp
+               ${NEO_SHARED_DIRECTORY}/dll/usm_pool_size.cpp
                ${NEO_SHARED_DIRECTORY}/dll/linux/drm_neo_create.cpp
                ${NEO_SHARED_DIRECTORY}/dll/linux${BRANCH_DIR_SUFFIX}/options_linux.cpp
                ${NEO_SHARED_DIRECTORY}/dll/linux/options_linux.inl
-               ${NEO_SHARED_DIRECTORY}/dll/linux/os_interface.cpp
                ${NEO_SOURCE_DIR}/opencl/source/dll/command_queue_dll.cpp
                ${NEO_SOURCE_DIR}/opencl/source/os_interface/linux/platform_teardown_linux.cpp
 )
@@ -43,6 +43,8 @@ if(NOT DISABLE_WDDM_LINUX)
 endif()
 
 target_link_libraries(igdrcl_${target_name} ${NEO_MOCKABLE_LIB_NAME} ${NEO_SHARED_MOCKABLE_LIB_NAME} igdrcl_mocks ${NEO_EXTRA_LIBS} gmock-gtest)
+
+target_compile_options(igdrcl_${target_name} PRIVATE -O0)
 
 set_property(TARGET igdrcl_${target_name} APPEND_STRING PROPERTY COMPILE_FLAGS ${ASAN_FLAGS})
 target_include_directories(igdrcl_${target_name} PRIVATE

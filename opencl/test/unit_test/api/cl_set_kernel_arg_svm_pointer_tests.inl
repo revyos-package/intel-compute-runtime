@@ -23,7 +23,6 @@ class KernelArgSvmApiFixture : public ApiFixture<> {
   protected:
     void setUp() {
         ApiFixture::setUp();
-        REQUIRE_SVM_OR_SKIP(defaultHwInfo);
 
         pKernelInfo = std::make_unique<MockKernelInfo>();
         pKernelInfo->kernelDescriptor.kernelAttributes.simdSize = 1;
@@ -140,7 +139,7 @@ TEST_F(clSetKernelArgSVMPointerTests, GivenInvalidArgValueWhenSettingKernelArgAn
     free(ptrHost);
 }
 
-TEST_F(clSetKernelArgSVMPointerTests, GivenInvalidArgValueWhenSettingKernelArgAndDebugVarSetAndSharedSystemCapabilitesNonZeroThenSuccessIsReturned) {
+TEST_F(clSetKernelArgSVMPointerTests, GivenInvalidArgValueWhenSettingKernelArgAndDebugVarSetAndSharedSystemCapabilitiesNonZeroThenSuccessIsReturned) {
     pDevice->deviceInfo.sharedSystemMemCapabilities = 0xF;
     pDevice->getRootDeviceEnvironment().getMutableHardwareInfo()->capabilityTable.sharedSystemMemCapabilities = 0xF;
     void *ptrHost = malloc(256);
@@ -424,7 +423,7 @@ TEST_F(clSetKernelArgSVMPointerTests, givenSvmAndValidArgValueWhenAllocIdCacheHi
         EXPECT_EQ(++callCounter, pMockKernel->setArgSvmAllocCalls);
 
         auto expectedAllocationsCounter = 1u;
-        expectedAllocationsCounter += pContext->getHostMemAllocPool().isInitialized() ? 1u : 0u;
+        expectedAllocationsCounter += pContext->getDevice(0u)->getPlatform()->getHostMemAllocPool().isInitialized() ? 1u : 0u;
         expectedAllocationsCounter += pContext->getDeviceMemAllocPool().isInitialized() ? 1u : 0u;
 
         EXPECT_EQ(expectedAllocationsCounter, mockSvmManager->allocationsCounter);

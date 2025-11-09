@@ -32,7 +32,7 @@ extern std::vector<uint64_t> getRegionInfo(const std::vector<MemoryRegion> &inpu
 extern std::vector<uint64_t> getEngineInfo(const std::vector<EngineCapabilities> &inputEngines);
 
 namespace NEO {
-bool getGpuTimeSplitted(Drm &drm, uint64_t *timestamp);
+bool getGpuTimeSplit(Drm &drm, uint64_t *timestamp);
 bool getGpuTime32(Drm &drm, uint64_t *timestamp);
 bool getGpuTime36(Drm &drm, uint64_t *timestamp);
 } // namespace NEO
@@ -316,6 +316,10 @@ TEST_F(IoctlPrelimHelperTests, givenIoctlHelperSetVmSharedSystemMemAdviseReturns
     ASSERT_EQ(true, ioctlHelper.setVmSharedSystemMemAdvise(0u, 0u, 0u, 0u, {0u}));
 }
 
+TEST_F(IoctlPrelimHelperTests, givenIoctlHelperGetVmSharedSystemAtomicAttributeReturnsDefaultNone) {
+    ASSERT_EQ(AtomicAccessMode::none, ioctlHelper.getVmSharedSystemAtomicAttribute(0u, 0u, 0u));
+}
+
 TEST_F(IoctlPrelimHelperTests, whenGettingVmBindExtFromHandlesThenProperStructsAreReturned) {
     StackVec<uint32_t, 2> bindExtHandles;
     bindExtHandles.push_back(1u);
@@ -414,8 +418,12 @@ TEST_F(IoctlPrelimHelperTests, givenPrelimWhenQueryDeviceParamsIsCalledThenFalse
     EXPECT_FALSE(ioctlHelper.queryDeviceParams(&moduleId, &serverType));
 }
 
-TEST_F(IoctlPrelimHelperTests, givenPrelimWhenQueryDeviceCapsIsCalledThenNullptrIsReturned) {
-    EXPECT_EQ(ioctlHelper.queryDeviceCaps(), nullptr);
+TEST_F(IoctlPrelimHelperTests, givenPrelimWhenQueryDeviceCapsIsCalledThenNulloptIsReturned) {
+    EXPECT_EQ(ioctlHelper.queryDeviceCaps(), std::nullopt);
+}
+
+TEST_F(IoctlPrelimHelperTests, givenIoctlHelperWhenCallingoverrideMaxSlicesSupportedThenResultIsFalse) {
+    EXPECT_TRUE(ioctlHelper.overrideMaxSlicesSupported());
 }
 
 struct MockIoctlHelperPrelim20 : IoctlHelperPrelim20 {
@@ -884,7 +892,7 @@ TEST_F(IoctlPrelimHelperTests, whenGettingGpuTimeThenSucceeds) {
     success = getGpuTime36(*drm.get(), &time);
     EXPECT_TRUE(success);
     EXPECT_NE(0ULL, time);
-    success = getGpuTimeSplitted(*drm.get(), &time);
+    success = getGpuTimeSplit(*drm.get(), &time);
     EXPECT_TRUE(success);
     EXPECT_NE(0ULL, time);
 }
@@ -902,7 +910,7 @@ TEST_F(IoctlPrelimHelperTests, givenInvalidDrmWhenGettingGpuTimeThenFails) {
     EXPECT_FALSE(success);
     success = getGpuTime36(*drm.get(), &time);
     EXPECT_FALSE(success);
-    success = getGpuTimeSplitted(*drm.get(), &time);
+    success = getGpuTimeSplit(*drm.get(), &time);
     EXPECT_FALSE(success);
 }
 
@@ -930,7 +938,7 @@ TEST_F(IoctlPrelimHelperTests, whenGettingTimeThenTimeIsCorrect) {
         drm->ioctlRes = -1;
         drm->ioctlResExt = &ioctlToPass; // 2nd ioctl is successful
         ioctlHelper.initializeGetGpuTimeFunction();
-        EXPECT_EQ(ioctlHelper.getGpuTime, &getGpuTimeSplitted);
+        EXPECT_EQ(ioctlHelper.getGpuTime, &getGpuTimeSplit);
         drm->ioctlResExt = &drm->none;
     }
 }

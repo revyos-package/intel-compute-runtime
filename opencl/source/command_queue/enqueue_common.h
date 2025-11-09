@@ -161,8 +161,6 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
     EventBuilder eventBuilder;
     setupEvent(eventBuilder, event, commandType);
 
-    const bool isFlushWithPostSyncWrite = isFlushForProfilingRequired(commandType) && ((eventBuilder.getEvent() && eventBuilder.getEvent()->isProfilingEnabled()) || multiDispatchInfo.peekBuiltinOpParams().bcsSplit);
-
     std::unique_ptr<KernelOperation> blockedCommandsData;
     std::unique_ptr<PrintfHandler> printfHandler;
     TakeOwnershipWrapper<CommandQueueHw<GfxFamily>> queueOwnership(*this);
@@ -190,6 +188,8 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
     CsrDependencies csrDeps;
     BlitPropertiesContainer blitPropertiesContainer;
 
+    const bool isFlushWithPostSyncWrite = isFlushForProfilingRequired(commandType) && ((eventBuilder.getEvent() && eventBuilder.getEvent()->isProfilingEnabled()) || multiDispatchInfo.peekBuiltinOpParams().bcsSplit || this->isDependenciesFlushForMarkerRequired(eventsRequest));
+
     if (this->context->getRootDeviceIndices().size() > 1) {
         eventsRequest.fillCsrDependenciesForRootDevices(csrDeps, computeCommandStreamReceiver);
     }
@@ -198,7 +198,7 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
     const auto &hwInfo = this->getDevice().getHardwareInfo();
     auto &productHelper = getDevice().getProductHelper();
     bool canUsePipeControlInsteadOfSemaphoresForOnCsrDependencies = false;
-    bool isNonStallingIoqBarrier = (CL_COMMAND_BARRIER == commandType) && !isOOQEnabled() && (debugManager.flags.OptimizeIoqBarriersHandling.get() != 0);
+    bool isNonStallingIoqBarrier = isFlushForProfilingRequired(commandType) && !isOOQEnabled() && (debugManager.flags.OptimizeIoqBarriersHandling.get() != 0);
     const bool isNonStallingIoqBarrierWithDependencies = isNonStallingIoqBarrier && (eventsRequest.numEventsInWaitList > 0);
 
     if (computeCommandStreamReceiver.peekTimestampPacketWriteEnabled()) {
@@ -296,17 +296,17 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
             this->splitBarrierRequired = true;
         }
 
-        for (size_t i = 0; i < eventsRequest.numEventsInWaitList; i++) {
-            auto waitlistEvent = castToObjectOrAbort<Event>(eventsRequest.eventWaitList[i]);
-            if (waitlistEvent->getTimestampPacketNodes()) {
-                flushDependenciesForNonKernelCommand = true;
-                if (eventBuilder.getEvent()) {
-                    eventBuilder.getEvent()->addTimestampPacketNodes(*waitlistEvent->getTimestampPacketNodes());
+        if (!isFlushWithPostSyncWrite) {
+            for (size_t i = 0; i < eventsRequest.numEventsInWaitList; i++) {
+                auto waitlistEvent = castToObjectOrAbort<Event>(eventsRequest.eventWaitList[i]);
+                if (waitlistEvent->getTimestampPacketNodes()) {
+                    flushDependenciesForNonKernelCommand = true;
+                    if (eventBuilder.getEvent()) {
+                        eventBuilder.getEvent()->addTimestampPacketNodes(*waitlistEvent->getTimestampPacketNodes());
+                    }
                 }
             }
-        }
-
-        if (isFlushWithPostSyncWrite) {
+        } else {
             setStallingCommandsOnNextFlush(true);
             flushDependenciesForNonKernelCommand = true;
         }
@@ -409,6 +409,25 @@ cl_int CommandQueueHw<GfxFamily>::enqueueHandler(Surface **surfacesForResidency,
                 relaxedOrderingEnabled);
         } else {
             UNRECOVERABLE_IF(enqueueProperties.operation != EnqueueProperties::Operation::enqueueWithoutSubmission);
+
+            if (this->getPendingL3FlushForHostVisibleResources()) {
+                if (blocking) {
+                    this->finish(true);
+
+                } else if (event) {
+                    computeCommandStreamReceiver.flushBatchedSubmissions();
+                    computeCommandStreamReceiver.flushTagUpdate();
+
+                    CompletionStamp completionStamp = {
+                        computeCommandStreamReceiver.peekTaskCount(),
+                        std::max(taskLevel, computeCommandStreamReceiver.peekTaskLevel()),
+                        computeCommandStreamReceiver.obtainCurrentFlushStamp()};
+
+                    this->updateFromCompletionStamp(completionStamp, nullptr);
+                    this->setPendingL3FlushForHostVisibleResources(false);
+                    eventBuilder.getEvent()->setWaitForTaskCountRequired(true);
+                }
+            }
 
             auto maxTaskCountCurrentRootDevice = this->taskCount;
 
@@ -1003,7 +1022,7 @@ void CommandQueueHw<GfxFamily>::enqueueBlocked(
 
     TakeOwnershipWrapper<CommandQueueHw<GfxFamily>> queueOwnership(*this);
 
-    // store previous virtual event as it will add dependecies to new virtual event
+    // store previous virtual event as it will add dependencies to new virtual event
     if (this->virtualEvent) {
         DBG_LOG(EventsDebugEnable, "enqueueBlocked", "previousVirtualEvent", this->virtualEvent);
     }
@@ -1374,7 +1393,7 @@ cl_int CommandQueueHw<GfxFamily>::enqueueBlitSplit(MultiDispatchInfo &dispatchIn
     }
 
     if (blocking) {
-        ret = this->finish();
+        ret = this->finish(false);
     }
 
     return ret;
@@ -1387,8 +1406,12 @@ cl_int CommandQueueHw<GfxFamily>::enqueueBlit(const MultiDispatchInfo &multiDisp
         bcsCsr.ensurePrimaryCsrInitialized(this->device->getDevice());
     }
 
+    TakeOwnershipWrapper<CommandQueueHw<GfxFamily>> queueOwnership(*this);
     auto bcsCommandStreamReceiverOwnership = bcsCsr.obtainUniqueOwnership();
     std::unique_lock<NEO::CommandStreamReceiver::MutexType> commandStreamReceiverOwnership;
+    if (debugManager.flags.ForceCsrLockInBcsEnqueueOnlyForGpgpuSubmission.get() != 1) {
+        commandStreamReceiverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
+    }
 
     registerBcsCsrClient(bcsCsr);
 
@@ -1408,10 +1431,6 @@ cl_int CommandQueueHw<GfxFamily>::enqueueBlit(const MultiDispatchInfo &multiDisp
     const bool profilingEnabled = isProfilingEnabled() && pEventBuilder->getEvent();
 
     std::unique_ptr<KernelOperation> blockedCommandsData;
-    TakeOwnershipWrapper<CommandQueueHw<GfxFamily>> queueOwnership(*this);
-    if (debugManager.flags.ForceCsrLockInBcsEnqueueOnlyForGpgpuSubmission.get() != 1) {
-        commandStreamReceiverOwnership = getGpgpuCommandStreamReceiver().obtainUniqueOwnership();
-    }
 
     auto blockQueue = false;
     bool migratedMemory = false;

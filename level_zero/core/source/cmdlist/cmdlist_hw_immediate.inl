@@ -59,16 +59,13 @@ void CommandListCoreFamilyImmediate<gfxCoreFamily>::checkAvailableSpace(uint32_t
     // If relaxed ordering is needed in given dispatch or if we need to force Local mem usage, and current command stream is in system memory, swap of command streams is required to ensure local memory.
     // If relaxed ordering is not needed and command buffer is in local mem, then also we need to swap.
     bool swapStreams = false;
+    bool systemMemoryPool = NEO::MemoryPoolHelper::isSystemMemoryPool(this->commandContainer.getCommandStream()->getGraphicsAllocation()->getMemoryPool());
     if (hasRelaxedOrderingDependencies) {
-        if (NEO::MemoryPoolHelper::isSystemMemoryPool(this->commandContainer.getCommandStream()->getGraphicsAllocation()->getMemoryPool())) {
+        if (systemMemoryPool) {
             swapStreams = true;
         }
     } else {
-        if (requestCommandBufferInLocalMem && NEO::MemoryPoolHelper::isSystemMemoryPool(this->commandContainer.getCommandStream()->getGraphicsAllocation()->getMemoryPool())) {
-            swapStreams = true;
-        } else if (!requestCommandBufferInLocalMem && !NEO::MemoryPoolHelper::isSystemMemoryPool(this->commandContainer.getCommandStream()->getGraphicsAllocation()->getMemoryPool())) {
-            swapStreams = true;
-        }
+        swapStreams = requestCommandBufferInLocalMem == systemMemoryPool;
     }
 
     if (swapStreams) {
@@ -496,7 +493,7 @@ inline ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::executeCommand
                                                      *csr);
         }
 
-        static_cast<CommandQueueHw<gfxCoreFamily> *>(this->cmdQImmediate)->patchCommands(*this, 0u, false);
+        static_cast<CommandQueueHw<gfxCoreFamily> *>(this->cmdQImmediate)->patchCommands(*this, 0u, false, nullptr);
     } else {
         lockForIndirect = std::move(*outerLockForIndirect);
         cmdQImp->makeResidentForResidencyContainer(this->commandContainer.getResidencyContainer());
@@ -541,7 +538,6 @@ inline ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::executeCommand
             status = hostSynchronize(std::numeric_limits<uint64_t>::max(), true);
         }
     }
-    this->kernelWithAssertAppended = false;
 
     return status;
 }
@@ -552,11 +548,20 @@ bool CommandListCoreFamilyImmediate<gfxCoreFamily>::hasStallingCmdsForRelaxedOrd
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
-bool CommandListCoreFamilyImmediate<gfxCoreFamily>::skipInOrderNonWalkerSignalingAllowed(ze_event_handle_t signalEvent) const {
-    if (!NEO::debugManager.flags.SkipInOrderNonWalkerSignalingAllowed.get()) {
-        return false;
+void CommandListCoreFamilyImmediate<gfxCoreFamily>::tryResetKernelWithAssertFlag() {
+    if (!this->kernelWithAssertAppended) {
+        return;
     }
-    return this->isInOrderNonWalkerSignalingRequired(Event::fromHandle(signalEvent));
+
+    auto cmdQueueImp = static_cast<CommandQueueImp *>(this->cmdQImmediate);
+    auto csr = cmdQueueImp->getCsr();
+
+    auto submittedTaskCount = cmdQueueImp->getTaskCount();
+    auto *tagAddress = csr->getTagAddress();
+
+    if (csr->testTaskCountReady(tagAddress, submittedTaskCount)) {
+        this->kernelWithAssertAppended = false;
+    }
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -564,6 +569,8 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendLaunchKernel(
     ze_kernel_handle_t kernelHandle, const ze_group_count_t &threadGroupDimensions,
     ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents,
     CmdListKernelLaunchParams &launchParams) {
+
+    tryResetKernelWithAssertFlag();
 
     bool relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(numWaitEvents, false);
     bool stallingCmdsForRelaxedOrdering = hasStallingCmdsForRelaxedOrdering(numWaitEvents, relaxedOrderingDispatch);
@@ -608,13 +615,15 @@ void CommandListCoreFamilyImmediate<gfxCoreFamily>::handleInOrderNonWalkerSignal
     }
 
     CommandListCoreFamily<gfxCoreFamily>::appendWaitOnSingleEvent(event, nullptr, nonWalkerSignalingHasRelaxedOrdering, false, CommandToPatch::Invalid);
-    CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(event, false, false, false);
+    CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(event, false, false, false, false);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendLaunchKernelIndirect(
     ze_kernel_handle_t kernelHandle, const ze_group_count_t &pDispatchArgumentsBuffer,
     ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch) {
+
+    tryResetKernelWithAssertFlag();
     relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(numWaitEvents, false);
 
     checkAvailableSpace(numWaitEvents, relaxedOrderingDispatch, commonImmediateCommandSize, false);
@@ -655,6 +664,22 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendBarrier(ze_even
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
+void CommandListCoreFamilyImmediate<gfxCoreFamily>::setupFlagsForBcsSplit(CmdListMemoryCopyParams &memoryCopyParams, bool &hasStallingCmds, bool &copyOffloadFlush, const void *srcPtr, void *dstPtr, size_t srcSize, size_t dstSize) {
+    memoryCopyParams.relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(1, false); // split generates more than 1 event
+    memoryCopyParams.forceDisableCopyOnlyInOrderSignaling = true;
+    memoryCopyParams.taskCountUpdateRequired = true;
+    memoryCopyParams.copyOffloadAllowed = this->isCopyOffloadEnabled();
+    copyOffloadFlush = memoryCopyParams.copyOffloadAllowed;
+    hasStallingCmds = !memoryCopyParams.relaxedOrderingDispatch;
+
+    memoryCopyParams.bscSplitEnabled = true;
+    memoryCopyParams.bcsSplitBaseDstPtr = dstPtr;
+    memoryCopyParams.bcsSplitBaseSrcPtr = srcPtr;
+    memoryCopyParams.bcsSplitTotalDstSize = dstSize;
+    memoryCopyParams.bcsSplitTotalSrcSize = srcSize;
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopy(
     void *dstptr,
     const void *srcptr,
@@ -662,7 +687,8 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopy(
     ze_event_handle_t hSignalEvent,
     uint32_t numWaitEvents,
     ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) {
-    memoryCopyParams.relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(numWaitEvents, isCopyOffloadEnabled());
+    memoryCopyParams.relaxedOrderingDispatch |= isRelaxedOrderingDispatchAllowed(numWaitEvents, isCopyOffloadEnabled());
+    bool copyOffloadFlush = false;
 
     auto estimatedSize = commonImmediateCommandSize;
     if (isCopyOnly(true)) {
@@ -673,7 +699,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopy(
     }
     checkAvailableSpace(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch, estimatedSize, false);
 
-    bool hasStallindCmds = hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
+    bool hasStallingCmds = hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
 
     ze_result_t ret;
     CpuMemCopyInfo cpuMemCopyInfo(dstptr, const_cast<void *>(srcptr), size);
@@ -689,15 +715,15 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopy(
     NEO::TransferDirection direction;
     auto isSplitNeeded = this->isAppendSplitNeeded(dstptr, srcptr, size, direction);
     if (isSplitNeeded) {
-        memoryCopyParams.relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(1, false); // split generates more than 1 event
-        memoryCopyParams.forceDisableCopyOnlyInOrderSignaling = true;
-        hasStallindCmds = !memoryCopyParams.relaxedOrderingDispatch;
+        setupFlagsForBcsSplit(memoryCopyParams, hasStallingCmds, copyOffloadFlush, srcptr, dstptr, size, size);
 
-        auto splitCall = [&](void *dstptrParam, const void *srcptrParam, size_t sizeParam, ze_event_handle_t hSignalEventParam) {
-            return CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(dstptrParam, srcptrParam, sizeParam, hSignalEventParam, 0u, nullptr, memoryCopyParams);
+        auto splitCall = [&](CommandListCoreFamilyImmediate<gfxCoreFamily> *subCmdList, void *dstptrParam, const void *srcptrParam, size_t sizeParam, ze_event_handle_t hSignalEventParam, uint64_t aggregatedEventIncValue) {
+            memoryCopyParams.forceAggregatedEventIncValue = aggregatedEventIncValue;
+            return subCmdList->CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(dstptrParam, srcptrParam, sizeParam, hSignalEventParam, 0u, nullptr, memoryCopyParams);
         };
 
-        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, void *, const void *>(this, dstptr, srcptr, size, hSignalEvent, numWaitEvents, phWaitEvents, true, memoryCopyParams.relaxedOrderingDispatch, direction, splitCall);
+        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, void *, const void *>(this, dstptr, srcptr, size, hSignalEvent, numWaitEvents, phWaitEvents, true, memoryCopyParams.relaxedOrderingDispatch, direction, estimatedSize, splitCall);
+
     } else if (this->isValidForStagingTransfer(dstptr, srcptr, size, numWaitEvents > 0)) {
         return this->appendStagingMemoryCopy(dstptr, srcptr, size, hSignalEvent, memoryCopyParams);
     } else {
@@ -705,7 +731,9 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopy(
                                                                      numWaitEvents, phWaitEvents, memoryCopyParams);
     }
 
-    return flushImmediate(ret, true, hasStallindCmds, memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel, memoryCopyParams.copyOffloadAllowed, hSignalEvent, isSplitNeeded, nullptr, nullptr);
+    copyOffloadFlush |= memoryCopyParams.copyOffloadAllowed;
+
+    return flushImmediate(ret, true, hasStallingCmds, memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel, copyOffloadFlush, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -721,7 +749,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopyRegio
     ze_event_handle_t hSignalEvent,
     uint32_t numWaitEvents,
     ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) {
-    memoryCopyParams.relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(numWaitEvents, isCopyOffloadEnabled());
+    memoryCopyParams.relaxedOrderingDispatch |= isRelaxedOrderingDispatchAllowed(numWaitEvents, isCopyOffloadEnabled());
 
     auto estimatedSize = commonImmediateCommandSize;
     if (isCopyOnly(true)) {
@@ -733,18 +761,19 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopyRegio
     }
     checkAvailableSpace(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch, estimatedSize, false);
 
-    bool hasStallindCmds = hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
+    bool hasStallingCmds = hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch);
+    bool copyOffloadFlush = false;
 
     ze_result_t ret;
 
     NEO::TransferDirection direction;
     auto isSplitNeeded = this->isAppendSplitNeeded(dstPtr, srcPtr, this->getTotalSizeForCopyRegion(dstRegion, dstPitch, dstSlicePitch), direction);
     if (isSplitNeeded) {
-        memoryCopyParams.relaxedOrderingDispatch = isRelaxedOrderingDispatchAllowed(1, false); // split generates more than 1 event
-        memoryCopyParams.forceDisableCopyOnlyInOrderSignaling = true;
-        hasStallindCmds = !memoryCopyParams.relaxedOrderingDispatch;
+        setupFlagsForBcsSplit(memoryCopyParams, hasStallingCmds, copyOffloadFlush, srcPtr, dstPtr,
+                              this->getTotalSizeForCopyRegion(srcRegion, srcPitch, srcSlicePitch),
+                              this->getTotalSizeForCopyRegion(dstRegion, dstPitch, dstSlicePitch));
 
-        auto splitCall = [&](uint32_t dstOriginXParam, uint32_t srcOriginXParam, size_t sizeParam, ze_event_handle_t hSignalEventParam) {
+        auto splitCall = [&](CommandListCoreFamilyImmediate<gfxCoreFamily> *subCmdList, uint32_t dstOriginXParam, uint32_t srcOriginXParam, size_t sizeParam, ze_event_handle_t hSignalEventParam, uint64_t aggregatedEventIncValue) {
             ze_copy_region_t dstRegionLocal = {};
             ze_copy_region_t srcRegionLocal = {};
             memcpy(&dstRegionLocal, dstRegion, sizeof(ze_copy_region_t));
@@ -753,19 +782,22 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendMemoryCopyRegio
             dstRegionLocal.width = static_cast<uint32_t>(sizeParam);
             srcRegionLocal.originX = srcOriginXParam;
             srcRegionLocal.width = static_cast<uint32_t>(sizeParam);
-            return CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(dstPtr, &dstRegionLocal, dstPitch, dstSlicePitch,
-                                                                                srcPtr, &srcRegionLocal, srcPitch, srcSlicePitch,
-                                                                                hSignalEventParam, 0u, nullptr, memoryCopyParams);
+            memoryCopyParams.forceAggregatedEventIncValue = aggregatedEventIncValue;
+            return subCmdList->CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(dstPtr, &dstRegionLocal, dstPitch, dstSlicePitch,
+                                                                                            srcPtr, &srcRegionLocal, srcPitch, srcSlicePitch,
+                                                                                            hSignalEventParam, 0u, nullptr, memoryCopyParams);
         };
 
-        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, uint32_t, uint32_t>(this, dstRegion->originX, srcRegion->originX, dstRegion->width, hSignalEvent, numWaitEvents, phWaitEvents, true, memoryCopyParams.relaxedOrderingDispatch, direction, splitCall);
+        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, uint32_t, uint32_t>(this, dstRegion->originX, srcRegion->originX, dstRegion->width, hSignalEvent, numWaitEvents, phWaitEvents, true, memoryCopyParams.relaxedOrderingDispatch, direction, estimatedSize, splitCall);
     } else {
         ret = CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopyRegion(dstPtr, dstRegion, dstPitch, dstSlicePitch,
                                                                            srcPtr, srcRegion, srcPitch, srcSlicePitch,
                                                                            hSignalEvent, numWaitEvents, phWaitEvents, memoryCopyParams);
     }
 
-    return flushImmediate(ret, true, hasStallindCmds, memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel, memoryCopyParams.copyOffloadAllowed, hSignalEvent, isSplitNeeded, nullptr, nullptr);
+    copyOffloadFlush |= memoryCopyParams.copyOffloadAllowed;
+
+    return flushImmediate(ret, true, hasStallingCmds, memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel, copyOffloadFlush, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -817,25 +849,26 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendPageFaultCopy(N
     NEO::TransferDirection direction;
     auto isSplitNeeded = this->isAppendSplitNeeded(dstAllocation->getMemoryPool(), srcAllocation->getMemoryPool(), size, direction, false);
 
-    bool relaxedOrdering = false;
+    CmdListMemoryCopyParams bcsSplitMemoryCopyParams{};
 
     if (isSplitNeeded) {
-        relaxedOrdering = isRelaxedOrderingDispatchAllowed(1, false); // split generates more than 1 event
-        uintptr_t dstAddress = static_cast<uintptr_t>(dstAllocation->getGpuAddress());
-        uintptr_t srcAddress = static_cast<uintptr_t>(srcAllocation->getGpuAddress());
+        auto dstAddress = reinterpret_cast<void *>(dstAllocation->getGpuAddress());
+        auto srcAddress = reinterpret_cast<const void *>(srcAllocation->getGpuAddress());
+        bool hasStallingCmds = false;
+        bool copyOffloadFlush = false;
 
-        auto splitCall = [&](uintptr_t dstAddressParam, uintptr_t srcAddressParam, size_t sizeParam, ze_event_handle_t hSignalEventParam) {
-            this->appendMemoryCopyBlit(dstAddressParam, dstAllocation, 0u,
-                                       srcAddressParam, srcAllocation, 0u,
-                                       sizeParam, nullptr);
-            return CommandListCoreFamily<gfxCoreFamily>::appendSignalEvent(hSignalEventParam, false);
+        setupFlagsForBcsSplit(bcsSplitMemoryCopyParams, hasStallingCmds, copyOffloadFlush, srcAddress, dstAddress, size, size);
+
+        auto splitCall = [&](CommandListCoreFamilyImmediate<gfxCoreFamily> *subCmdList, void *dstAddressParam, const void *srcAddressParam, size_t sizeParam, ze_event_handle_t hSignalEventParam, uint64_t aggregatedEventIncValue) {
+            bcsSplitMemoryCopyParams.forceAggregatedEventIncValue = aggregatedEventIncValue;
+            return subCmdList->CommandListCoreFamily<gfxCoreFamily>::appendMemoryCopy(dstAddressParam, srcAddressParam, sizeParam, hSignalEventParam, 0u, nullptr, bcsSplitMemoryCopyParams);
         };
 
-        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, uintptr_t, uintptr_t>(this, dstAddress, srcAddress, size, nullptr, 0u, nullptr, false, relaxedOrdering, direction, splitCall);
+        ret = static_cast<DeviceImp *>(this->device)->bcsSplit->appendSplitCall<gfxCoreFamily, void *, const void *>(this, dstAddress, srcAddress, size, nullptr, 0u, nullptr, false, bcsSplitMemoryCopyParams.relaxedOrderingDispatch, direction, commonImmediateCommandSize, splitCall);
     } else {
         ret = CommandListCoreFamily<gfxCoreFamily>::appendPageFaultCopy(dstAllocation, srcAllocation, size, flushHost);
     }
-    return flushImmediate(ret, false, false, relaxedOrdering, NEO::AppendOperations::kernel, false, nullptr, isSplitNeeded, nullptr, nullptr);
+    return flushImmediate(ret, false, false, bcsSplitMemoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel, false, nullptr, isSplitNeeded, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -937,7 +970,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendImageCopyFromMe
                                                                                numWaitEvents, phWaitEvents, memoryCopyParams);
 
     return flushImmediate(ret, true, hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch), memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel,
-                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, false, nullptr, nullptr);
+                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -956,7 +989,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendImageCopyToMemo
                                                                              numWaitEvents, phWaitEvents, memoryCopyParams);
 
     return flushImmediate(ret, true, hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch), memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel,
-                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, false, nullptr, nullptr);
+                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -977,7 +1010,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendImageCopyFromMe
                                                                                   hSignalEvent, numWaitEvents, phWaitEvents, memoryCopyParams);
 
     return flushImmediate(ret, true, hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch), memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel,
-                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, false, nullptr, nullptr);
+                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -998,7 +1031,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendImageCopyToMemo
                                                                                 hSignalEvent, numWaitEvents, phWaitEvents, memoryCopyParams);
 
     return flushImmediate(ret, true, hasStallingCmdsForRelaxedOrdering(numWaitEvents, memoryCopyParams.relaxedOrderingDispatch), memoryCopyParams.relaxedOrderingDispatch, NEO::AppendOperations::kernel,
-                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, false, nullptr, nullptr);
+                          memoryCopyParams.copyOffloadAllowed, hSignalEvent, memoryCopyParams.taskCountUpdateRequired, nullptr, nullptr);
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -1024,8 +1057,20 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendWaitOnMemory(vo
 template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendWriteToMemory(void *desc, void *ptr, uint64_t data) {
     checkAvailableSpace(0, false, commonImmediateCommandSize, false);
-    auto ret = CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(desc, ptr, data);
-    return flushImmediate(ret, true, false, false, NEO::AppendOperations::nonKernel, false, nullptr, false, nullptr, nullptr);
+    bool requireTaskCountUpdate = false;
+    auto ret = CommandListCoreFamily<gfxCoreFamily>::appendWriteToMemory(desc, ptr, data, &requireTaskCountUpdate);
+    return flushImmediate(ret, true, false, false, NEO::AppendOperations::nonKernel, false, nullptr, requireTaskCountUpdate, nullptr, nullptr);
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendHostFunction(
+    void *pHostFunction,
+    void *pUserData,
+    void *pNext,
+    ze_event_handle_t hSignalEvent,
+    uint32_t numWaitEvents,
+    ze_event_handle_t *phWaitEvents) {
+    return ZE_RESULT_ERROR_UNSUPPORTED_FEATURE;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -1166,7 +1211,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::hostSynchronize(uint6
 
     auto tempAllocsCleanupRequired = handlePostWaitOperations && (mainStorageCleanupNeeded || copyOffloadStorageCleanupNeeded);
 
-    bool inOrderWaitAllowed = (isInOrderExecutionEnabled() && !tempAllocsCleanupRequired && this->latestFlushIsHostVisible && (this->heaplessModeEnabled || !this->latestOperationHasOptimizedCbEvent));
+    bool inOrderWaitAllowed = (isInOrderExecutionEnabled() && !this->inOrderWaitsDisabled && !tempAllocsCleanupRequired && this->latestFlushIsHostVisible && (this->heaplessModeEnabled || !this->latestOperationHasOptimizedCbEvent));
 
     uint64_t inOrderSyncValue = this->inOrderExecInfo.get() ? inOrderExecInfo->getCounterValue() : 0;
 
@@ -1216,7 +1261,9 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::hostSynchronize(uint6
                 }
 
                 this->storeFillPatternResourcesForReuse();
-                this->getDevice()->getDriverHandle()->getStagingBufferManager()->resetDetectedPtrs();
+                if (this->getDevice()->getDriverHandle()->getStagingBufferManager()) {
+                    this->getDevice()->getDriverHandle()->getStagingBufferManager()->resetDetectedPtrs();
+                }
             }
 
             bool hangDetected = status == ZE_RESULT_ERROR_DEVICE_LOST;
@@ -1228,6 +1275,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::hostSynchronize(uint6
                 cmdQueueImp->checkAssert();
             }
         }
+        this->kernelWithAssertAppended = false;
     }
 
     return status;
@@ -1350,7 +1398,7 @@ template <GFXCORE_FAMILY gfxCoreFamily>
 ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::flushInOrderCounterSignal(bool waitOnInOrderCounterRequired) {
     ze_result_t ret = ZE_RESULT_SUCCESS;
     if (waitOnInOrderCounterRequired && !this->isHeaplessModeEnabled() && this->latestOperationHasOptimizedCbEvent) {
-        this->appendSignalInOrderDependencyCounter(nullptr, false, true, false);
+        this->appendSignalInOrderDependencyCounter(nullptr, false, true, false, false);
         this->inOrderExecInfo->addCounterValue(this->getInOrderIncrementValue());
         this->handleInOrderCounterOverflow(false);
         ret = flushImmediate(ret, false, true, false, NEO::AppendOperations::nonKernel, false, nullptr, false, nullptr, nullptr);
@@ -1769,9 +1817,10 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendCommandLists(ui
     bool copyEngineExecution = isCopyOnly(copyOffloadOperation);
 
     auto ret = ZE_RESULT_SUCCESS;
+    auto additionalSize = estimateAdditionalSizeAppendRegularCommandLists(numCommandLists, phCommandLists);
     checkAvailableSpace(numWaitEvents,
                         relaxedOrderingDispatch,
-                        commonImmediateCommandSize,
+                        additionalSize + commonImmediateCommandSize,
                         this->dispatchCmdListBatchBufferAsPrimary);
 
     ret = CommandListCoreFamily<gfxCoreFamily>::addEventsToCmdList(numWaitEvents, phWaitEvents,
@@ -1837,6 +1886,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendCommandLists(ui
         CommandListCoreFamily<gfxCoreFamily>::appendSignalInOrderDependencyCounter(signalEvent,
                                                                                    copyOffloadOperation,
                                                                                    false,
+                                                                                   false,
                                                                                    false);
     }
 
@@ -1844,16 +1894,18 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendCommandLists(ui
                                                                          false,
                                                                          copyOffloadOperation);
 
-    return flushImmediate(ret,
-                          true,
-                          hasStallingCmds,
-                          relaxedOrderingDispatch,
-                          NEO::AppendOperations::cmdList,
-                          copyOffloadOperation,
-                          hSignalEvent,
-                          requireTaskCountUpdate,
-                          &mainAppendLock,
-                          &mainLockForIndirect);
+    auto retCode = flushImmediate(ret,
+                                  true,
+                                  hasStallingCmds,
+                                  relaxedOrderingDispatch,
+                                  NEO::AppendOperations::cmdList,
+                                  copyOffloadOperation,
+                                  hSignalEvent,
+                                  requireTaskCountUpdate,
+                                  &mainAppendLock,
+                                  &mainLockForIndirect);
+    queueImp->saveTagAndTaskCountForCommandLists(numCommandLists, phCommandLists, queueImp->getCsr()->getTagAllocation(), queueImp->getTaskCount());
+    return retCode;
 }
 
 template <GFXCORE_FAMILY gfxCoreFamily>
@@ -1897,7 +1949,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendStagingMemoryCo
             }
         }
         ret = flushImmediate(ret, true, hasStallingCmds, relaxedOrdering,
-                             NEO::AppendOperations::kernel, true, hSignalEvent, false, nullptr, nullptr);
+                             NEO::AppendOperations::kernel, true, hSignalEvent, true, nullptr, nullptr);
         return ret;
     };
 
@@ -1910,7 +1962,7 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendStagingMemoryCo
         return ret;
     }
 
-    if (event && event->isCounterBased() && event->getInOrderIncrementValue() == 0) {
+    if (event && event->isCounterBased() && event->getInOrderIncrementValue(this->partitionCount) == 0) {
         this->assignInOrderExecInfoToEvent(event);
     } else if (event && !event->isCounterBased() && !event->isEventTimestampFlagSet()) {
         ret = this->appendBarrier(hSignalEvent, 0, nullptr, relaxedOrdering);
@@ -1920,10 +1972,10 @@ ze_result_t CommandListCoreFamilyImmediate<gfxCoreFamily>::appendStagingMemoryCo
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 bool CommandListCoreFamilyImmediate<gfxCoreFamily>::isValidForStagingTransfer(const void *dstptr, const void *srcptr, size_t size, bool hasDependencies) {
-    if (NEO::debugManager.flags.EnableCopyWithStagingBuffers.get() != 1) {
+    if (this->useAdditionalBlitProperties) {
         return false;
     }
-    if (this->useAdditionalBlitProperties) {
+    if (this->isSharedSystemEnabled()) {
         return false;
     }
     auto driver = this->getDevice()->getDriverHandle();
@@ -1931,8 +1983,38 @@ bool CommandListCoreFamilyImmediate<gfxCoreFamily>::isValidForStagingTransfer(co
     if (importedAlloc != nullptr) {
         return false;
     }
+    NEO::SvmAllocationData *allocData;
+    if (!driver->findAllocationDataForRange(const_cast<void *>(dstptr), size, allocData)) {
+        return false;
+    }
     auto neoDevice = this->getDevice()->getNEODevice();
     return driver->getStagingBufferManager()->isValidForStagingTransfer(*neoDevice, srcptr, size, hasDependencies);
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+size_t CommandListCoreFamilyImmediate<gfxCoreFamily>::estimateAdditionalSizeAppendRegularCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *phCommandLists) {
+    size_t additionalSize = 0;
+    if (this->cmdQImmediate->getPatchingPreamble()) {
+        constexpr size_t bbStartSize = NEO::EncodeBatchBufferStartOrEnd<GfxFamily>::getBatchBufferStartSize();
+        size_t singleBbStartEncodeSize = NEO::EncodeDataMemory<GfxFamily>::getCommandSizeForEncode(bbStartSize);
+        additionalSize = singleBbStartEncodeSize * numCommandLists;
+
+        size_t totalNoopSpace = 0;
+        for (uint32_t i = 0; i < numCommandLists; i++) {
+            auto cmdList = static_cast<CommandListImp *>(CommandList::fromHandle(phCommandLists[i]));
+            totalNoopSpace += cmdList->getTotalNoopSpace();
+            totalNoopSpace += cmdList->getInOrderExecDeviceRequiredSize();
+            totalNoopSpace += cmdList->getInOrderExecHostRequiredSize();
+        }
+        const size_t noopEncodeSize = NEO::EncodeDataMemory<GfxFamily>::getCommandSizeForEncode(totalNoopSpace);
+        additionalSize += noopEncodeSize;
+    }
+    return additionalSize;
+}
+
+template <GFXCORE_FAMILY gfxCoreFamily>
+inline void CommandListCoreFamilyImmediate<gfxCoreFamily>::setPatchingPreamble(bool patching, bool saveWait) {
+    this->cmdQImmediate->setPatchingPreamble(patching, saveWait);
 }
 
 } // namespace L0

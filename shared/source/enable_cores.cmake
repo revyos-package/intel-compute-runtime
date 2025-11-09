@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2020-2023 Intel Corporation
+# Copyright (C) 2020-2025 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 #
@@ -21,8 +21,10 @@ set(CORE_RUNTIME_SRCS_COREX_CPP_BASE
     debugger
     direct_submission
     experimental_command_buffer
+    host_function
     implicit_scaling
     gfx_core_helper
+    gmm_callbacks
     hw_info
     preamble
     preemption
@@ -33,7 +35,6 @@ set(CORE_RUNTIME_SRCS_COREX_CPP_BASE
 set(CORE_RUNTIME_SRCS_COREX_CPP_WDDM
     windows/command_stream_receiver
     windows/direct_submission
-    windows/gmm_callbacks
 )
 
 set(CORE_RUNTIME_SRCS_COREX_CPP_LINUX

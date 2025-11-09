@@ -299,31 +299,8 @@ bool DrmMemoryManager::setSharedSystemMemAdvise(const void *ptr, const size_t si
     auto &drm = this->getDrm(rootDeviceIndex);
     auto ioctlHelper = drm.getIoctlHelper();
 
-    uint32_t attribute = 0;
-    uint64_t param = 0;
-
-    switch (memAdviseOp) {
-    case MemAdvise::setPreferredLocation:
-        attribute = ioctlHelper->getPreferredLocationAdvise();
-        param = (static_cast<uint64_t>(-1) << 32) //-1 as currently not supported and ignored. This will be useful in multi device settings.
-                | static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassDevice));
-        break;
-    case MemAdvise::clearPreferredLocation:
-        // Assumes that the default location is VRAM, i.e. 1 == DrmParam::memoryClassDevice
-        attribute = ioctlHelper->getPreferredLocationAdvise();
-        param = (static_cast<uint64_t>(-1) << 32) | static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassDevice));
-        break;
-    case MemAdvise::setSystemMemoryPreferredLocation:
-        attribute = ioctlHelper->getPreferredLocationAdvise();
-        param = (static_cast<uint64_t>(-1) << 32) | static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassSystem));
-        break;
-    case MemAdvise::clearSystemMemoryPreferredLocation:
-        attribute = ioctlHelper->getPreferredLocationAdvise();
-        param = (static_cast<uint64_t>(-1) << 32) | static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::memoryClassDevice));
-        break;
-    default:
-        return false;
-    }
+    uint32_t attribute = ioctlHelper->getPreferredLocationAdvise();
+    uint64_t param = ioctlHelper->getPreferredLocationArgs(memAdviseOp);
 
     // Apply the shared system USM IOCTL to all the VMs of the device
     std::vector<uint32_t> vmIds;
@@ -341,29 +318,8 @@ bool DrmMemoryManager::setSharedSystemAtomicAccess(const void *ptr, const size_t
     auto &drm = this->getDrm(rootDeviceIndex);
     auto ioctlHelper = drm.getIoctlHelper();
 
-    uint32_t attribute = 0;
-    uint64_t param = 0;
-
-    switch (mode) {
-    case AtomicAccessMode::device:
-        attribute = ioctlHelper->getAtomicAdvise(false);
-        param = (static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::atomicClassDevice)) << 32);
-        break;
-    case AtomicAccessMode::system:
-        attribute = ioctlHelper->getAtomicAdvise(false);
-        param = (static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::atomicClassGlobal)) << 32);
-        break;
-    case AtomicAccessMode::host:
-        attribute = ioctlHelper->getAtomicAdvise(false);
-        param = (static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::atomicClassSystem)) << 32);
-        break;
-    case AtomicAccessMode::none:
-        attribute = ioctlHelper->getAtomicAdvise(false);
-        param = (static_cast<uint64_t>(ioctlHelper->getDrmParamValue(DrmParam::atomicClassUndefined)) << 32);
-        break;
-    default:
-        return false;
-    }
+    uint32_t attribute = ioctlHelper->getAtomicAdvise(false);
+    uint64_t param = static_cast<uint64_t>(ioctlHelper->getAtomicAccess(mode));
 
     // Apply the shared system USM IOCTL to all the VMs of the device
     std::vector<uint32_t> vmIds;
@@ -373,6 +329,18 @@ bool DrmMemoryManager::setSharedSystemAtomicAccess(const void *ptr, const size_t
     }
 
     auto result = ioctlHelper->setVmSharedSystemMemAdvise(reinterpret_cast<uint64_t>(ptr), size, attribute, param, vmIds);
+
+    return result;
+}
+
+AtomicAccessMode DrmMemoryManager::getSharedSystemAtomicAccess(const void *ptr, const size_t size, SubDeviceIdsVec &subDeviceIds, uint32_t rootDeviceIndex) {
+
+    auto &drm = this->getDrm(rootDeviceIndex);
+    auto ioctlHelper = drm.getIoctlHelper();
+
+    // Only get the atomic attributes from a single VM since they are replicated in all.
+    uint32_t vmId = drm.getVirtualMemoryAddressSpace(subDeviceIds[0]);
+    auto result = ioctlHelper->getVmSharedSystemAtomicAttribute(reinterpret_cast<uint64_t>(ptr), size, vmId);
 
     return result;
 }
@@ -501,7 +469,7 @@ GraphicsAllocation *DrmMemoryManager::createGraphicsAllocation(OsHandleStorage &
 GraphicsAllocation *DrmMemoryManager::allocateGraphicsMemoryWithAlignment(const AllocationData &allocationData) {
     if (GraphicsAllocation::isDebugSurfaceAllocationType(allocationData.type) &&
         allocationData.storageInfo.subDeviceBitfield.count() > 1) {
-        return createMultiHostAllocation(allocationData);
+        return createMultiHostDebugSurfaceAllocation(allocationData);
     }
 
     return allocateGraphicsMemoryWithAlignmentImpl(allocationData);
@@ -519,12 +487,14 @@ DrmAllocation *DrmMemoryManager::allocateGraphicsMemoryWithAlignmentImpl(const A
     size_t alignedStorageSize = cSize;
     size_t alignedVirtualAddressRangeSize = cSize;
     auto svmCpuAllocation = allocationData.type == AllocationType::svmCpu;
-    if (svmCpuAllocation) {
+    auto is2MBSizeAlignmentRequired = getDrm(allocationData.rootDeviceIndex).getIoctlHelper()->is2MBSizeAlignmentRequired(allocationData.type);
+    if (svmCpuAllocation || is2MBSizeAlignmentRequired) {
         // add padding in case reserved addr is not aligned
 
         auto &productHelper = getGmmHelper(allocationData.rootDeviceIndex)->getRootDeviceEnvironment().getHelper<ProductHelper>();
         if (alignedStorageSize >= 2 * MemoryConstants::megaByte &&
-            productHelper.is2MBLocalMemAlignmentEnabled()) {
+            (is2MBSizeAlignmentRequired || productHelper.is2MBLocalMemAlignmentEnabled()) &&
+            cAlignment <= 2 * MemoryConstants::megaByte) {
             alignedStorageSize = alignUp(cSize, MemoryConstants::pageSize2M);
         } else {
             alignedStorageSize = alignUp(cSize, cAlignment);
@@ -547,7 +517,7 @@ DrmAllocation *DrmMemoryManager::allocateGraphicsMemoryWithAlignmentImpl(const A
     }
 
     auto mmapAlignment = cAlignment;
-    if (alignedStorageSize >= 2 * MemoryConstants::megaByte) {
+    if (alignedStorageSize >= 2 * MemoryConstants::megaByte && mmapAlignment <= 2 * MemoryConstants::megaByte) {
         mmapAlignment = MemoryConstants::pageSize2M;
     }
 
@@ -657,7 +627,7 @@ GraphicsAllocation *DrmMemoryManager::allocateGraphicsMemoryWithGpuVa(const Allo
 
     if (allocationData.type == NEO::AllocationType::debugSbaTrackingBuffer &&
         allocationData.storageInfo.subDeviceBitfield.count() > 1) {
-        return createMultiHostAllocation(allocationData);
+        return createMultiHostDebugSurfaceAllocation(allocationData);
     }
 
     auto osContextLinux = static_cast<OsContextLinux *>(allocationData.osContext);
@@ -829,8 +799,8 @@ bool DrmMemoryManager::mapPhysicalDeviceMemoryToVirtualMemory(GraphicsAllocation
 bool DrmMemoryManager::mapPhysicalHostMemoryToVirtualMemory(RootDeviceIndicesContainer &rootDeviceIndices, MultiGraphicsAllocation &multiGraphicsAllocation, GraphicsAllocation *physicalAllocation, uint64_t gpuRange, size_t bufferSize) {
     auto drmPhysicalAllocation = static_cast<DrmAllocation *>(physicalAllocation);
     auto &drm = this->getDrm(drmPhysicalAllocation->getRootDeviceIndex());
-    BufferObject *physcialBo = drmPhysicalAllocation->getBO();
-    uint64_t mmapOffset = physcialBo->getMmapOffset();
+    BufferObject *physicalBo = drmPhysicalAllocation->getBO();
+    uint64_t mmapOffset = physicalBo->getMmapOffset();
     uint64_t internalHandle = 0;
     if ((rootDeviceIndices.size() > 1) && (physicalAllocation->peekInternalHandle(this, internalHandle) < 0)) {
         return false;
@@ -839,12 +809,12 @@ bool DrmMemoryManager::mapPhysicalHostMemoryToVirtualMemory(RootDeviceIndicesCon
     [[maybe_unused]] auto retPtr = this->mmapFunction(addrToPtr(gpuRange), bufferSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, drm.getFileDescriptor(), static_cast<off_t>(mmapOffset));
     DEBUG_BREAK_IF(retPtr != addrToPtr(gpuRange));
 
-    int physicalBoHandle = physcialBo->peekHandle();
-    auto physcialBoHandleWrapper = tryToGetBoHandleWrapperWithSharedOwnership(physicalBoHandle, physicalAllocation->getRootDeviceIndex());
+    int physicalBoHandle = physicalBo->peekHandle();
+    auto physicalBoHandleWrapper = tryToGetBoHandleWrapperWithSharedOwnership(physicalBoHandle, physicalAllocation->getRootDeviceIndex());
 
     auto memoryPool = MemoryPool::system4KBPages;
     auto patIndex = drm.getPatIndex(nullptr, AllocationType::bufferHostMemory, CacheRegion::defaultRegion, CachePolicy::writeBack, false, MemoryPoolHelper::isSystemMemoryPool(memoryPool));
-    auto bo = new BufferObject(physicalAllocation->getRootDeviceIndex(), &drm, patIndex, std::move(physcialBoHandleWrapper), bufferSize, maxOsContextCount);
+    auto bo = new BufferObject(physicalAllocation->getRootDeviceIndex(), &drm, patIndex, std::move(physicalBoHandleWrapper), bufferSize, maxOsContextCount);
 
     bo->setMmapOffset(mmapOffset);
     bo->setAddress(gpuRange);
@@ -936,13 +906,16 @@ GraphicsAllocation *DrmMemoryManager::allocateMemoryByKMD(const AllocationData &
     auto gmm = std::make_unique<Gmm>(gmmHelper, allocationData.hostPtr,
                                      allocationData.size, allocationData.alignment, CacheSettingsHelper::getGmmUsageType(allocationData.type, allocationData.flags.uncacheable, productHelper, gmmHelper->getHardwareInfo()), systemMemoryStorageInfo, gmmRequirements);
     size_t bufferSize = allocationData.size;
+    auto &drm = getDrm(allocationData.rootDeviceIndex);
     auto alignment = allocationData.alignment;
     if (bufferSize >= 2 * MemoryConstants::megaByte) {
         alignment = MemoryConstants::pageSize2M;
+        if (drm.getIoctlHelper()->is2MBSizeAlignmentRequired(allocationData.type)) {
+            bufferSize = alignUp(bufferSize, MemoryConstants::pageSize2M);
+        }
     }
     uint64_t gpuRange = acquireGpuRangeWithCustomAlignment(bufferSize, allocationData.rootDeviceIndex, HeapIndex::heapStandard64KB, alignment);
 
-    auto &drm = getDrm(allocationData.rootDeviceIndex);
     int ret = -1;
     uint32_t handle;
     auto patIndex = drm.getPatIndex(gmm.get(), allocationData.type, CacheRegion::defaultRegion, CachePolicy::writeBack, false, MemoryPoolHelper::isSystemMemoryPool(memoryPool));
@@ -3018,6 +2991,9 @@ DrmAllocation *DrmMemoryManager::createUSMHostAllocationFromSharedHandle(osHandl
         if (!reuseSharedAllocation) {
             registerSharedBoHandleAllocation(drmAllocation.get());
         }
+
+        this->registerSysMemAlloc(drmAllocation.get());
+
         return drmAllocation.release();
     }
 
@@ -3031,11 +3007,19 @@ bool DrmMemoryManager::allowIndirectAllocationsAsPack(uint32_t rootDeviceIndex) 
 }
 
 bool DrmMemoryManager::allocateInterrupt(uint32_t &outHandle, uint32_t rootDeviceIndex) {
-    return getDrm(rootDeviceIndex).getIoctlHelper()->allocateInterrupt(outHandle);
+    auto &productHelper = getGmmHelper(rootDeviceIndex)->getRootDeviceEnvironment().getHelper<ProductHelper>();
+    if (productHelper.isInterruptSupported()) {
+        return getDrm(rootDeviceIndex).getIoctlHelper()->allocateInterrupt(outHandle);
+    }
+    return false;
 }
 
 bool DrmMemoryManager::releaseInterrupt(uint32_t outHandle, uint32_t rootDeviceIndex) {
-    return getDrm(rootDeviceIndex).getIoctlHelper()->releaseInterrupt(outHandle);
+    auto &productHelper = getGmmHelper(rootDeviceIndex)->getRootDeviceEnvironment().getHelper<ProductHelper>();
+    if (productHelper.isInterruptSupported()) {
+        return getDrm(rootDeviceIndex).getIoctlHelper()->releaseInterrupt(outHandle);
+    }
+    return false;
 }
 
 bool DrmMemoryManager::createMediaContext(uint32_t rootDeviceIndex, void *controlSharedMemoryBuffer, uint32_t controlSharedMemoryBufferSize, void *controlBatchBuffer, uint32_t controlBatchBufferSize, void *&outDoorbell) {

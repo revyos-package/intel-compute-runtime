@@ -29,6 +29,9 @@ enum class Builtin : uint32_t;
 struct Event;
 struct EventPool;
 
+template <typename GfxFamily>
+class SWTagScope;
+
 #pragma pack(1)
 struct EventData {
     uint64_t address;
@@ -134,11 +137,19 @@ struct CommandListCoreFamily : public CommandListImp {
                                                 const ze_group_count_t groupCounts,
                                                 const ze_group_size_t groupSizes,
 
-                                                const void **pArguments,
+                                                void **pArguments,
                                                 const void *pNext,
                                                 ze_event_handle_t hSignalEvent,
                                                 uint32_t numWaitEvents,
                                                 ze_event_handle_t *phWaitEvents) override;
+
+    ze_result_t appendLaunchKernelWithParameters(ze_kernel_handle_t hKernel,
+                                                 const ze_group_count_t *pGroupCounts,
+                                                 const void *pNext,
+                                                 ze_event_handle_t hSignalEvent,
+                                                 uint32_t numWaitEvents,
+                                                 ze_event_handle_t *phWaitEvents) override;
+
     ze_result_t appendMemAdvise(ze_device_handle_t hDevice,
                                 const void *ptr, size_t size,
                                 ze_memory_advice_t advice) override;
@@ -148,6 +159,10 @@ struct CommandListCoreFamily : public CommandListImp {
     ze_result_t appendMemoryCopy(void *dstptr, const void *srcptr, size_t size,
                                  ze_event_handle_t hSignalEvent, uint32_t numWaitEvents,
                                  ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
+    ze_result_t appendMemoryCopyWithParameters(void *dstptr, const void *srcptr, size_t size,
+                                               const void *pNext,
+                                               ze_event_handle_t hSignalEvent, uint32_t numWaitEvents,
+                                               ze_event_handle_t *phWaitEvents) override;
     ze_result_t appendPageFaultCopy(NEO::GraphicsAllocation *dstAllocation,
                                     NEO::GraphicsAllocation *srcAllocation,
                                     size_t size,
@@ -169,6 +184,11 @@ struct CommandListCoreFamily : public CommandListImp {
                                  ze_event_handle_t hSignalEvent,
                                  uint32_t numWaitEvents,
                                  ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams) override;
+    ze_result_t appendMemoryFillWithParameters(void *ptr, const void *pattern,
+                                               size_t patternSize, size_t size,
+                                               const void *pNext,
+                                               ze_event_handle_t hSignalEvent,
+                                               uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
 
     ze_result_t appendMIBBStart(uint64_t address, size_t predication, bool secondLevel) override;
     ze_result_t appendMIBBEnd() override;
@@ -178,6 +198,8 @@ struct CommandListCoreFamily : public CommandListImp {
     ze_result_t appendWaitOnMemory(void *desc, void *ptr, uint64_t data, ze_event_handle_t signalEventHandle, bool useQwordData) override;
     ze_result_t appendWriteToMemory(void *desc, void *ptr,
                                     uint64_t data) override;
+    ze_result_t appendWriteToMemory(void *desc, void *ptr,
+                                    uint64_t data, bool *requireTaskCountUpdate);
 
     ze_result_t appendWaitExternalSemaphores(uint32_t numExternalSemaphores, const ze_external_semaphore_ext_handle_t *hSemaphores,
                                              const ze_external_semaphore_wait_params_ext_t *params, ze_event_handle_t hSignalEvent,
@@ -197,7 +219,7 @@ struct CommandListCoreFamily : public CommandListImp {
     void appendWaitOnInOrderDependency(std::shared_ptr<NEO::InOrderExecInfo> &inOrderExecInfo, CommandToPatchContainer *outListCommands,
                                        uint64_t waitValue, uint32_t offset, bool relaxedOrderingAllowed, bool implicitDependency,
                                        bool skipAddingWaitEventsToResidency, bool noopDispatch, bool dualStreamCopyOffloadOperation);
-    MOCKABLE_VIRTUAL void appendSignalInOrderDependencyCounter(Event *signalEvent, bool copyOffloadOperation, bool stall, bool textureFlushRequired);
+    MOCKABLE_VIRTUAL void appendSignalInOrderDependencyCounter(Event *signalEvent, bool copyOffloadOperation, bool stall, bool textureFlushRequired, bool skipAggregatedEventSignaling);
     void handleInOrderDependencyCounter(Event *signalEvent, bool nonWalkerInOrderCmdsChaining, bool copyOffloadOperation);
     void handleInOrderCounterOverflow(bool copyOffloadOperation);
 
@@ -216,19 +238,32 @@ struct CommandListCoreFamily : public CommandListImp {
     MOCKABLE_VIRTUAL void appendSynchronizedDispatchCleanupSection();
     ze_result_t appendCommandLists(uint32_t numCommandLists, ze_command_list_handle_t *phCommandLists,
                                    ze_event_handle_t hSignalEvent, uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents) override;
-
+    ze_result_t appendHostFunction(void *pHostFunction,
+                                   void *pUserData,
+                                   void *pNext,
+                                   ze_event_handle_t hSignalEvent,
+                                   uint32_t numWaitEvents,
+                                   ze_event_handle_t *phWaitEvents) override;
     ze_result_t reserveSpace(size_t size, void **ptr) override;
     ze_result_t reset() override;
+
     size_t getReserveSshSize();
     void patchInOrderCmds() override;
     MOCKABLE_VIRTUAL bool handleCounterBasedEventOperations(Event *signalEvent, bool skipAddingEventToResidency);
     bool isCbEventBoundToCmdList(Event *event) const;
     bool kernelMemoryPrefetchEnabled() const override;
     void assignInOrderExecInfoToEvent(Event *event);
+    bool hasInOrderDependencies() const;
+    void appendSignalEventPostWalker(Event *event, void **syncCmdBuffer, CommandToPatchContainer *outTimeStampSyncCmds, bool skipBarrierForEndProfiling, bool skipAddingEventToResidency, bool copyOperation);
+    bool isUsingAdditionalBlitProperties() const { return useAdditionalBlitProperties; }
 
   protected:
-    MOCKABLE_VIRTUAL ze_result_t appendMemoryCopyKernelWithGA(void *dstPtr, NEO::GraphicsAllocation *dstPtrAlloc,
-                                                              uint64_t dstOffset, void *srcPtr,
+    void dispatchHostFunction(void *pHostFunction,
+                              void *pUserData) override;
+    void addHostFunctionToPatchCommands(uint64_t userHostFunctionAddress, uint64_t userDataAddress) override;
+
+    MOCKABLE_VIRTUAL ze_result_t appendMemoryCopyKernelWithGA(uintptr_t dstPtr, NEO::GraphicsAllocation *dstPtrAlloc,
+                                                              uint64_t dstOffset, uintptr_t srcPtr,
                                                               NEO::GraphicsAllocation *srcPtrAlloc,
                                                               uint64_t srcOffset, uint64_t size,
                                                               uint64_t elementSize, Builtin builtin,
@@ -242,7 +277,8 @@ struct CommandListCoreFamily : public CommandListImp {
                                                       NEO::GraphicsAllocation *srcPtrAlloc,
                                                       uint64_t srcOffset,
                                                       uint64_t size,
-                                                      Event *signalEvent);
+                                                      Event *signalEvent,
+                                                      CmdListMemoryCopyParams &memoryCopyParams);
 
     MOCKABLE_VIRTUAL ze_result_t appendMemoryCopyBlitRegion(AlignedAllocationData *srcAllocationData,
                                                             AlignedAllocationData *dstAllocationData,
@@ -252,14 +288,15 @@ struct CommandListCoreFamily : public CommandListImp {
                                                             size_t dstRowPitch, size_t dstSlicePitch,
                                                             const Vec3<size_t> &srcSize, const Vec3<size_t> &dstSize,
                                                             Event *signalEvent,
-                                                            uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch, bool dualStreamCopyOffload);
+                                                            uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams, bool dualStreamCopyOffload);
 
     MOCKABLE_VIRTUAL ze_result_t appendMemoryCopyKernel2d(AlignedAllocationData *dstAlignedAllocation, AlignedAllocationData *srcAlignedAllocation,
                                                           Builtin builtin, const ze_copy_region_t *dstRegion,
                                                           uint32_t dstPitch, size_t dstOffset,
                                                           const ze_copy_region_t *srcRegion, uint32_t srcPitch,
                                                           size_t srcOffset, Event *signalEvent,
-                                                          uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch);
+                                                          uint32_t numWaitEvents, ze_event_handle_t *phWaitEvents,
+                                                          bool relaxedOrderingDispatch, const bool isStateless);
 
     MOCKABLE_VIRTUAL ze_result_t appendMemoryCopyKernel3d(AlignedAllocationData *dstAlignedAllocation, AlignedAllocationData *srcAlignedAllocation,
                                                           Builtin builtin, const ze_copy_region_t *dstRegion,
@@ -267,7 +304,7 @@ struct CommandListCoreFamily : public CommandListImp {
                                                           const ze_copy_region_t *srcRegion, uint32_t srcPitch,
                                                           uint32_t srcSlicePitch, size_t srcOffset,
                                                           Event *signalEvent, uint32_t numWaitEvents,
-                                                          ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch);
+                                                          ze_event_handle_t *phWaitEvents, bool relaxedOrderingDispatch, const bool isStateless);
 
     MOCKABLE_VIRTUAL ze_result_t appendBlitFill(void *ptr, const void *pattern,
                                                 size_t patternSize, size_t size,
@@ -275,8 +312,8 @@ struct CommandListCoreFamily : public CommandListImp {
                                                 uint32_t numWaitEvents,
                                                 ze_event_handle_t *phWaitEvents, CmdListMemoryCopyParams &memoryCopyParams);
 
-    MOCKABLE_VIRTUAL ze_result_t appendCopyImageBlit(NEO::GraphicsAllocation *src,
-                                                     NEO::GraphicsAllocation *dst,
+    MOCKABLE_VIRTUAL ze_result_t appendCopyImageBlit(uintptr_t srcPtr, NEO::GraphicsAllocation *src,
+                                                     uintptr_t dstPtr, NEO::GraphicsAllocation *dst,
                                                      const Vec3<size_t> &srcOffsets, const Vec3<size_t> &dstOffsets,
                                                      size_t srcRowPitch, size_t srcSlicePitch,
                                                      size_t dstRowPitch, size_t dstSlicePitch,
@@ -330,7 +367,6 @@ struct CommandListCoreFamily : public CommandListImp {
     void writeKernelTimestamp(uint64_t baseAddr, Event *event, CommandToPatchContainer *outTimeStampSyncCmds, size_t offset, bool maskLsb, bool workloadPartition, bool copyOperation, bool isGlobalTimestamp);
     void appendEventForProfiling(Event *event, CommandToPatchContainer *outTimeStampSyncCmds, bool beforeWalker, bool skipBarrierForEndProfiling, bool skipAddingEventToResidency, bool copyOperation);
     void appendEventForProfilingCopyCommand(Event *event, bool beforeWalker);
-    void appendSignalEventPostWalker(Event *event, void **syncCmdBuffer, CommandToPatchContainer *outTimeStampSyncCmds, bool skipBarrierForEndProfiling, bool skipAddingEventToResidency, bool copyOperation);
     void programStateBaseAddress(NEO::CommandContainer &container, bool useSbaProperties);
     virtual void programStateBaseAddressHook(size_t cmdBufferOffset, bool surfaceBaseAddressModify) {
     }
@@ -345,7 +381,7 @@ struct CommandListCoreFamily : public CommandListImp {
     uint32_t getRegionOffsetForAppendMemoryCopyBlitRegion(AlignedAllocationData *allocationData);
     void handlePostSubmissionState();
 
-    MOCKABLE_VIRTUAL void setAdditionalBlitProperties(NEO::BlitProperties &blitProperties, Event *signalEvent, bool useAdditionalTimestamp);
+    MOCKABLE_VIRTUAL void setAdditionalBlitProperties(NEO::BlitProperties &blitProperties, Event *signalEvent, uint64_t forceAggregatedEventIncValue, bool useAdditionalTimestamp);
 
     void setupFillKernelArguments(size_t baseOffset,
                                   size_t patternSize,
@@ -369,7 +405,6 @@ struct CommandListCoreFamily : public CommandListImp {
     void dispatchEventPostSyncOperation(Event *event, void **syncCmdBuffer, CommandToPatchContainer *outListCommands, uint32_t value, bool omitFirstOperation, bool useMax, bool useLastPipeControl,
                                         bool skipPartitionOffsetProgramming, bool copyOperation);
 
-    bool isAllocationImported(NEO::GraphicsAllocation *gpuAllocation, NEO::SVMAllocsManager *svmManager) const;
     static constexpr bool checkIfAllocationImportedRequired();
 
     bool isKernelUncachedMocsRequired(bool kernelState);
@@ -388,7 +423,6 @@ struct CommandListCoreFamily : public CommandListImp {
     bool handleInOrderImplicitDependencies(bool relaxedOrderingAllowed, bool dualStreamCopyOffloadOperation);
     bool isQwordInOrderCounter() const { return GfxFamily::isQwordInOrderCounter; }
     bool isInOrderNonWalkerSignalingRequired(const Event *event) const;
-    bool hasInOrderDependencies() const;
     void appendFullSynchronizedDispatchInit();
     void addPatchScratchAddressInImplicitArgs(CommandsToPatch &commandsToPatch, NEO::EncodeDispatchKernelArgs &args, const NEO::KernelDescriptor &kernelDescriptor, bool kernelNeedsImplicitArgs);
     size_t addCmdForPatching(std::shared_ptr<NEO::InOrderExecInfo> *externalInOrderExecInfo, void *cmd1, void *cmd2, uint64_t counterValue, NEO::InOrderPatchCommandHelpers::PatchCmdType patchCmdType);
@@ -406,18 +440,33 @@ struct CommandListCoreFamily : public CommandListImp {
     bool singleEventPacketRequired(bool inputSinglePacketEventRequest) const;
     void programEventL3Flush(Event *event);
     virtual ze_result_t flushInOrderCounterSignal(bool waitOnInOrderCounterRequired) { return ZE_RESULT_SUCCESS; };
-    bool isCopyOffloadAllowed(const NEO::GraphicsAllocation &srcAllocation, const NEO::GraphicsAllocation &dstAllocation) const;
+    bool isCopyOffloadAllowed(const NEO::GraphicsAllocation *srcAllocation, const NEO::GraphicsAllocation *dstAllocation) const;
+    bool isSharedSystemEnabled() const;
+    void emitMemAdviseForSystemCopy(const AlignedAllocationData &allocationStruct, size_t size);
     void setAdditionalKernelLaunchParams(CmdListKernelLaunchParams &launchParams, Kernel &kernel) const;
     void dispatchInOrderPostOperationBarrier(Event *signalOperation, bool dcFlushRequired, bool copyOperation);
     NEO::GraphicsAllocation *getDeviceCounterAllocForResidency(NEO::GraphicsAllocation *counterDeviceAlloc);
     bool isHighPriorityImmediateCmdList() const;
     void prefetchKernelMemory(NEO::LinearStream &cmdStream, const Kernel &kernel, const NEO::GraphicsAllocation *iohAllocation, size_t iohOffset, CommandToPatchContainer *outListCommands, uint64_t cmdId);
-    virtual void addKernelIsaMemoryPrefetchPadding(NEO::LinearStream &cmdStream, const Kernel &kernel, uint64_t cmdId) {}
+    virtual void addKernelIsaMemoryPrefetchPadding(NEO::LinearStream &cmdStream, const Kernel &kernel, uint32_t isaPrefetchSizeLimit, uint64_t cmdId) {}
     virtual void addKernelIndirectDataMemoryPrefetchPadding(NEO::LinearStream &cmdStream, const Kernel &kernel, uint64_t cmdId) {}
     virtual uint64_t getPrefetchCmdId() const { return std::numeric_limits<uint64_t>::max(); }
     virtual uint32_t getIohSizeForPrefetch(const Kernel &kernel, uint32_t reserveExtraSpace) const;
     virtual void ensureCmdBufferSpaceForPrefetch() {}
     bool transferDirectionRequiresBcsSplit(NEO::TransferDirection direction) const;
+    std::optional<SWTagScope<GfxFamily>> emplaceSWTagScope(const char *callName);
+
+    template <typename Container>
+    void addResidency(const Container &allocs) {
+        for (auto alloc : allocs) {
+            this->commandContainer.addToResidencyContainer(alloc);
+        }
+    }
+    template <typename... T>
+        requires(std::convertible_to<T, NEO::GraphicsAllocation *> && ...)
+    void addResidency(T... alloc) {
+        (this->commandContainer.addToResidencyContainer(alloc), ...);
+    }
 
     NEO::InOrderPatchCommandsContainer<GfxFamily> inOrderPatchCmds;
 
@@ -430,6 +479,7 @@ struct CommandListCoreFamily : public CommandListImp {
     bool implicitSynchronizedDispatchForCooperativeKernelsAllowed = false;
     bool useAdditionalBlitProperties = false;
     bool isPostImageWriteFlushRequired = false;
+    bool latestFlushIsDualCopyOffload = false;
 };
 
 template <PRODUCT_FAMILY gfxProductFamily>

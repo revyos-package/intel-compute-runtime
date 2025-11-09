@@ -7,6 +7,7 @@
 
 #include "shared/source/command_container/encode_surface_state.h"
 #include "shared/source/command_stream/csr_definitions.h"
+#include "shared/source/command_stream/host_function.h"
 #include "shared/source/command_stream/scratch_space_controller.h"
 #include "shared/source/helpers/api_specific_config.h"
 #include "shared/source/helpers/cache_policy.h"
@@ -164,7 +165,8 @@ void CommandQueueHw<gfxCoreFamily>::handleScratchSpace(NEO::HeapContainer &sshHe
 
 template <GFXCORE_FAMILY gfxCoreFamily>
 void CommandQueueHw<gfxCoreFamily>::patchCommands(CommandList &commandList, uint64_t scratchAddress,
-                                                  bool patchNewScratchController) {
+                                                  bool patchNewScratchController,
+                                                  void **patchPreambleBuffer) {
     using MI_SEMAPHORE_WAIT = typename GfxFamily::MI_SEMAPHORE_WAIT;
     using COMPARE_OPERATION = typename GfxFamily::MI_SEMAPHORE_WAIT::COMPARE_OPERATION;
 
@@ -181,7 +183,11 @@ void CommandQueueHw<gfxCoreFamily>::patchCommands(CommandList &commandList, uint
                 cfeStateCmd->setScratchSpaceBuffer(lowScratchAddress);
                 NEO::PreambleHelper<GfxFamily>::setSingleSliceDispatchMode(cfeStateCmd, false);
 
-                *reinterpret_cast<CFE_STATE *>(commandToPatch.pDestination) = *cfeStateCmd;
+                if (this->patchingPreamble) {
+                    NEO::EncodeDataMemory<GfxFamily>::programDataMemory(*patchPreambleBuffer, commandToPatch.gpuAddress, commandToPatch.pCommand, sizeof(CFE_STATE));
+                } else {
+                    *reinterpret_cast<CFE_STATE *>(commandToPatch.pDestination) = *cfeStateCmd;
+                }
                 break;
             } else {
                 UNRECOVERABLE_IF(true);
@@ -243,8 +249,13 @@ void CommandQueueHw<gfxCoreFamily>::patchCommands(CommandList &commandList, uint
             }
 
             uint64_t fullScratchAddress = scratchAddress + commandToPatch.baseAddress;
-            void *scratchAddressPatch = ptrOffset(commandToPatch.pDestination, commandToPatch.offset);
-            std::memcpy(scratchAddressPatch, &fullScratchAddress, commandToPatch.patchSize);
+            if (this->patchingPreamble) {
+                uint64_t gpuAddressToPatch = commandToPatch.gpuAddress + commandToPatch.offset;
+                NEO::EncodeDataMemory<GfxFamily>::programDataMemory(*patchPreambleBuffer, gpuAddressToPatch, &fullScratchAddress, commandToPatch.patchSize);
+            } else {
+                void *scratchAddressPatch = ptrOffset(commandToPatch.pDestination, commandToPatch.offset);
+                std::memcpy(scratchAddressPatch, &fullScratchAddress, commandToPatch.patchSize);
+            }
             commandToPatch.scratchAddressAfterPatch = scratchAddress;
             break;
         }
@@ -253,17 +264,43 @@ void CommandQueueHw<gfxCoreFamily>::patchCommands(CommandList &commandList, uint
                 continue;
             }
             uint64_t fullScratchAddress = scratchAddress + commandToPatch.baseAddress;
-            void *scratchAddressPatch = ptrOffset(commandToPatch.pDestination, commandToPatch.offset);
-            std::memcpy(scratchAddressPatch, &fullScratchAddress, commandToPatch.patchSize);
+            if (this->patchingPreamble) {
+                uint64_t gpuAddressToPatch = commandToPatch.gpuAddress + commandToPatch.offset;
+                NEO::EncodeDataMemory<GfxFamily>::programDataMemory(*patchPreambleBuffer, gpuAddressToPatch, &fullScratchAddress, commandToPatch.patchSize);
+            } else {
+                void *scratchAddressPatch = ptrOffset(commandToPatch.pDestination, commandToPatch.offset);
+                std::memcpy(scratchAddressPatch, &fullScratchAddress, commandToPatch.patchSize);
+            }
             commandToPatch.scratchAddressAfterPatch = scratchAddress;
             break;
         }
         case CommandToPatch::NoopSpace: {
             if (commandToPatch.pDestination != nullptr) {
-                memset(commandToPatch.pDestination, 0, commandToPatch.patchSize);
+                if (this->patchingPreamble) {
+                    NEO::EncodeDataMemory<GfxFamily>::programNoop(*patchPreambleBuffer, commandToPatch.gpuAddress, commandToPatch.patchSize);
+                } else {
+                    memset(commandToPatch.pDestination, 0, commandToPatch.patchSize);
+                }
             }
             break;
         }
+        case CommandToPatch::HostFunctionEntry:
+            csr->ensureHostFunctionDataInitialization();
+            csr->makeResidentHostFunctionAllocation();
+            NEO::HostFunctionHelper::programHostFunctionAddress<GfxFamily>(nullptr, commandToPatch.pCommand, csr->getHostFunctionData(), commandToPatch.baseAddress);
+            break;
+
+        case CommandToPatch::HostFunctionUserData:
+            NEO::HostFunctionHelper::programHostFunctionUserData<GfxFamily>(nullptr, commandToPatch.pCommand, csr->getHostFunctionData(), commandToPatch.baseAddress);
+            break;
+
+        case CommandToPatch::HostFunctionSignalInternalTag:
+            NEO::HostFunctionHelper::programSignalHostFunctionStart<GfxFamily>(nullptr, commandToPatch.pCommand, csr->getHostFunctionData());
+            break;
+
+        case CommandToPatch::HostFunctionWaitInternalTag:
+            NEO::HostFunctionHelper::programWaitForHostFunctionCompletion<GfxFamily>(nullptr, commandToPatch.pCommand, csr->getHostFunctionData());
+            break;
         default:
             UNRECOVERABLE_IF(true);
         }

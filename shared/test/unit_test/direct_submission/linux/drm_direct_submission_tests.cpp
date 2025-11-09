@@ -79,7 +79,6 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::completionFenceValue;
     using BaseClass::currentRingBuffer;
     using BaseClass::currentTagData;
-    using BaseClass::disableMonitorFence;
     using BaseClass::dispatchMonitorFenceRequired;
     using BaseClass::dispatchSwitchRingBufferSection;
     using BaseClass::DrmDirectSubmission;
@@ -96,7 +95,6 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::handleResidency;
     using BaseClass::handleSwitchRingBuffers;
     using BaseClass::immWritePostSyncOffset;
-    using BaseClass::inputMonitorFenceDispatchRequirement;
     using BaseClass::isCompleted;
     using BaseClass::isDisablePrefetcherRequired;
     using BaseClass::isNewResourceHandleNeeded;
@@ -110,7 +108,6 @@ struct MockDrmDirectSubmission : public DrmDirectSubmission<GfxFamily, Dispatche
     using BaseClass::ringBuffers;
     using BaseClass::ringStart;
     using BaseClass::rootDeviceEnvironment;
-    using BaseClass::sfenceMode;
     using BaseClass::submit;
     using BaseClass::switchRingBuffers;
     using BaseClass::tagAddress;
@@ -325,7 +322,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenPciBarrierWhenCreateDirectSubmissionThenP
     MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> directSubmission(commandStreamReceiver);
 
     EXPECT_NE(nullptr, directSubmission.pciBarrierPtr);
-    EXPECT_NE(DirectSubmissionSfenceMode::disabled, directSubmission.sfenceMode);
     EXPECT_FALSE(directSubmission.miMemFenceRequired);
 
     SysCalls::munmap(ptr, MemoryConstants::pageSize);
@@ -346,7 +342,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenPciBarrierWhenCreateDirectSubmissionAndMm
     MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> directSubmission(commandStreamReceiver);
 
     EXPECT_EQ(nullptr, directSubmission.pciBarrierPtr);
-    EXPECT_NE(DirectSubmissionSfenceMode::disabled, directSubmission.sfenceMode);
     auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isAcquireGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
     EXPECT_EQ(directSubmission.miMemFenceRequired, expectMiMemFence);
 
@@ -367,7 +362,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenPciBarrierDisabledWhenCreateDirectSubmiss
     MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> directSubmission(commandStreamReceiver);
 
     EXPECT_EQ(nullptr, directSubmission.pciBarrierPtr);
-    EXPECT_NE(DirectSubmissionSfenceMode::disabled, directSubmission.sfenceMode);
     auto expectMiMemFence = device->getHardwareInfo().capabilityTable.isIntegratedDevice ? false : device->getRootDeviceEnvironment().getHelper<ProductHelper>().isAcquireGlobalFenceInDirectSubmissionRequired(device->getHardwareInfo());
     EXPECT_EQ(directSubmission.miMemFenceRequired, expectMiMemFence);
 
@@ -741,7 +735,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenDisabledMonitorFenceWhenDispatchSwitchRin
     using Dispatcher = RenderDispatcher<FamilyType>;
 
     MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    directSubmission.disableMonitorFence = true;
     directSubmission.ringStart = true;
 
     bool ret = directSubmission.allocateResources();
@@ -766,7 +759,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenDisabledMonitorFenceWhenUpdateTagValueThe
     using Dispatcher = RenderDispatcher<FamilyType>;
 
     MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    directSubmission.disableMonitorFence = true;
     directSubmission.ringStart = true;
 
     bool ret = directSubmission.allocateResources();
@@ -1216,127 +1208,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenEnableRingSwitchTa
     drmDirectSubmission.ringStart = false;
 }
 
-HWTEST_F(DrmDirectSubmissionTest, givenDrmDirectSubmissionWhenGettingDefaultInputMonitorFencePolicyThenDefaultIsTrue) {
-    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    EXPECT_TRUE(drmDirectSubmission.inputMonitorFenceDispatchRequirement);
-}
-
-HWTEST_F(DrmDirectSubmissionTest,
-         givenDrmDirectSubmissionWithStallingCommandInputMonitorFencePolicyWhenDispatchingWorkloadWithDisabledMonitorFenceThenDrmIgnoresInputFlag) {
-    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
-    using POST_SYNC_OPERATION = typename FamilyType::PIPE_CONTROL::POST_SYNC_OPERATION;
-
-    DebugManagerStateRestore dbgRestorer;
-    debugManager.flags.DirectSubmissionMonitorFenceInputPolicy.set(0);
-
-    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    EXPECT_FALSE(drmDirectSubmission.inputMonitorFenceDispatchRequirement);
-    drmDirectSubmission.disableMonitorFence = true;
-
-    FlushStampTracker flushStamp(true);
-
-    EXPECT_TRUE(drmDirectSubmission.initialize(false));
-
-    BatchBuffer batchBuffer = {};
-    GraphicsAllocation *commandBuffer = nullptr;
-    LinearStream stream;
-
-    const AllocationProperties commandBufferProperties{device->getRootDeviceIndex(), 0x1000,
-                                                       AllocationType::commandBuffer, device->getDeviceBitfield()};
-    commandBuffer = executionEnvironment.memoryManager->allocateGraphicsMemoryWithProperties(commandBufferProperties);
-
-    stream.replaceGraphicsAllocation(commandBuffer);
-    stream.replaceBuffer(commandBuffer->getUnderlyingBuffer(), commandBuffer->getUnderlyingBufferSize());
-    stream.getSpace(0x20);
-
-    memset(stream.getCpuBase(), 0, 0x20);
-
-    batchBuffer.endCmdPtr = ptrOffset(stream.getCpuBase(), 0x20);
-    batchBuffer.commandBufferAllocation = commandBuffer;
-    batchBuffer.usedSize = 0x40;
-    batchBuffer.taskStartAddress = 0x881112340000;
-    batchBuffer.stream = &stream;
-    batchBuffer.hasStallingCmds = true;
-
-    EXPECT_TRUE(drmDirectSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
-
-    HardwareParse hwParse;
-    hwParse.parsePipeControl = true;
-    hwParse.parseCommands<FamilyType>(drmDirectSubmission.ringCommandStream, 0);
-    hwParse.findHardwareCommands<FamilyType>();
-
-    bool foundFenceUpdate = false;
-    for (auto &it : hwParse.pipeControlList) {
-        PIPE_CONTROL *pipeControl = reinterpret_cast<PIPE_CONTROL *>(it);
-        if (pipeControl->getPostSyncOperation() == POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA) {
-            foundFenceUpdate = true;
-            break;
-        }
-    }
-    EXPECT_FALSE(foundFenceUpdate);
-
-    executionEnvironment.memoryManager->freeGraphicsMemory(commandBuffer);
-    *drmDirectSubmission.tagAddress = 1;
-}
-
-HWTEST_F(DrmDirectSubmissionTest,
-         givenDrmDirectSubmissionWithExplicitFlagInputMonitorFencePolicyWhenDispatchingWorkloadWithDisabledMonitorFenceThenDrmIgnoresInputFlag) {
-    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
-    using POST_SYNC_OPERATION = typename FamilyType::PIPE_CONTROL::POST_SYNC_OPERATION;
-
-    DebugManagerStateRestore dbgRestorer;
-    debugManager.flags.DirectSubmissionMonitorFenceInputPolicy.set(1);
-
-    MockDrmDirectSubmission<FamilyType, RenderDispatcher<FamilyType>> drmDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    EXPECT_TRUE(drmDirectSubmission.inputMonitorFenceDispatchRequirement);
-    drmDirectSubmission.disableMonitorFence = true;
-
-    FlushStampTracker flushStamp(true);
-
-    EXPECT_TRUE(drmDirectSubmission.initialize(false));
-
-    BatchBuffer batchBuffer = {};
-    GraphicsAllocation *commandBuffer = nullptr;
-    LinearStream stream;
-
-    const AllocationProperties commandBufferProperties{device->getRootDeviceIndex(), 0x1000,
-                                                       AllocationType::commandBuffer, device->getDeviceBitfield()};
-    commandBuffer = executionEnvironment.memoryManager->allocateGraphicsMemoryWithProperties(commandBufferProperties);
-
-    stream.replaceGraphicsAllocation(commandBuffer);
-    stream.replaceBuffer(commandBuffer->getUnderlyingBuffer(), commandBuffer->getUnderlyingBufferSize());
-    stream.getSpace(0x20);
-
-    memset(stream.getCpuBase(), 0, 0x20);
-
-    batchBuffer.endCmdPtr = ptrOffset(stream.getCpuBase(), 0x20);
-    batchBuffer.commandBufferAllocation = commandBuffer;
-    batchBuffer.usedSize = 0x40;
-    batchBuffer.taskStartAddress = 0x881112340000;
-    batchBuffer.stream = &stream;
-    batchBuffer.dispatchMonitorFence = true;
-
-    EXPECT_TRUE(drmDirectSubmission.dispatchCommandBuffer(batchBuffer, flushStamp));
-
-    HardwareParse hwParse;
-    hwParse.parsePipeControl = true;
-    hwParse.parseCommands<FamilyType>(drmDirectSubmission.ringCommandStream, 0);
-    hwParse.findHardwareCommands<FamilyType>();
-
-    bool foundFenceUpdate = false;
-    for (auto &it : hwParse.pipeControlList) {
-        PIPE_CONTROL *pipeControl = reinterpret_cast<PIPE_CONTROL *>(it);
-        if (pipeControl->getPostSyncOperation() == POST_SYNC_OPERATION::POST_SYNC_OPERATION_WRITE_IMMEDIATE_DATA) {
-            foundFenceUpdate = true;
-            break;
-        }
-    }
-    EXPECT_FALSE(foundFenceUpdate);
-
-    executionEnvironment.memoryManager->freeGraphicsMemory(commandBuffer);
-    *drmDirectSubmission.tagAddress = 1;
-}
-
 HWTEST_F(DrmDirectSubmissionTest, givenGpuHangWhenWaitCalledThenGpuHangDetected) {
     using Dispatcher = RenderDispatcher<FamilyType>;
 
@@ -1362,55 +1233,6 @@ HWTEST_F(DrmDirectSubmissionTest, givenGpuHangWhenWaitCalledThenGpuHangDetected)
     EXPECT_EQ(1, drm->ioctlCount.getResetStats);
 }
 
-HWTEST_F(DrmDirectSubmissionTest,
-         givenDirectSubmissionDisableMonitorFenceWhenStopRingIsCalledThenExpectStopCommandAndMonitorFenceDispatched) {
-    using PIPE_CONTROL = typename FamilyType::PIPE_CONTROL;
-    using MI_BATCH_BUFFER_END = typename FamilyType::MI_BATCH_BUFFER_END;
-    using Dispatcher = RenderDispatcher<FamilyType>;
-
-    MockDrmDirectSubmission<FamilyType, Dispatcher> regularDirectSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    regularDirectSubmission.disableMonitorFence = false;
-    size_t regularSizeEnd = regularDirectSubmission.getSizeEnd(false);
-
-    MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
-    directSubmission.setTagAddressValue = true;
-    bool ret = directSubmission.allocateResources();
-    directSubmission.ringStart = true;
-
-    EXPECT_TRUE(ret);
-
-    size_t tagUpdateSize = Dispatcher::getSizeMonitorFence(directSubmission.rootDeviceEnvironment);
-
-    size_t disabledSizeEnd = directSubmission.getSizeEnd(false);
-    EXPECT_EQ(disabledSizeEnd, regularSizeEnd + tagUpdateSize);
-
-    directSubmission.tagValueSetValue = 0x4343123ull;
-    directSubmission.tagAddressSetValue = 0xBEEF00000ull;
-    directSubmission.stopRingBuffer(false);
-    size_t expectedDispatchSize = disabledSizeEnd;
-    EXPECT_LE(directSubmission.ringCommandStream.getUsed(), expectedDispatchSize);
-    EXPECT_GE(directSubmission.ringCommandStream.getUsed() + MemoryConstants::cacheLineSize, expectedDispatchSize);
-
-    HardwareParse hwParse;
-    hwParse.parsePipeControl = true;
-    hwParse.parseCommands<FamilyType>(directSubmission.ringCommandStream, 0);
-    hwParse.findHardwareCommands<FamilyType>();
-    MI_BATCH_BUFFER_END *bbEnd = hwParse.getCommand<MI_BATCH_BUFFER_END>();
-    EXPECT_NE(nullptr, bbEnd);
-
-    bool foundFenceUpdate = false;
-    for (auto it = hwParse.pipeControlList.begin(); it != hwParse.pipeControlList.end(); it++) {
-        auto pipeControl = genCmdCast<PIPE_CONTROL *>(*it);
-        uint64_t data = pipeControl->getImmediateData();
-        if ((directSubmission.tagAddressSetValue == NEO::UnitTestHelper<FamilyType>::getPipeControlPostSyncAddress(*pipeControl)) &&
-            (directSubmission.tagValueSetValue == data)) {
-            foundFenceUpdate = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(foundFenceUpdate);
-}
-
 HWTEST2_F(DrmDirectSubmissionTest, givenRelaxedOrderingSchedulerRequiredWhenAskingForCmdsSizeThenReturnCorrectValue, IsAtLeastXeHpcCore) {
     using Dispatcher = RenderDispatcher<FamilyType>;
     MockDrmDirectSubmission<FamilyType, Dispatcher> directSubmission(*device->getDefaultEngine().commandStreamReceiver);
@@ -1429,13 +1251,8 @@ HWTEST2_F(DrmDirectSubmissionTest, givenRelaxedOrderingSchedulerRequiredWhenAski
     EXPECT_EQ(expectedBaseSemaphoreSectionSize + EncodeSemaphore<FamilyType>::getSizeMiSemaphoreWait(), directSubmission.getSizeSemaphoreSection(false));
 
     size_t expectedBaseEndSize = Dispatcher::getSizeStopCommandBuffer() +
-                                 Dispatcher::getSizeCacheFlush(directSubmission.rootDeviceEnvironment) +
                                  (Dispatcher::getSizeStartCommandBuffer() - Dispatcher::getSizeStopCommandBuffer()) +
-                                 MemoryConstants::cacheLineSize;
-    if (directSubmission.disableMonitorFence) {
-        expectedBaseEndSize += Dispatcher::getSizeMonitorFence(device->getRootDeviceEnvironment());
-    }
-
+                                 MemoryConstants::cacheLineSize + Dispatcher::getSizeMonitorFence(device->getRootDeviceEnvironment());
     EXPECT_EQ(expectedBaseEndSize + directSubmission.getSizeDispatchRelaxedOrderingQueueStall(), directSubmission.getSizeEnd(true));
     EXPECT_EQ(expectedBaseEndSize, directSubmission.getSizeEnd(false));
 }

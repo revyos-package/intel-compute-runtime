@@ -69,17 +69,25 @@ class BuiltInTests
     }
 
     void SetUp() override {
-        USE_REAL_FILE_SYSTEM();
-
         debugManager.flags.ForceAuxTranslationMode.set(static_cast<int32_t>(AuxTranslationMode::builtin));
         ClDeviceFixture::setUp();
         cl_device_id device = pClDevice;
         ContextFixture::setUp(1, &device);
         BuiltInFixture::setUp(pDevice);
+        auto &compilerProductHelper = pClDevice->getCompilerProductHelper();
+        bool heaplessAllowed = compilerProductHelper.isHeaplessModeEnabled(pClDevice->getHardwareInfo());
+        bool isForceStateless = compilerProductHelper.isForceToStatelessRequired();
+        copyBufferToBufferBuiltin = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(isForceStateless, heaplessAllowed);
     }
 
     void TearDown() override {
         allBuiltIns.clear();
+        auto builders = pClExecutionEnvironment->peekBuilders(pClDevice->getRootDeviceIndex());
+        if (builders) {
+            for (uint32_t i = 0; i < static_cast<uint32_t>(EBuiltInOps::count); ++i) {
+                builders[i].first.reset();
+            }
+        }
         BuiltInFixture::tearDown();
         ContextFixture::tearDown();
         ClDeviceFixture::tearDown();
@@ -117,6 +125,7 @@ class BuiltInTests
                left.srcMemObj == right.srcMemObj;
     }
 
+    EBuiltInOps::Type copyBufferToBufferBuiltin;
     DebugManagerStateRestore restore;
     std::string allBuiltIns;
 };
@@ -133,13 +142,6 @@ struct AuxBuiltinsMatcher {
     template <PRODUCT_FAMILY productFamily>
     static constexpr bool isMatched() {
         return TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::auxBuiltinsSupported;
-    }
-};
-
-struct HeaplessSupportedMatcher {
-    template <PRODUCT_FAMILY productFamily>
-    static constexpr bool isMatched() {
-        return TestTraits<NEO::ToGfxCoreFamily<productFamily>::get()>::heaplessAllowed;
     }
 };
 
@@ -272,8 +274,7 @@ TEST_F(BuiltInTests, WhenBuildingListOfBuiltinsThenBuiltinsHaveBeenGenerated) {
 }
 
 TEST_F(BuiltInTests, GivenCopyBufferToSystemMemoryBufferWhenDispatchInfoIsCreatedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     MockBuffer *srcPtr = new MockBuffer();
     MockBuffer *dstPtr = new MockBuffer();
@@ -340,8 +341,7 @@ TEST_F(BuiltInTests, GivenCopyBufferToSystemMemoryBufferWhenDispatchInfoIsCreate
 }
 
 TEST_F(BuiltInTests, GivenCopyBufferToLocalMemoryBufferWhenDispatchInfoIsCreatedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     MockBuffer *srcPtr = new MockBuffer();
     MockBuffer *dstPtr = new MockBuffer();
@@ -562,8 +562,7 @@ HWTEST2_P(AuxBuiltInTests, givenInvalidAuxTranslationDirectionWhenBuildingDispat
     EXPECT_THROW(builder.buildDispatchInfosForAuxTranslation<FamilyType>(multiDispatchInfo, builtinOpsParams), std::exception);
 }
 
-TEST_F(BuiltInTests, whenAuxBuiltInIsConstructedThenResizeKernelInstancedTo5) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(BuiltInTests, whenAuxBuiltInIsConstructedThenResizeKernelInstancedTo5, AuxBuiltinsMatcher) {
     MockAuxBuilInOp mockAuxBuiltInOp(*pBuiltIns, *pClDevice);
     EXPECT_EQ(5u, mockAuxBuiltInOp.convertToAuxKernel.size());
     EXPECT_EQ(5u, mockAuxBuiltInOp.convertToNonAuxKernel.size());
@@ -594,8 +593,7 @@ HWTEST2_P(AuxBuiltInTests, givenMoreKernelObjectsForAuxTranslationThanKernelInst
     EXPECT_EQ(7u, mockAuxBuiltInOp.convertToNonAuxKernel.size());
 }
 
-TEST_F(BuiltInTests, givenkAuxBuiltInWhenResizeIsCalledThenCloneAllNewInstancesFromBaseKernel) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(BuiltInTests, givenAuxBuiltInWhenResizeIsCalledThenCloneAllNewInstancesFromBaseKernel, AuxBuiltinsMatcher) {
     MockAuxBuilInOp mockAuxBuiltInOp(*pBuiltIns, *pClDevice);
     size_t newSize = mockAuxBuiltInOp.convertToAuxKernel.size() + 3;
     mockAuxBuiltInOp.resizeKernelInstances(newSize);
@@ -837,8 +835,7 @@ HWTEST2_P(AuxBuiltInTests, givenNonAuxToAuxTranslationWhenSettingSurfaceStateThe
 }
 
 TEST_F(BuiltInTests, GivenCopyBufferToBufferWhenDispatchInfoIsCreatedThenSizeIsAlignedToCachLineSize) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     AlignedBuffer src;
     AlignedBuffer dst;
@@ -1175,36 +1172,7 @@ HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderCopyImageToBufferHeaplessIsUsedTh
     EXPECT_TRUE(compareBuiltinOpParams(multiDispatchInfo.peekBuiltinOpParams(), dc));
 }
 
-HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderCopyImageToImageHeaplessIsUsedThenParamsAreCorrect) {
-    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-    bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
-    if (!heaplessAllowed) {
-        GTEST_SKIP();
-    }
-    std ::unique_ptr<Image> srcImage(Image2dHelperUlt<>::create(pContext));
-    std ::unique_ptr<Image> dstImage(Image2dHelperUlt<>::create(pContext));
-
-    ASSERT_NE(nullptr, srcImage.get());
-    ASSERT_NE(nullptr, dstImage.get());
-
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyImageToImage3dHeapless, *pClDevice);
-
-    BuiltinOpParams dc;
-    dc.srcMemObj = srcImage.get();
-    dc.dstMemObj = dstImage.get();
-
-    dc.srcOffset = {0, 0, 0};
-    dc.dstOffset = {0, 0, 0};
-    dc.size = {1, 1, 1};
-
-    MultiDispatchInfo multiDispatchInfo(dc);
-    EXPECT_TRUE(builder.buildDispatchInfos(multiDispatchInfo));
-    EXPECT_EQ(1u, multiDispatchInfo.size());
-    EXPECT_TRUE(compareBuiltinOpParams(multiDispatchInfo.peekBuiltinOpParams(), dc));
-}
-
 HWTEST_F(BuiltInTests, WhenBuilderCopyImageToImageIsUsedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
 
     std ::unique_ptr<Image> srcImage(Image2dHelperUlt<>::create(pContext));
@@ -1213,38 +1181,15 @@ HWTEST_F(BuiltInTests, WhenBuilderCopyImageToImageIsUsedThenParamsAreCorrect) {
     ASSERT_NE(nullptr, srcImage.get());
     ASSERT_NE(nullptr, dstImage.get());
 
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyImageToImage3d, *pClDevice);
+    auto &compilerProductHelper = pClDevice->getCompilerProductHelper();
+    bool heaplessAllowed = compilerProductHelper.isHeaplessModeEnabled(pClDevice->getHardwareInfo());
+    auto builtin = EBuiltInOps::adjustImageBuiltinType<EBuiltInOps::copyImageToImage3d>(heaplessAllowed);
+    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtin, *pClDevice);
 
     BuiltinOpParams dc;
     dc.srcMemObj = srcImage.get();
     dc.dstMemObj = dstImage.get();
 
-    dc.srcOffset = {0, 0, 0};
-    dc.dstOffset = {0, 0, 0};
-    dc.size = {1, 1, 1};
-
-    MultiDispatchInfo multiDispatchInfo(dc);
-    EXPECT_TRUE(builder.buildDispatchInfos(multiDispatchInfo));
-    EXPECT_EQ(1u, multiDispatchInfo.size());
-    EXPECT_TRUE(compareBuiltinOpParams(multiDispatchInfo.peekBuiltinOpParams(), dc));
-}
-
-HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderFillImageHeaplessIsUsedThenParamsAreCorrect) {
-    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-
-    bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
-    if (!heaplessAllowed) {
-        GTEST_SKIP();
-    }
-    MockBuffer fillColor;
-    std ::unique_ptr<Image> image(Image2dHelperUlt<>::create(pContext));
-    ASSERT_NE(nullptr, image.get());
-
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::fillImage3dHeapless, *pClDevice);
-
-    BuiltinOpParams dc;
-    dc.srcPtr = &fillColor;
-    dc.dstMemObj = image.get();
     dc.srcOffset = {0, 0, 0};
     dc.dstOffset = {0, 0, 0};
     dc.size = {1, 1, 1};
@@ -1257,38 +1202,14 @@ HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderFillImageHeaplessIsUsedThenParams
 
 HWTEST_F(BuiltInTests, WhenBuilderFillImageIsUsedThenParamsAreCorrect) {
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-    USE_REAL_FILE_SYSTEM();
     MockBuffer fillColor;
     std ::unique_ptr<Image> image(Image2dHelperUlt<>::create(pContext));
     ASSERT_NE(nullptr, image.get());
 
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::fillImage3d, *pClDevice);
-
-    BuiltinOpParams dc;
-    dc.srcPtr = &fillColor;
-    dc.dstMemObj = image.get();
-    dc.srcOffset = {0, 0, 0};
-    dc.dstOffset = {0, 0, 0};
-    dc.size = {1, 1, 1};
-
-    MultiDispatchInfo multiDispatchInfo(dc);
-    EXPECT_TRUE(builder.buildDispatchInfos(multiDispatchInfo));
-    EXPECT_EQ(1u, multiDispatchInfo.size());
-    EXPECT_TRUE(compareBuiltinOpParams(multiDispatchInfo.peekBuiltinOpParams(), dc));
-}
-
-HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderFillImage1dBufferHeaplessIsUsedThenParamsAreCorrect) {
-    REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-
-    bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
-    if (!heaplessAllowed) {
-        GTEST_SKIP();
-    }
-    MockBuffer fillColor;
-    std ::unique_ptr<Image> image(Image1dBufferHelperUlt<>::create(pContext));
-    ASSERT_NE(nullptr, image.get());
-
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::fillImage1dBufferHeapless, *pClDevice);
+    auto &compilerProductHelper = pClDevice->getCompilerProductHelper();
+    bool heaplessAllowed = compilerProductHelper.isHeaplessModeEnabled(pClDevice->getHardwareInfo());
+    auto builtin = EBuiltInOps::adjustImageBuiltinType<EBuiltInOps::fillImage3d>(heaplessAllowed);
+    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtin, *pClDevice);
 
     BuiltinOpParams dc;
     dc.srcPtr = &fillColor;
@@ -1305,12 +1226,14 @@ HWTEST_F(BuiltInTests, givenHeaplessWhenBuilderFillImage1dBufferHeaplessIsUsedTh
 
 HWTEST_F(BuiltInTests, WhenBuilderFillImage1dBufferIsUsedThenParamsAreCorrect) {
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
-    USE_REAL_FILE_SYSTEM();
     MockBuffer fillColor;
     std ::unique_ptr<Image> image(Image1dBufferHelperUlt<>::create(pContext));
     ASSERT_NE(nullptr, image.get());
 
-    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::fillImage1dBuffer, *pClDevice);
+    auto &compilerProductHelper = pClDevice->getCompilerProductHelper();
+    bool heaplessAllowed = compilerProductHelper.isHeaplessModeEnabled(pClDevice->getHardwareInfo());
+    auto builtin = EBuiltInOps::adjustImageBuiltinType<EBuiltInOps::fillImage1dBuffer>(heaplessAllowed);
+    auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(builtin, *pClDevice);
 
     BuiltinOpParams dc;
     dc.srcPtr = &fillColor;
@@ -1401,8 +1324,7 @@ HWTEST_F(BuiltInTests, givenBigOffsetAndSizeWhenBuilderCopyImageToLocalBufferSta
 }
 
 TEST_F(BuiltInTests, GivenUnalignedCopyBufferToBufferWhenDispatchInfoIsCreatedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     AlignedBuffer src;
     AlignedBuffer dst;
@@ -1421,7 +1343,7 @@ TEST_F(BuiltInTests, GivenUnalignedCopyBufferToBufferWhenDispatchInfoIsCreatedTh
 
     const Kernel *kernel = multiDispatchInfo.begin()->getKernel();
 
-    EXPECT_EQ(kernel->getKernelInfo().kernelDescriptor.kernelMetadata.kernelName, "CopyBufferToBufferMiddleMisaligned");
+    EXPECT_TRUE(kernel->getKernelInfo().kernelDescriptor.kernelMetadata.kernelName.starts_with("CopyBufferToBufferMiddleMisaligned"));
 
     const auto crossThreadData = kernel->getCrossThreadData();
     const auto crossThreadOffset = kernel->getKernelInfo().getArgDescriptorAt(4).as<ArgDescValue>().elements[0].offset;
@@ -1431,8 +1353,7 @@ TEST_F(BuiltInTests, GivenUnalignedCopyBufferToBufferWhenDispatchInfoIsCreatedTh
 }
 
 TEST_F(BuiltInTests, GivenReadBufferAlignedWhenDispatchInfoIsCreatedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     AlignedBuffer srcMemObj;
     auto size = 10 * MemoryConstants::cacheLineSize;
@@ -1471,8 +1392,7 @@ TEST_F(BuiltInTests, GivenReadBufferAlignedWhenDispatchInfoIsCreatedThenParamsAr
 }
 
 TEST_F(BuiltInTests, GivenWriteBufferAlignedWhenDispatchInfoIsCreatedThenParamsAreCorrect) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     auto size = 10 * MemoryConstants::cacheLineSize;
     auto srcPtr = alignedMalloc(size, MemoryConstants::cacheLineSize);
@@ -1507,18 +1427,17 @@ TEST_F(BuiltInTests, GivenWriteBufferAlignedWhenDispatchInfoIsCreatedThenParamsA
 }
 
 TEST_F(BuiltInTests, WhenGettingBuilderInfoTwiceThenPointerIsSame) {
-    USE_REAL_FILE_SYSTEM();
-    BuiltinDispatchInfoBuilder &builder1 = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
-    BuiltinDispatchInfoBuilder &builder2 = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(EBuiltInOps::copyBufferToBuffer, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder1 = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
+    BuiltinDispatchInfoBuilder &builder2 = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(copyBufferToBufferBuiltin, *pClDevice);
 
     EXPECT_EQ(&builder1, &builder2);
 }
 
 HWTEST_F(BuiltInTests, GivenBuiltInOperationWhenGettingBuilderThenCorrectBuiltInBuilderIsReturned) {
-    USE_REAL_FILE_SYSTEM();
 
     auto clExecutionEnvironment = static_cast<ClExecutionEnvironment *>(pClDevice->getExecutionEnvironment());
     bool heaplessAllowed = UnitTestHelper<FamilyType>::isHeaplessAllowed();
+    bool isForceStateless = pClDevice->getCompilerProductHelper().isForceToStatelessRequired();
 
     auto verifyBuilder = [&](auto operation) {
         auto &builder = BuiltInDispatchBuilderOp::getBuiltinDispatchInfoBuilder(operation, *pClDevice);
@@ -1527,10 +1446,21 @@ HWTEST_F(BuiltInTests, GivenBuiltInOperationWhenGettingBuilderThenCorrectBuiltIn
         EXPECT_EQ(expectedBuilder, &builder);
     };
 
+    auto verifyBuilderIfSupported = [&](auto operation) {
+        if (EBuiltInOps::isHeapless(operation) && (heaplessAllowed == false)) {
+            return;
+        }
+        if ((!EBuiltInOps::isHeapless(operation) && !EBuiltInOps::isStateless(operation)) && isForceStateless) {
+            return;
+        }
+
+        verifyBuilder(operation);
+    };
+
     EBuiltInOps::Type operationsBuffers[] = {
-        EBuiltInOps::copyBufferToBuffer,
         EBuiltInOps::copyBufferToBufferStateless,
         EBuiltInOps::copyBufferToBufferStatelessHeapless,
+        EBuiltInOps::copyBufferToBuffer,
         EBuiltInOps::copyBufferRect,
         EBuiltInOps::copyBufferRectStateless,
         EBuiltInOps::copyBufferRectStatelessHeapless,
@@ -1553,18 +1483,12 @@ HWTEST_F(BuiltInTests, GivenBuiltInOperationWhenGettingBuilderThenCorrectBuiltIn
         EBuiltInOps::fillImage1dBufferHeapless};
 
     for (auto operation : operationsBuffers) {
-        if (EBuiltInOps::isHeapless(operation) && (heaplessAllowed == false)) {
-            continue;
-        }
-        verifyBuilder(operation);
+        verifyBuilderIfSupported(operation);
     }
 
     if (pClDevice->getHardwareInfo().capabilityTable.supportsImages) {
         for (auto operation : operationsImages) {
-            if (EBuiltInOps::isHeapless(operation) && (heaplessAllowed == false)) {
-                continue;
-            }
-            verifyBuilder(operation);
+            verifyBuilderIfSupported(operation);
         }
     }
 }
@@ -1753,7 +1677,7 @@ TEST_F(BuiltInTests, GivenTypeInvalidWhenGettingBuiltinCodeThenKernelIsEmpty) {
     EXPECT_EQ(pDevice, code.targetDevice);
 }
 
-HWTEST2_F(BuiltInTests, GivenImagesAndHeaplessBuiltinTypeSourceWhenGettingBuiltinResourceThenResourceSizeIsNonZero, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, GivenImagesAndHeaplessBuiltinTypeSourceWhenGettingBuiltinResourceThenResourceSizeIsNonZero, HeaplessSupport) {
 
     REQUIRE_IMAGES_OR_SKIP(defaultHwInfo);
     auto mockBuiltinsLib = std::unique_ptr<MockBuiltinsLib>(new MockBuiltinsLib());
@@ -1769,7 +1693,7 @@ HWTEST2_F(BuiltInTests, GivenImagesAndHeaplessBuiltinTypeSourceWhenGettingBuilti
     EXPECT_NE(0u, mockBuiltinsLib->getBuiltinResource(EBuiltInOps::fillImage1dBufferHeapless, BuiltinCode::ECodeType::binary, *pDevice).size());
 }
 
-HWTEST2_F(BuiltInTests, GivenHeaplessBuiltinTypeSourceWhenGettingBuiltinResourceThenResourceSizeIsNonZero, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, GivenHeaplessBuiltinTypeSourceWhenGettingBuiltinResourceThenResourceSizeIsNonZero, HeaplessSupport) {
     auto mockBuiltinsLib = std::unique_ptr<MockBuiltinsLib>(new MockBuiltinsLib());
 
     EXPECT_NE(0u, mockBuiltinsLib->getBuiltinResource(EBuiltInOps::copyBufferToBufferStatelessHeapless, BuiltinCode::ECodeType::binary, *pDevice).size());
@@ -1990,8 +1914,7 @@ TEST_F(BuiltInTests, givenOneApiPvcSendWarWaEnvFalseWhenGettingBuiltinCodeThenSo
 
 using BuiltInOwnershipWrapperTests = BuiltInTests;
 
-TEST_F(BuiltInOwnershipWrapperTests, givenBuiltinWhenConstructedThenLockAndUnlockOnDestruction) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(BuiltInOwnershipWrapperTests, givenBuiltinWhenConstructedThenLockAndUnlockOnDestruction, AuxBuiltinsMatcher) {
     MockAuxBuilInOp mockAuxBuiltInOp(*pBuiltIns, *pClDevice);
     MockContext context(pClDevice);
     {
@@ -2006,8 +1929,7 @@ TEST_F(BuiltInOwnershipWrapperTests, givenBuiltinWhenConstructedThenLockAndUnloc
     EXPECT_EQ(nullptr, mockAuxBuiltInOp.baseKernel->getProgram()->getContextPtr());
 }
 
-TEST_F(BuiltInOwnershipWrapperTests, givenLockWithoutParametersWhenConstructingThenLockOnlyWhenRequested) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(BuiltInOwnershipWrapperTests, givenLockWithoutParametersWhenConstructingThenLockOnlyWhenRequested, AuxBuiltinsMatcher) {
     MockAuxBuilInOp mockAuxBuiltInOp(*pBuiltIns, *pClDevice);
     MockContext context(pClDevice);
     {
@@ -2023,8 +1945,7 @@ TEST_F(BuiltInOwnershipWrapperTests, givenLockWithoutParametersWhenConstructingT
     EXPECT_EQ(nullptr, mockAuxBuiltInOp.baseKernel->getProgram()->getContextPtr());
 }
 
-TEST_F(BuiltInOwnershipWrapperTests, givenLockWithAcquiredOwnershipWhenTakeOwnershipCalledThenAbort) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(BuiltInOwnershipWrapperTests, givenLockWithAcquiredOwnershipWhenTakeOwnershipCalledThenAbort, AuxBuiltinsMatcher) {
     MockAuxBuilInOp mockAuxBuiltInOp1(*pBuiltIns, *pClDevice);
     MockAuxBuilInOp mockAuxBuiltInOp2(*pBuiltIns, *pClDevice);
     MockContext context(pClDevice);
@@ -2039,7 +1960,7 @@ HWTEST_F(BuiltInOwnershipWrapperTests, givenBuiltInOwnershipWrapperWhenAskedForT
     EXPECT_FALSE(std::is_copy_assignable<BuiltInOwnershipWrapper>::value);
 }
 
-HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupport) {
 
     if (is32bit) {
         GTEST_SKIP();
@@ -2070,7 +1991,7 @@ HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToBufferStatelessHeaplessIsUsedThen
     EXPECT_TRUE(compareBuiltinOpParams(multiDispatchInfo.peekBuiltinOpParams(), builtinOpsParams));
 }
 
-HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToSystemBufferRectStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToSystemBufferRectStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupport) {
     if (is32bit) {
         GTEST_SKIP();
     }
@@ -2110,7 +2031,7 @@ HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToSystemBufferRectStatelessHeapless
     }
 }
 
-HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToLocalBufferRectStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToLocalBufferRectStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupport) {
     if (is32bit) {
         GTEST_SKIP();
     }
@@ -2150,7 +2071,7 @@ HWTEST2_F(BuiltInTests, whenBuilderCopyBufferToLocalBufferRectStatelessHeaplessI
     }
 }
 
-HWTEST2_F(BuiltInTests, whenBuilderFillSystemBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, whenBuilderFillSystemBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupport) {
     if (is32bit) {
         GTEST_SKIP();
     }
@@ -2185,7 +2106,7 @@ HWTEST2_F(BuiltInTests, whenBuilderFillSystemBufferStatelessHeaplessIsUsedThenPa
     }
 }
 
-HWTEST2_F(BuiltInTests, whenBuilderFillLocalBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupportedMatcher) {
+HWTEST2_F(BuiltInTests, whenBuilderFillLocalBufferStatelessHeaplessIsUsedThenParamsAreCorrect, HeaplessSupport) {
     if (is32bit) {
         GTEST_SKIP();
     }

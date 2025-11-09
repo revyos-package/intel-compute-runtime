@@ -76,10 +76,6 @@ AUBCommandStreamReceiverHw<GfxFamily>::AUBCommandStreamReceiverHw(const std::str
         this->dispatchMode = (DispatchMode)debugManager.flags.CsrDispatchMode.get();
     }
 
-    auto debugDeviceId = debugManager.flags.OverrideAubDeviceId.get();
-    this->aubDeviceId = debugDeviceId == -1
-                            ? this->peekHwInfo().capabilityTable.aubDeviceId
-                            : static_cast<uint32_t>(debugDeviceId);
     this->defaultSshSize = 64 * MemoryConstants::kiloByte;
 }
 
@@ -156,11 +152,14 @@ const std::string AUBCommandStreamReceiverHw<GfxFamily>::getFileName() {
 
 template <typename GfxFamily>
 void AUBCommandStreamReceiverHw<GfxFamily>::initializeEngine() {
-    auto streamLocked = lockStream();
-    isEngineInitialized = true;
-
-    if (hardwareContextController) {
-        hardwareContextController->initialize();
+    if (!isEngineInitialized) {
+        auto streamLocked = lockStream();
+        if (!isEngineInitialized) {
+            isEngineInitialized = true;
+            if (hardwareContextController) {
+                hardwareContextController->initialize();
+            }
+        }
     }
 }
 
@@ -319,9 +318,7 @@ bool AUBCommandStreamReceiverHw<GfxFamily>::writeMemory(GraphicsAllocation &gfxA
         return false;
     }
 
-    if (!isEngineInitialized) {
-        initializeEngine();
-    }
+    initializeEngine();
 
     bool ownsLock = !gfxAllocation.isLocked();
     uint64_t gpuAddress;

@@ -7,7 +7,6 @@
 
 #include "shared/source/gen12lp/hw_info_rkl.h"
 
-#include "shared/source/aub_mem_dump/definitions/aub_services.h"
 #include "shared/source/command_stream/preemption_mode.h"
 #include "shared/source/gen12lp/hw_cmds_rkl.h"
 #include "shared/source/helpers/constants.h"
@@ -31,46 +30,45 @@ const PLATFORM RKL::platform = {
     GTTYPE_UNDEFINED};
 
 const RuntimeCapabilityTable RKL::capabilityTable{
-    EngineDirectSubmissionInitVec{
-        {aub_stream::ENGINE_RCS, {true, true}},
-        {aub_stream::ENGINE_CCS, {true, true}}},                 // directSubmissionEngines
-    {0, 0, 0, 0, false, false, false, false},                    // kmdNotifyProperties
-    MemoryConstants::max48BitAddress,                            // gpuAddressSpace
-    0,                                                           // sharedSystemMemCapabilities
-    MemoryConstants::pageSize,                                   // requiredPreemptionSurfaceSize
-    "",                                                          // deviceName
-    nullptr,                                                     // preferredPlatformName
-    PreemptionMode::ThreadGroup,                                 // defaultPreemptionMode
-    aub_stream::ENGINE_RCS,                                      // defaultEngineType
-    0,                                                           // maxRenderFrequency
-    30,                                                          // clVersionSupport
-    AubMemDump::CmdServicesMemTraceVersion::DeviceValues::Tgllp, // aubDeviceId
-    1,                                                           // extraQuantityThreadsPerEU
-    64,                                                          // maxProgrammableSlmSize
-    sizeof(RKL::GRF),                                            // grfSize
-    36u,                                                         // timestampValidBits
-    32u,                                                         // kernelTimestampValidBits
-    false,                                                       // blitterOperationsSupported
-    true,                                                        // ftrSupportsInteger64BitAtomics
-    false,                                                       // ftrSupportsFP64
-    false,                                                       // ftrSupportsFP64Emulation
-    false,                                                       // ftrSupports64BitMath
-    false,                                                       // ftrSupportsCoherency
-    false,                                                       // ftrRenderCompressedBuffers
-    false,                                                       // ftrRenderCompressedImages
-    true,                                                        // instrumentationEnabled
-    false,                                                       // supportCacheFlushAfterWalker
-    true,                                                        // supportsImages
-    true,                                                        // supportsOcl21Features
-    false,                                                       // supportsOnDemandPageFaults
-    false,                                                       // supportsIndependentForwardProgress
-    true,                                                        // isIntegratedDevice
-    true,                                                        // supportsMediaBlock
-    true,                                                        // fusedEuEnabled
-    false,                                                       // l0DebuggerSupported;
-    true,                                                        // supportsFloatAtomics
-    0                                                            // cxlType
-};
+    .directSubmissionEngines = makeDirectSubmissionPropertiesPerEngine({
+        {aub_stream::ENGINE_RCS, {.engineSupported = true, .submitOnInit = true, .useNonDefault = false, .useRootDevice = false}},
+        {aub_stream::ENGINE_CCS, {.engineSupported = true, .submitOnInit = true, .useNonDefault = false, .useRootDevice = false}},
+    }),
+    .kmdNotifyProperties = {0, 0, 0, 0, false, false, false, false},
+    .gpuAddressSpace = MemoryConstants::max48BitAddress,
+    .sharedSystemMemCapabilities = 0,
+    .requiredPreemptionSurfaceSize = MemoryConstants::pageSize,
+    .deviceName = "",
+    .preferredPlatformName = nullptr,
+    .defaultPreemptionMode = PreemptionMode::ThreadGroup,
+    .defaultEngineType = aub_stream::ENGINE_RCS,
+    .maxRenderFrequency = 0,
+    .clVersionSupport = 30,
+    .extraQuantityThreadsPerEU = 1,
+    .maxProgrammableSlmSize = 64,
+    .grfSize = sizeof(RKL::GRF),
+    .timestampValidBits = 36u,
+    .kernelTimestampValidBits = 32u,
+    .blitterOperationsSupported = false,
+    .ftrSupportsInteger64BitAtomics = true,
+    .ftrSupportsFP64 = false,
+    .ftrSupportsFP64Emulation = false,
+    .ftrSupports64BitMath = false,
+    .ftrSupportsCoherency = false,
+    .ftrRenderCompressedBuffers = false,
+    .ftrRenderCompressedImages = false,
+    .instrumentationEnabled = true,
+    .supportCacheFlushAfterWalker = false,
+    .supportsImages = true,
+    .supportsOcl21Features = true,
+    .supportsOnDemandPageFaults = false,
+    .supportsIndependentForwardProgress = false,
+    .isIntegratedDevice = true,
+    .supportsMediaBlock = true,
+    .fusedEuEnabled = true,
+    .l0DebuggerSupported = false,
+    .supportsFloatAtomics = true,
+    .cxlType = 0};
 
 WorkaroundTable RKL::workaroundTable = {};
 FeatureTable RKL::featureTable = {};
@@ -103,7 +101,8 @@ void RKL::setupFeatureAndWorkaroundTable(HardwareInfo *hwInfo) {
 
 void RKL::setupHardwareInfoBase(HardwareInfo *hwInfo, bool setupFeatureTableAndWorkaroundTable, const ReleaseHelper *releaseHelper) {
     GT_SYSTEM_INFO *gtSysInfo = &hwInfo->gtSystemInfo;
-    gtSysInfo->ThreadCount = gtSysInfo->EUCount * 7u;
+    gtSysInfo->NumThreadsPerEu = 7u;
+    gtSysInfo->ThreadCount = gtSysInfo->EUCount * gtSysInfo->NumThreadsPerEu;
     gtSysInfo->TotalVsThreads = 0;
     gtSysInfo->TotalHsThreads = 0;
     gtSysInfo->TotalDsThreads = 0;
@@ -120,6 +119,8 @@ void RKL::setupHardwareInfoBase(HardwareInfo *hwInfo, bool setupFeatureTableAndW
     if (setupFeatureTableAndWorkaroundTable) {
         setupFeatureAndWorkaroundTable(hwInfo);
     }
+
+    applyDebugOverrides(*hwInfo);
 }
 
 const HardwareInfo RklHwConfig::hwInfo = {

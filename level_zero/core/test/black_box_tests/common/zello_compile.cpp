@@ -180,13 +180,6 @@ __kernel void test_arg_slm(
 }
 )===";
 
-const char *memcpyBytesTestKernelSrc = R"===(
-kernel void memcpy_bytes(__global char *dst, const __global char *src) {
-    unsigned int gid = get_global_id(0);
-    dst[gid] = src[gid];
-}
-)===";
-
 const char *memcpyBytesWithPrintfTestKernelSrc = R"==(
 __kernel void memcpy_bytes(__global uchar *dst, const __global uchar *src) {
     unsigned int gid = get_global_id(0);
@@ -199,13 +192,28 @@ __kernel void memcpy_bytes(__global uchar *dst, const __global uchar *src) {
 
 const char *openCLKernelsSource = R"OpenCLC(
 __kernel void add_constant(global int *values, int addval) {
-    const int xid = get_global_id(0);
-    values[xid] = values[xid] + addval;
+    const int gid = get_global_id(0);
+    values[gid] = values[gid] + addval;
 }
 
 __kernel void increment_by_one(__global uchar *dst, __global uchar *src) {
     unsigned int gid = get_global_id(0);
     dst[gid] = (uchar)(src[gid] + 1);
+}
+
+kernel void memcpy_bytes(__global char *dst, const __global char *src) {
+    unsigned int gid = get_global_id(0);
+    dst[gid] = src[gid];
+}
+
+__kernel void add_constant_output(global int *src, global int *dst, int addval) {
+    const int gid = get_global_id(0);
+    dst[gid] = src[gid] + addval;
+}
+
+__kernel void mul_constant_output(global int *src, global int *dst, int mulval) {
+    const int gid = get_global_id(0);
+    dst[gid] = src[gid] * mulval;
 }
 )OpenCLC";
 
@@ -508,6 +516,33 @@ void createScratchModuleKernel(ze_context_handle_t &context,
     ze_kernel_properties_t kernelProperties{ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES};
     SUCCESS_OR_TERMINATE(zeKernelGetProperties(kernel, &kernelProperties));
     std::cout << "Scratch size = " << std::dec << kernelProperties.spillMemSize << "\n";
+}
+
+void createModuleFromSpirV(ze_context_handle_t context, ze_device_handle_t device, const char *kernelSrc, ze_module_handle_t &module) {
+    // SpirV for a kernel
+    std::string buildLog;
+    auto moduleBinary = LevelZeroBlackBoxTests::compileToSpirV(kernelSrc, "", buildLog);
+    LevelZeroBlackBoxTests::printBuildLog(buildLog);
+    SUCCESS_OR_TERMINATE((0 == moduleBinary.size()));
+
+    ze_module_desc_t moduleDesc = {
+        .stype = ZE_STRUCTURE_TYPE_MODULE_DESC,
+        .pNext = nullptr,
+        .format = ZE_MODULE_FORMAT_IL_SPIRV,
+        .inputSize = moduleBinary.size(),
+        .pInputModule = reinterpret_cast<const uint8_t *>(moduleBinary.data()),
+    };
+    SUCCESS_OR_TERMINATE(zeModuleCreate(context, device, &moduleDesc, &module, nullptr));
+}
+
+void createKernelWithName(ze_module_handle_t module, const char *kernelName, ze_kernel_handle_t &kernel) {
+    ze_kernel_desc_t kernelDesc = {
+        .stype = ZE_STRUCTURE_TYPE_KERNEL_DESC,
+        .pNext = nullptr,
+        .flags = 0,
+        .pKernelName = kernelName,
+    };
+    SUCCESS_OR_TERMINATE(zeKernelCreate(module, &kernelDesc, &kernel));
 }
 
 } // namespace LevelZeroBlackBoxTests

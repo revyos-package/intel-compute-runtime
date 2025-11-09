@@ -69,6 +69,14 @@ LNLTEST_F(LnlProductHelperLinux, givenProductHelperWhenCallDeferMOCSToPatOnWSLTh
     EXPECT_FALSE(productHelper.deferMOCSToPatIndex(true));
 }
 
+LNLTEST_F(LnlProductHelperLinux, givenProductHelperWhenAskedGetSharedSystemPatIndexThenReturnCorrectValue) {
+    EXPECT_EQ(1ull, productHelper->getSharedSystemPatIndex());
+}
+
+LNLTEST_F(LnlProductHelperLinux, givenProductHelperWhenAskedIfIsTlbFlushRequiredThenFalseIsReturned) {
+    EXPECT_FALSE(productHelper->isTlbFlushRequired());
+}
+
 using LnlHwInfoLinux = ::testing::Test;
 
 LNLTEST_F(LnlHwInfoLinux, WhenGtIsSetupThenGtSystemInfoIsCorrect) {

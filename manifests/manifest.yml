@@ -2,27 +2,27 @@ components:
   aub_configs:
     branch: aub_configs
     dest_dir: aub_configs
-    revision: adf4e596f6e47995e3c3d6a378ddb6c41128fddc
+    revision: 0c3193c602b64c2f746436bc18baf7d761e8db50
     type: git
   aub_stream:
     branch: master
     dest_dir: aub_stream
     repository: https://github.com/intel/aubstream
-    revision: f96f0f7ac2adc8d8952d2eadbd5c9c7d14d481c0
+    revision: 2d1c15a4c8def914b29cf5dbf4d3e165e1099a40
     type: git
   gmmlib:
     asset_name: gmmlib
     dest_dir: gmmlib
     type: git
     branch: master
-    revision: intel-gmmlib-22.8.1
+    revision: intel-gmmlib-22.8.2
     repository: https://github.com/intel/gmmlib.git
   igc:
     asset_name: igc
     dest_dir: igc
     type: git
-    branch: releases/2.16.x
-    revision: 420b632df9ea2d645bafbd258789baf7c34e6f55
+    branch: releases/2.20.x
+    revision: v2.20.3
     repository: https://github.com/intel/intelgraphicscompiler
   igsc:
     asset_name: igsc
@@ -41,18 +41,13 @@ components:
     dest_dir: kernels_bin
     type: git
     branch: kernels_bin
-    revision: 3522-4844
-  kmdaf:
-    branch: kmdaf
-    dest_dir: kmdaf
-    revision: e73be7d107f5c18e8e2260da962239b33b7293ec
-    type: git
+    revision: 3648-5532
   level_zero:
     asset_name: level_zero
     dest_dir: level_zero
     type: git
     branch: master
-    revision: v1.23.1
+    revision: v1.24.3
     repository: https://github.com/oneapi-src/level-zero
   libva:
     asset_name: libva
@@ -66,14 +61,14 @@ components:
     dest_dir: metrics/discovery
     type: git
     branch: master
-    revision: metrics-discovery-1.14.181
+    revision: metrics-discovery-1.14.182
     repository: https://github.com/intel/metrics-discovery.git
   metrics-library:
     asset_name: metrics-library
     dest_dir: metrics/library
     type: git
     branch: master
-    revision: metrics-library-1.0.198
+    revision: metrics-library-1.0.200
     repository: https://github.com/intel/metrics-library.git
   neo-clang-format:
     dest_dir: tools/clang-format
@@ -90,7 +85,7 @@ components:
     dest_dir: wsl
     revision: 56430997dac34ca0e9e18c177636234cac26ad54
     type: git
-converter: M-3522
+converter: M-3648
 include:
 - infra.yml
 version: '1'

@@ -19,12 +19,14 @@
 #endif
 
 namespace LevelZeroBlackBoxTests {
-decltype(&zerDriverGetDefaultContext) zerDriverGetDefaultContextFunc = nullptr;
+decltype(&zerGetDefaultContext) zerGetDefaultContextFunc = nullptr;
 decltype(&zeDeviceSynchronize) zeDeviceSynchronizeFunc = nullptr;
 decltype(&zeCommandListAppendLaunchKernelWithArguments) zeCommandListAppendLaunchKernelWithArgumentsFunc = nullptr;
-decltype(&zerIdentifierTranslateToDeviceHandle) zerIdentifierTranslateToDeviceHandleFunc = nullptr;
-decltype(&zerDeviceTranslateToIdentifier) zerDeviceTranslateToIdentifierFunc = nullptr;
-decltype(&zerDriverGetLastErrorDescription) zerDriverGetLastErrorDescriptionFunc = nullptr;
+decltype(&zeCommandListAppendLaunchKernelWithParameters) zeCommandListAppendLaunchKernelWithParametersFunc = nullptr;
+decltype(&zerTranslateIdentifierToDeviceHandle) zerTranslateIdentifierToDeviceHandleFunc = nullptr;
+decltype(&zerTranslateDeviceHandleToIdentifier) zerTranslateDeviceHandleToIdentifierFunc = nullptr;
+decltype(&zerGetLastErrorDescription) zerGetLastErrorDescriptionFunc = nullptr;
+pfnZexCounterBasedEventCreate2 zexCounterBasedEventCreate2Func = nullptr;
 
 struct LoadedDriverExtensions {
     std::vector<ze_driver_extension_properties_t> extensions;
@@ -429,6 +431,12 @@ bool counterBasedEventsExtensionPresent(ze_driver_handle_t &driverHandle) {
     return LevelZeroBlackBoxTests::checkExtensionIsPresent(driverHandle, extensionsToCheck);
 }
 
+void loadCounterBasedEventCreateFunction(ze_driver_handle_t &driverHandle) {
+    if (zexCounterBasedEventCreate2Func == nullptr) {
+        SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zexCounterBasedEventCreate2", reinterpret_cast<void **>(&zexCounterBasedEventCreate2Func)));
+    }
+}
+
 std::vector<ze_device_handle_t> zelloGetSubDevices(ze_device_handle_t &device, uint32_t &subDevCount) {
     uint32_t deviceCount = 0;
     std::vector<ze_device_handle_t> subdevs(deviceCount, nullptr);
@@ -447,25 +455,30 @@ std::vector<ze_device_handle_t> zelloGetSubDevices(ze_device_handle_t &device, u
 }
 
 std::vector<ze_device_handle_t> zelloInitContextAndGetDevices(ze_context_handle_t &context, ze_driver_handle_t &driverHandle) {
-    SUCCESS_OR_TERMINATE(zeInit(ZE_INIT_FLAG_GPU_ONLY));
-
+    ze_init_driver_type_desc_t desc = {ZE_STRUCTURE_TYPE_INIT_DRIVER_TYPE_DESC};
+    desc.pNext = nullptr;
+    desc.flags = ZE_INIT_FLAG_GPU_ONLY;
     uint32_t driverCount = 0;
-    SUCCESS_OR_TERMINATE(zeDriverGet(&driverCount, nullptr));
+
+    SUCCESS_OR_TERMINATE(zeInitDrivers(&driverCount, nullptr, &desc));
+
     if (driverCount == 0) {
         std::cerr << "No driver handle found!\n";
         std::terminate();
     }
 
-    SUCCESS_OR_TERMINATE(zeDriverGet(&driverCount, &driverHandle));
+    SUCCESS_OR_TERMINATE(zeInitDrivers(&driverCount, &driverHandle, &desc));
 
-    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerDriverGetDefaultContext", reinterpret_cast<void **>(&zerDriverGetDefaultContextFunc)));
+    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerGetDefaultContext", reinterpret_cast<void **>(&zerGetDefaultContextFunc)));
     SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zeDeviceSynchronize", reinterpret_cast<void **>(&zeDeviceSynchronizeFunc)));
     SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zeCommandListAppendLaunchKernelWithArguments", reinterpret_cast<void **>(&zeCommandListAppendLaunchKernelWithArgumentsFunc)));
-    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerIdentifierTranslateToDeviceHandle", reinterpret_cast<void **>(&zerIdentifierTranslateToDeviceHandleFunc)));
-    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerDeviceTranslateToIdentifier", reinterpret_cast<void **>(&zerDeviceTranslateToIdentifierFunc)));
-    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerDriverGetLastErrorDescription", reinterpret_cast<void **>(&zerDriverGetLastErrorDescriptionFunc)));
+    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zeCommandListAppendLaunchKernelWithParameters", reinterpret_cast<void **>(&zeCommandListAppendLaunchKernelWithParametersFunc)));
 
-    context = zerDriverGetDefaultContextFunc();
+    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerTranslateIdentifierToDeviceHandle", reinterpret_cast<void **>(&zerTranslateIdentifierToDeviceHandleFunc)));
+    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerTranslateDeviceHandleToIdentifier", reinterpret_cast<void **>(&zerTranslateDeviceHandleToIdentifierFunc)));
+    SUCCESS_OR_TERMINATE(zeDriverGetExtensionFunctionAddress(driverHandle, "zerGetLastErrorDescription", reinterpret_cast<void **>(&zerGetLastErrorDescriptionFunc)));
+
+    context = zerGetDefaultContextFunc();
     if (!context) {
         const char *description = nullptr;
         SUCCESS_OR_TERMINATE(zeDriverGetLastErrorDescription(driverHandle, &description));
@@ -787,10 +800,8 @@ bool checkExtensionIsPresent(ze_driver_handle_t &driverHandle, std::vector<ze_dr
                         std::cout << "Checked extension version: " << ZE_MAJOR_VERSION(version) << "." << ZE_MINOR_VERSION(version) << " is equal or lower than present." << std::endl;
                     }
                     numMatchedExtensions++;
-                } else {
-                    if (verbose) {
-                        std::cout << "Checked extension version: " << ZE_MAJOR_VERSION(version) << "." << ZE_MINOR_VERSION(version) << " is greater than present." << std::endl;
-                    }
+                } else if (verbose) {
+                    std::cout << "Checked extension version: " << ZE_MAJOR_VERSION(version) << "." << ZE_MINOR_VERSION(version) << " is greater than present." << std::endl;
                 }
             }
         }

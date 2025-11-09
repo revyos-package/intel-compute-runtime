@@ -152,6 +152,9 @@ TEST_F(DeviceGetCapsTest, WhenCreatingDeviceThenCapsArePopulatedCorrectly) {
     EXPECT_GT(caps.openclCAllVersions.size(), 0u);
     EXPECT_GT(caps.openclCFeatures.size(), 0u);
     EXPECT_EQ(caps.extensionsWithVersion.size(), 0u);
+    EXPECT_EQ(caps.spirvExtendedInstructionSets.size(), 0u);
+    EXPECT_EQ(caps.spirvExtensions.size(), 0u);
+    EXPECT_EQ(caps.spirvCapabilities.size(), 0u);
     EXPECT_STREQ("v2025-04-14-00", caps.latestConformanceVersionPassed);
 
     EXPECT_NE(nullptr, caps.spirVersions);
@@ -559,6 +562,7 @@ TEST_F(DeviceGetCapsTest, givenOpenCLVersion21WhenCapsAreCreatedThenDeviceReport
         EXPECT_TRUE(hasSubstr(caps.deviceExtensions, std::string("cl_intel_spirv_subgroups")));
         EXPECT_TRUE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_linkonce_odr")));
         EXPECT_TRUE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_no_integer_wrap_decoration")));
+        EXPECT_TRUE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_queries")));
     }
 }
 
@@ -608,6 +612,7 @@ TEST_F(DeviceGetCapsTest, givenOpenCLVersion12WhenCapsAreCreatedThenDeviceDoesnt
     EXPECT_FALSE(hasSubstr(caps.deviceExtensions, std::string("cl_intel_spirv_subgroups")));
     EXPECT_FALSE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_linkonce_odr")));
     EXPECT_FALSE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_no_integer_wrap_decoration")));
+    EXPECT_FALSE(hasSubstr(caps.deviceExtensions, std::string("cl_khr_spirv_queries")));
 }
 
 TEST_F(DeviceGetCapsTest, givenEnableNV12setToTrueAndSupportImagesWhenCapsAreCreatedThenDeviceReportsNV12Extension) {
@@ -855,7 +860,7 @@ TEST_F(DeviceGetCapsTest, givenDefaultDeviceWhenQueriedForExtensionsWithVersionT
         if (strcmp(extensionWithVersion.name, "cl_khr_integer_dot_product") == 0) {
             EXPECT_EQ(CL_MAKE_VERSION(2u, 0, 0), extensionWithVersion.version);
         } else if (strcmp(extensionWithVersion.name, "cl_intel_unified_shared_memory") == 0) {
-            EXPECT_EQ(CL_MAKE_VERSION(1u, 1u, 0), extensionWithVersion.version);
+            EXPECT_EQ(CL_MAKE_VERSION(1u, 2u, 0), extensionWithVersion.version);
         } else if (strcmp(extensionWithVersion.name, "cl_khr_external_memory") == 0) {
             EXPECT_EQ(CL_MAKE_VERSION(0, 9u, 1u), extensionWithVersion.version);
         } else {
@@ -876,7 +881,7 @@ TEST_F(DeviceGetCapsTest, givenClDeviceWhenGetExtensionsVersionCalledThenCorrect
         if (strcmp(extensionWithVersion.name, "cl_khr_integer_dot_product") == 0) {
             EXPECT_EQ(CL_MAKE_VERSION(2u, 0, 0), pClDevice->getExtensionVersion(std::string(extensionWithVersion.name)));
         } else if (strcmp(extensionWithVersion.name, "cl_intel_unified_shared_memory") == 0) {
-            EXPECT_EQ(CL_MAKE_VERSION(1u, 1u, 0), pClDevice->getExtensionVersion(std::string(extensionWithVersion.name)));
+            EXPECT_EQ(CL_MAKE_VERSION(1u, 2u, 0), pClDevice->getExtensionVersion(std::string(extensionWithVersion.name)));
         } else if (strcmp(extensionWithVersion.name, "cl_khr_external_memory") == 0) {
             EXPECT_EQ(CL_MAKE_VERSION(0, 9u, 1u), pClDevice->getExtensionVersion(std::string(extensionWithVersion.name)));
         } else {
@@ -1147,6 +1152,7 @@ TEST(DeviceGetCaps, givenDebugFlagToUseMaxSimdSizeForWkgCalculationWhenDeviceCap
 
     mySysInfo.EUCount = 24;
     mySysInfo.SubSliceCount = 3;
+    mySysInfo.NumThreadsPerEu = 7;
     mySysInfo.ThreadCount = 24 * 7;
     auto device = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(&myHwInfo));
 
@@ -1162,7 +1168,8 @@ HWTEST_F(DeviceGetCapsTest, givenDeviceThatHasHighNumberOfExecutionUnitsWhenMaxW
     GT_SYSTEM_INFO &mySysInfo = myHwInfo.gtSystemInfo;
     mySysInfo.EUCount = 32;
     mySysInfo.SubSliceCount = 2;
-    mySysInfo.ThreadCount = 32 * gfxCoreHelper.getMinimalSIMDSize(); // 128 threads per subslice, in simd 8 gives 1024
+    mySysInfo.NumThreadsPerEu = gfxCoreHelper.getMinimalSIMDSize();
+    mySysInfo.ThreadCount = 32 * mySysInfo.NumThreadsPerEu; // 128 threads per subslice, in simd 8 gives 1024
 
     auto device = std::make_unique<MockClDevice>(MockDevice::createWithNewExecutionEnvironment<MockDevice>(&myHwInfo));
 

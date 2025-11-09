@@ -345,6 +345,10 @@ uint32_t IoctlHelperPrelim20::getAtomicAdvise(bool isNonAtomic) {
     return isNonAtomic ? PRELIM_I915_VM_ADVISE_ATOMIC_NONE : PRELIM_I915_VM_ADVISE_ATOMIC_SYSTEM;
 }
 
+uint64_t IoctlHelperPrelim20::getPreferredLocationArgs(MemAdvise memAdviseOp) {
+    return 0;
+}
+
 uint32_t IoctlHelperPrelim20::getAtomicAccess(AtomicAccessMode mode) {
     uint32_t retVal = 0;
 
@@ -1117,7 +1121,7 @@ void IoctlHelperPrelim20::setupIpVersion() {
 bool IoctlHelperPrelim20::registerResourceClasses() {
     for (auto &classNameUUID : classNamesToUuid) {
         auto className = classNameUUID.first;
-        auto uuid = classNameUUID.second;
+        const auto &uuid = classNameUUID.second;
 
         const auto result = registerStringClassUuid(uuid, (uintptr_t)className, strnlen_s(className, 100));
         if (result.retVal != 0) {

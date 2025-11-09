@@ -15,20 +15,15 @@
 using namespace NEO;
 
 UltClDeviceFactory::UltClDeviceFactory(uint32_t rootDevicesCount, uint32_t subDevicesCount) {
-    pUltDeviceFactory = std::make_unique<UltDeviceFactory>(rootDevicesCount, subDevicesCount, *(new ClExecutionEnvironment));
-
-    for (auto &pRootDevice : pUltDeviceFactory->rootDevices) {
-        auto pRootClDevice = new MockClDevice{pRootDevice};
-        for (auto &pClSubDevice : pRootClDevice->subDevices) {
-            subDevices.push_back(pClSubDevice.get());
-        }
-        rootDevices.push_back(pRootClDevice);
-    }
+    initialize(rootDevicesCount, subDevicesCount, new ClExecutionEnvironment());
 }
 
 UltClDeviceFactory::UltClDeviceFactory(uint32_t rootDevicesCount, uint32_t subDevicesCount, ClExecutionEnvironment *clExecutionEnvironment) {
-    pUltDeviceFactory = std::make_unique<UltDeviceFactory>(rootDevicesCount, subDevicesCount, *clExecutionEnvironment);
+    initialize(rootDevicesCount, subDevicesCount, clExecutionEnvironment);
+}
 
+void UltClDeviceFactory::initialize(uint32_t rootDevicesCount, uint32_t subDevicesCount, ClExecutionEnvironment *clExecutionEnvironment) {
+    pUltDeviceFactory = std::make_unique<UltDeviceFactory>(rootDevicesCount, subDevicesCount, *clExecutionEnvironment);
     for (auto &pRootDevice : pUltDeviceFactory->rootDevices) {
         auto pRootClDevice = new MockClDevice{pRootDevice};
         for (auto &pClSubDevice : pRootClDevice->subDevices) {

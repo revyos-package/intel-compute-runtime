@@ -85,10 +85,10 @@ bool OsContext::isDirectSubmissionAvailable(const HardwareInfo &hwInfo, bool &su
             startDirect = directSubmissionProperty.useNonDefault;
         }
         if (this->isLowPriority()) {
-            startDirect = directSubmissionProperty.useLowPriority;
+            startDirect = false;
         }
         if (this->isInternalEngine()) {
-            startDirect = directSubmissionProperty.useInternal;
+            startDirect = false;
         }
         if (this->isRootDevice()) {
             startDirect = directSubmissionProperty.useRootDevice;

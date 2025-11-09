@@ -5,7 +5,6 @@
  *
  */
 
-#include "shared/source/aub_mem_dump/definitions/aub_services.h"
 #include "shared/source/command_stream/preemption_mode.h"
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/helpers/constants.h"
@@ -33,57 +32,56 @@ const PLATFORM PVC::platform = {
     GTTYPE_UNDEFINED};
 
 const RuntimeCapabilityTable PVC::capabilityTable{
-    EngineDirectSubmissionInitVec{
-        {aub_stream::ENGINE_CCS, {true, false, false, true}},
-        {aub_stream::ENGINE_CCS1, {true, false, true, true}},
-        {aub_stream::ENGINE_CCS2, {true, false, true, true}},
-        {aub_stream::ENGINE_CCS3, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS1, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS2, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS3, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS4, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS5, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS6, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS7, {true, false, true, true}},
-        {aub_stream::ENGINE_BCS8, {true, false, true, true}}}, // directSubmissionEngines
-    {0, 0, 0, 0, false, false, false, false},                  // kmdNotifyProperties
-    maxNBitValue(57),                                          // gpuAddressSpace
-    0,                                                         // sharedSystemMemCapabilities
-    MemoryConstants::pageSize,                                 // requiredPreemptionSurfaceSize
-    "",                                                        // deviceName
-    nullptr,                                                   // preferredPlatformName
-    PreemptionMode::ThreadGroup,                               // defaultPreemptionMode
-    aub_stream::ENGINE_CCS,                                    // defaultEngineType
-    0,                                                         // maxRenderFrequency
-    30,                                                        // clVersionSupport
-    AubMemDump::CmdServicesMemTraceVersion::DeviceValues::Pvc, // aubDeviceId
-    0,                                                         // extraQuantityThreadsPerEU
-    128,                                                       // maxProgrammableSlmSize
-    sizeof(PVC::GRF),                                          // grfSize
-    36u,                                                       // timestampValidBits
-    32u,                                                       // kernelTimestampValidBits
-    false,                                                     // blitterOperationsSupported
-    true,                                                      // ftrSupportsInteger64BitAtomics
-    true,                                                      // ftrSupportsFP64
-    false,                                                     // ftrSupportsFP64Emulation
-    true,                                                      // ftrSupports64BitMath
-    false,                                                     // ftrSupportsCoherency
-    false,                                                     // ftrRenderCompressedBuffers
-    false,                                                     // ftrRenderCompressedImages
-    true,                                                      // instrumentationEnabled
-    false,                                                     // supportCacheFlushAfterWalker
-    false,                                                     // supportsImages
-    true,                                                      // supportsOcl21Features
-    true,                                                      // supportsOnDemandPageFaults
-    true,                                                      // supportsIndependentForwardProgress
-    false,                                                     // isIntegratedDevice
-    false,                                                     // supportsMediaBlock
-    false,                                                     // fusedEuEnabled
-    true,                                                      // l0DebuggerSupported;
-    true,                                                      // supportsFloatAtomics
-    0                                                          // cxlType
-};
+    .directSubmissionEngines = makeDirectSubmissionPropertiesPerEngine({
+        {aub_stream::ENGINE_CCS, {.engineSupported = true, .submitOnInit = false, .useNonDefault = false, .useRootDevice = true}},
+        {aub_stream::ENGINE_CCS1, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_CCS2, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_CCS3, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS1, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS2, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS3, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS4, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS5, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS6, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS7, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+        {aub_stream::ENGINE_BCS8, {.engineSupported = true, .submitOnInit = false, .useNonDefault = true, .useRootDevice = true}},
+    }),
+    .kmdNotifyProperties = {0, 0, 0, 0, false, false, false, false},
+    .gpuAddressSpace = maxNBitValue(57),
+    .sharedSystemMemCapabilities = 0,
+    .requiredPreemptionSurfaceSize = MemoryConstants::pageSize,
+    .deviceName = "",
+    .preferredPlatformName = nullptr,
+    .defaultPreemptionMode = PreemptionMode::ThreadGroup,
+    .defaultEngineType = aub_stream::ENGINE_CCS,
+    .maxRenderFrequency = 0,
+    .clVersionSupport = 30,
+    .extraQuantityThreadsPerEU = 0,
+    .maxProgrammableSlmSize = 128,
+    .grfSize = sizeof(PVC::GRF),
+    .timestampValidBits = 36u,
+    .kernelTimestampValidBits = 32u,
+    .blitterOperationsSupported = false,
+    .ftrSupportsInteger64BitAtomics = true,
+    .ftrSupportsFP64 = true,
+    .ftrSupportsFP64Emulation = false,
+    .ftrSupports64BitMath = true,
+    .ftrSupportsCoherency = false,
+    .ftrRenderCompressedBuffers = false,
+    .ftrRenderCompressedImages = false,
+    .instrumentationEnabled = true,
+    .supportCacheFlushAfterWalker = false,
+    .supportsImages = false,
+    .supportsOcl21Features = true,
+    .supportsOnDemandPageFaults = true,
+    .supportsIndependentForwardProgress = true,
+    .isIntegratedDevice = false,
+    .supportsMediaBlock = false,
+    .fusedEuEnabled = false,
+    .l0DebuggerSupported = true,
+    .supportsFloatAtomics = true,
+    .cxlType = 0};
 
 void PVC::setupFeatureAndWorkaroundTable(HardwareInfo *hwInfo, const ReleaseHelper &releaseHelper) {
     setupDefaultFeatureTableAndWorkaroundTable(hwInfo, releaseHelper);
@@ -101,14 +99,19 @@ void PVC::adjustHardwareInfo(HardwareInfo *hwInfo) {
 }
 
 void PVC::setupHardwareInfoBase(HardwareInfo *hwInfo, bool setupFeatureTableAndWorkaroundTable, const ReleaseHelper *releaseHelper) {
-    setupDefaultGtSysInfo(hwInfo, releaseHelper);
+    setupDefaultGtSysInfo(hwInfo);
     setupHardwareInfoMultiTileBase(hwInfo, true);
+
+    hwInfo->gtSystemInfo.NumThreadsPerEu = 8u;
+    hwInfo->gtSystemInfo.ThreadCount = hwInfo->gtSystemInfo.EUCount * hwInfo->gtSystemInfo.NumThreadsPerEu;
 
     PVC::adjustHardwareInfo(hwInfo);
 
     if (setupFeatureTableAndWorkaroundTable) {
         setupFeatureAndWorkaroundTable(hwInfo, *releaseHelper);
     }
+
+    applyDebugOverrides(*hwInfo);
 }
 
 void PVC::setupHardwareInfoMultiTileBase(HardwareInfo *hwInfo, bool setupMultiTile) {

@@ -77,6 +77,13 @@ Device::~Device() {
     if (deviceUsmMemAllocPoolsManager) {
         deviceUsmMemAllocPoolsManager->cleanup();
     }
+    if (usmConstantSurfaceAllocPool) {
+        usmConstantSurfaceAllocPool->cleanup();
+    }
+    if (usmGlobalSurfaceAllocPool) {
+        usmGlobalSurfaceAllocPool->cleanup();
+    }
+
     secondaryCsrs.clear();
     executionEnvironment->memoryManager->releaseSecondaryOsContexts(this->getRootDeviceIndex());
     commandStreamReceivers.clear();
@@ -207,21 +214,9 @@ bool Device::initializeCommonResources() {
         }
     }
 
-    bool usmPoolManagerEnabled = ApiSpecificConfig::isDeviceUsmPoolingEnabled() &&
-                                 getProductHelper().isDeviceUsmPoolAllocatorSupported();
+    this->resetUsmConstantSurfaceAllocPool(new UsmMemAllocPool);
+    this->resetUsmGlobalSurfaceAllocPool(new UsmMemAllocPool);
 
-    if (NEO::debugManager.flags.EnableDeviceUsmAllocationPool.get() != -1) {
-        usmPoolManagerEnabled = NEO::debugManager.flags.EnableDeviceUsmAllocationPool.get() > 0;
-    }
-
-    if (usmPoolManagerEnabled && NEO::debugManager.flags.ExperimentalUSMAllocationReuseVersion.get() == 2) {
-
-        RootDeviceIndicesContainer rootDeviceIndices;
-        rootDeviceIndices.pushUnique(getRootDeviceIndex());
-        std::map<uint32_t, DeviceBitfield> deviceBitfields;
-        deviceBitfields.emplace(getRootDeviceIndex(), getDeviceBitfield());
-        deviceUsmMemAllocPoolsManager.reset(new UsmMemAllocPoolsManager(getMemoryManager(), rootDeviceIndices, deviceBitfields, this, InternalMemoryType::deviceUnifiedMemory));
-    }
     return true;
 }
 
@@ -261,10 +256,25 @@ void Device::resetUsmAllocationPool(UsmMemAllocPool *usmMemAllocPool) {
     this->usmMemAllocPool.reset(usmMemAllocPool);
 }
 
+void Device::resetUsmAllocationPoolManager(UsmMemAllocPoolsManager *usmMemAllocPoolManager) {
+    this->deviceUsmMemAllocPoolsManager.reset(usmMemAllocPoolManager);
+}
+
 void Device::cleanupUsmAllocationPool() {
     if (usmMemAllocPool) {
         usmMemAllocPool->cleanup();
     }
+    if (deviceUsmMemAllocPoolsManager) {
+        deviceUsmMemAllocPoolsManager->cleanup();
+    }
+}
+
+void Device::resetUsmConstantSurfaceAllocPool(UsmMemAllocPool *usmMemAllocPool) {
+    this->usmConstantSurfaceAllocPool.reset(usmMemAllocPool);
+}
+
+void Device::resetUsmGlobalSurfaceAllocPool(UsmMemAllocPool *usmMemAllocPool) {
+    this->usmGlobalSurfaceAllocPool.reset(usmMemAllocPool);
 }
 
 bool Device::initDeviceFully() {
@@ -458,7 +468,7 @@ void Device::createSecondaryContexts(const EngineControl &primaryEngine, Seconda
         this->createSecondaryEngine(primaryEngine.commandStreamReceiver, engineTypeUsage);
     }
 
-    primaryEngine.osContext->setContextGroup(true);
+    UNRECOVERABLE_IF(primaryEngine.osContext->isPartOfContextGroup() == false);
 }
 
 void Device::allocateDebugSurface(size_t debugSurfaceSize) {
@@ -543,7 +553,7 @@ bool Device::createEngine(EngineTypeUsage engineTypeUsage) {
     EngineDescriptor engineDescriptor(engineTypeUsage, getDeviceBitfield(), preemptionMode, false);
 
     auto osContext = executionEnvironment->memoryManager->createAndRegisterOsContext(commandStreamReceiver.get(), engineDescriptor);
-    osContext->setContextGroup(useContextGroup);
+    osContext->setContextGroupCount(useContextGroup ? gfxCoreHelper.getContextGroupContextsCount() : 0);
     osContext->setIsPrimaryEngine(isPrimaryEngine);
     osContext->setIsDefaultEngine(isDefaultEngine);
 
@@ -639,7 +649,7 @@ bool Device::createSecondaryEngine(CommandStreamReceiver *primaryCsr, EngineType
     return true;
 }
 
-EngineControl *Device::getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, int priorityLevel, bool allocateInterrupt) {
+EngineControl *Device::getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, std::optional<int> priorityLevel, bool allocateInterrupt) {
     if (secondaryEngines.find(engineTypeUsage.first) == secondaryEngines.end()) {
         return nullptr;
     }
@@ -1248,7 +1258,7 @@ const EngineGroupT *Device::tryGetRegularEngineGroup(EngineGroupType engineGroup
     return nullptr;
 }
 
-EngineControl *SecondaryContexts::getEngine(EngineUsage usage, int priorityLevel) {
+EngineControl *SecondaryContexts::getEngine(EngineUsage usage, std::optional<int> priorityLevel) {
     auto secondaryEngineIndex = 0;
 
     std::lock_guard<std::mutex> guard(mutex);
@@ -1301,7 +1311,9 @@ EngineControl *SecondaryContexts::getEngine(EngineUsage usage, int priorityLevel
     } else {
         DEBUG_BREAK_IF(true);
     }
-    engines[secondaryEngineIndex].osContext->overridePriority(priorityLevel);
+    if (priorityLevel.has_value()) {
+        engines[secondaryEngineIndex].osContext->overridePriority(priorityLevel.value());
+    }
 
     return &engines[secondaryEngineIndex];
 }
@@ -1347,4 +1359,58 @@ std::vector<DeviceVector> Device::groupDevices(DeviceVector devices) {
     return outDevices;
 }
 
+bool Device::canAccessPeer(QueryPeerAccessFunc queryPeerAccess, Device *peerDevice, bool &canAccess) {
+    bool retVal = true;
+
+    if (NEO::debugManager.flags.ForceZeDeviceCanAccessPerReturnValue.get() != -1) {
+        canAccess = !!NEO::debugManager.flags.ForceZeDeviceCanAccessPerReturnValue.get();
+        return retVal;
+    }
+
+    const uint32_t rootDeviceIndex = this->getRootDeviceIndex();
+    const uint32_t peerRootDeviceIndex = peerDevice->getRootDeviceIndex();
+
+    if (rootDeviceIndex == peerRootDeviceIndex) {
+        canAccess = true;
+        return retVal;
+    }
+
+    auto lock = executionEnvironment->obtainPeerAccessQueryLock();
+    if (this->crossAccessEnabledDevices.find(peerRootDeviceIndex) == this->crossAccessEnabledDevices.end()) {
+        retVal = queryPeerAccess(*this, *peerDevice, canAccess);
+        this->updatePeerAccessCache(peerDevice, canAccess);
+    }
+    canAccess = this->crossAccessEnabledDevices[peerRootDeviceIndex];
+
+    return retVal;
+}
+
+void Device::initializePeerAccessForDevices(QueryPeerAccessFunc queryPeerAccess, const std::vector<NEO::Device *> &devices) {
+    for (auto &device : devices) {
+        if (device->getReleaseHelper() && device->getReleaseHelper()->shouldQueryPeerAccess()) {
+            device->hasPeerAccess = false;
+            auto rootDeviceIndex = device->getRootDeviceIndex();
+
+            for (auto &peerDevice : devices) {
+                auto peerRootDeviceIndex = peerDevice->getRootDeviceIndex();
+                if (rootDeviceIndex == peerRootDeviceIndex) {
+                    continue;
+                }
+
+                bool canAccess = false;
+                if (device->crossAccessEnabledDevices.find(peerRootDeviceIndex) == device->crossAccessEnabledDevices.end()) {
+                    auto lock = device->getExecutionEnvironment()->obtainPeerAccessQueryLock();
+                    queryPeerAccess(*device, *peerDevice, canAccess);
+                    device->updatePeerAccessCache(peerDevice, canAccess);
+                } else {
+                    canAccess = device->crossAccessEnabledDevices[peerRootDeviceIndex];
+                }
+
+                if (canAccess) {
+                    device->hasPeerAccess = true;
+                }
+            }
+        }
+    }
+}
 } // namespace NEO

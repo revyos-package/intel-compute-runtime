@@ -28,6 +28,7 @@
 #include "shared/source/helpers/in_order_cmd_helpers.h"
 #include "shared/source/helpers/pause_on_gpu_properties.h"
 #include "shared/source/helpers/pipe_control_args.h"
+#include "shared/source/helpers/ptr_math.h"
 #include "shared/source/helpers/ray_tracing_helper.h"
 #include "shared/source/helpers/simd_helper.h"
 #include "shared/source/helpers/state_base_address.h"
@@ -229,7 +230,7 @@ void EncodeDispatchKernel<Family>::encode(CommandContainer &container, EncodeDis
     }
 
     if constexpr (heaplessModeEnabled == false) {
-        EncodeDispatchKernel<Family>::adjustBindingTablePrefetch(idd, samplerCount, bindingTableStateCount);
+        EncodeDispatchKernelWithHeap<Family>::adjustBindingTablePrefetch(idd, samplerCount, bindingTableStateCount);
     }
 
     uint64_t offsetThreadData = 0u;
@@ -273,6 +274,7 @@ void EncodeDispatchKernel<Family>::encode(CommandContainer &container, EncodeDis
                 EncodeDispatchKernel<Family>::patchScratchAddressInImplicitArgs<heaplessModeEnabled>(*pImplicitArgs, scratchAddressForImmediatePatching, args.immediateScratchAddressPatching);
 
                 ptr = NEO::ImplicitArgsHelper::patchImplicitArgs(ptr, *pImplicitArgs, kernelDescriptor, std::make_pair(!localIdsGenerationByRuntime, requiredWorkgroupOrder), rootDeviceEnvironment, &args.outImplicitArgsPtr);
+                args.outImplicitArgsGpuVa = heap->getGraphicsAllocation()->getGpuAddress() + ptrDiff(args.outImplicitArgsPtr, heap->getCpuBase());
             }
 
             if (args.isIndirect) {
@@ -453,6 +455,9 @@ void EncodeDispatchKernel<Family>::encode(CommandContainer &container, EncodeDis
                                                           args.device->getDeviceBitfield(),
                                                           implicitScalingArgs);
         args.partitionCount = implicitScalingArgs.partitionCount;
+        if (!args.makeCommandView) {
+            args.outWalkerGpuVa = listCmdBufferStream->getGpuBase() + ptrDiff(args.outWalkerPtr, listCmdBufferStream->getCpuBase());
+        }
     } else {
         args.partitionCount = 1;
         EncodeDispatchKernel<Family>::setWalkerRegionSettings(walkerCmd, *args.device, args.partitionCount, workgroupSize, threadGroupCount, args.maxWgCountPerTile, isRequiredDispatchWorkGroupOrder);
@@ -460,6 +465,7 @@ void EncodeDispatchKernel<Family>::encode(CommandContainer &container, EncodeDis
         if (!args.makeCommandView) {
             auto buffer = listCmdBufferStream->getSpaceForCmd<WalkerType>();
             args.outWalkerPtr = buffer;
+            args.outWalkerGpuVa = listCmdBufferStream->getGpuBase() + ptrDiff(args.outWalkerPtr, listCmdBufferStream->getCpuBase());
             *buffer = walkerCmd;
         }
     }
@@ -1138,7 +1144,7 @@ void EncodeDispatchKernel<Family>::encodeThreadGroupDispatch(InterfaceDescriptor
                 constexpr uint32_t maxThreadsInTGForTGDispatchSize8 = 16u;
                 constexpr uint32_t maxThreadsInTGForTGDispatchSize4 = 32u;
                 auto &gfxCoreHelper = device.getGfxCoreHelper();
-                uint32_t availableThreadCount = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, grfCount);
+                uint32_t availableThreadCount = gfxCoreHelper.calculateAvailableThreadCount(hwInfo, grfCount, device.getRootDeviceEnvironment());
                 availableThreadCount *= tileCount;
 
                 uint32_t dispatchedTotalThreadCount = threadsPerThreadGroup * threadGroupCount;
@@ -1219,6 +1225,60 @@ void EncodeEnableRayTracing<Family>::programEnableRayTracing(LinearStream &comma
 template <typename Family>
 inline void EncodeWA<Family>::setAdditionalPipeControlFlagsForNonPipelineStateCommand(PipeControlArgs &args) {
     args.unTypedDataPortCacheFlush = true;
+}
+
+template <typename Family>
+void EncodeDataMemory<Family>::programFrontEndState(
+    LinearStream &commandStream,
+    uint64_t dstGpuAddress,
+    const RootDeviceEnvironment &rootDeviceEnvironment,
+    uint32_t scratchSize,
+    uint64_t scratchAddress,
+    uint32_t maxFrontEndThreads,
+    const StreamProperties &streamProperties) {
+    if constexpr (Family::isHeaplessRequired() == false) {
+        using CFE_STATE = typename Family::CFE_STATE;
+
+        size_t bufferSize = getCommandSizeForEncode(sizeof(CFE_STATE));
+        void *basePtr = commandStream.getSpace(bufferSize);
+        void *commandBuffer = basePtr;
+        EncodeDataMemory<Family>::programFrontEndState(commandBuffer,
+                                                       dstGpuAddress,
+                                                       rootDeviceEnvironment,
+                                                       scratchSize,
+                                                       scratchAddress,
+                                                       maxFrontEndThreads,
+                                                       streamProperties);
+        size_t sizeDiff = ptrDiff(commandBuffer, basePtr);
+        if (bufferSize > sizeDiff) {
+            auto paddingSize = bufferSize - sizeDiff;
+            memset(commandBuffer, 0, paddingSize);
+        }
+    }
+}
+
+template <typename Family>
+void EncodeDataMemory<Family>::programFrontEndState(
+    void *&commandBuffer,
+    uint64_t dstGpuAddress,
+    const RootDeviceEnvironment &rootDeviceEnvironment,
+    uint32_t scratchSize,
+    uint64_t scratchAddress,
+    uint32_t maxFrontEndThreads,
+    const StreamProperties &streamProperties) {
+    if constexpr (Family::isHeaplessRequired() == false) {
+        using CFE_STATE = typename Family::CFE_STATE;
+
+        alignas(8) uint8_t feInputCmdBuffer[sizeof(CFE_STATE)];
+        PreambleHelper<Family>::programVfeState(feInputCmdBuffer,
+                                                rootDeviceEnvironment,
+                                                scratchSize,
+                                                scratchAddress,
+                                                maxFrontEndThreads,
+                                                streamProperties);
+
+        programDataMemory(commandBuffer, dstGpuAddress, feInputCmdBuffer, sizeof(CFE_STATE));
+    }
 }
 
 } // namespace NEO

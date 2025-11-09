@@ -633,7 +633,7 @@ HWTEST_F(TimestampPacketTests, givenTimestampPacketWriteEnabledWhenEnqueueingThe
 
     cmdQ->flush();
     EXPECT_EQ(2u, deferredTimestampPackets->peekNodes().size());
-    cmdQ->finish();
+    cmdQ->finish(false);
     EXPECT_EQ(0u, deferredTimestampPackets->peekNodes().size());
 }
 
@@ -664,7 +664,7 @@ HWTEST_F(TimestampPacketTests, givenWaitlistWithTimestampPacketWhenEnqueueingThe
     ASSERT_GT(deferredTimestampPackets->peekNodes().size(), 0u);
     EXPECT_EQ(timestamp.peekNodes()[0]->getGpuAddress(), deferredTimestampPackets->peekNodes()[0]->getGpuAddress());
 
-    cmdQ->finish();
+    cmdQ->finish(false);
     EXPECT_EQ(0u, deferredTimestampPackets->peekNodes().size());
 }
 
@@ -724,7 +724,7 @@ HWTEST_F(TimestampPacketTests, givenTimestampWaitEnabledWhenEnqueueWithEventThen
     EXPECT_TRUE(csr.downloadAllocationCalled);
     csr.downloadAllocationCalled = false;
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_TRUE(event1.isCompleted());
     EXPECT_TRUE(event2.isCompleted());
@@ -799,7 +799,7 @@ HWTEST_F(TimestampPacketTests, givenEnableTimestampWaitForQueuesWhenFinishWithou
     EXPECT_EQ(0u, deferredTimestampPackets->peekNodes().size());
     EXPECT_EQ(0u, timestampPacketContainer->peekNodes().size());
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 1u);
 }
@@ -830,7 +830,7 @@ HWTEST_F(TimestampPacketTests, givenEnableTimestampWaitForQueuesWhenFinishThenWa
         timestampPacketContainer->peekNodes()[0]->assignDataToAllTimestamps(i, timestampData);
     }
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 0u);
 }
@@ -856,7 +856,7 @@ HWTEST_F(TimestampPacketTests, givenOOQAndEnableTimestampWaitForQueuesWhenFinish
     EXPECT_EQ(0u, deferredTimestampPackets->peekNodes().size());
     EXPECT_EQ(0u, timestampPacketContainer->peekNodes().size());
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 1u);
 
@@ -866,7 +866,7 @@ HWTEST_F(TimestampPacketTests, givenOOQAndEnableTimestampWaitForQueuesWhenFinish
 HWTEST_F(TimestampPacketTests, givenOOQAndWithoutEventWhenEnqueueCalledThenMoveCurrentNodeToDeferredContainer) {
     DebugManagerStateRestore restorer;
     debugManager.flags.UpdateTaskCountFromWait.set(3);
-    debugManager.flags.EnableTimestampWaitForQueues.set(1);
+    debugManager.flags.EnableTimestampWaitForQueues.set(0);
 
     auto &csr = device->getUltCommandStreamReceiver<FamilyType>();
     csr.timestampPacketWriteEnabled = true;
@@ -890,11 +890,55 @@ HWTEST_F(TimestampPacketTests, givenOOQAndWithoutEventWhenEnqueueCalledThenMoveC
     EXPECT_EQ(1u, deferredTimestampPackets->peekNodes().size());
     EXPECT_EQ(0u, timestampPacketContainer->peekNodes().size());
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     clReleaseEvent(event);
 
     cmdQ.reset();
+}
+
+HWTEST_F(TimestampPacketTests, whenReleaseEventThenWait) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableTimestampWaitForQueues.set(0);
+    debugManager.flags.BlockingEventRelease.set(1);
+
+    auto &csr = device->getUltCommandStreamReceiver<FamilyType>();
+    csr.timestampPacketWriteEnabled = true;
+    csr.callBaseWaitForCompletionWithTimeout = false;
+    cl_queue_properties props[3] = {CL_QUEUE_PROPERTIES, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, 0};
+    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, device.get(), props);
+
+    cl_event event;
+
+    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, nullptr, 0, nullptr, &event);
+    cmdQ->finish(false);
+    EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 1u);
+
+    clReleaseEvent(event);
+
+    EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 2u);
+    cmdQ.reset();
+}
+
+HWTEST_F(TimestampPacketTests, whenReleaseEventThenDownloadAllocations) {
+    DebugManagerStateRestore restorer;
+    debugManager.flags.EnableTimestampWaitForQueues.set(0);
+
+    auto &csr = device->getUltCommandStreamReceiver<FamilyType>();
+    csr.timestampPacketWriteEnabled = true;
+    csr.callBaseWaitForCompletionWithTimeout = false;
+    cl_queue_properties props[3] = {CL_QUEUE_PROPERTIES, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, 0};
+    auto cmdQ = std::make_unique<MockCommandQueueHw<FamilyType>>(context, device.get(), props);
+
+    cl_event event;
+
+    cmdQ->enqueueKernel(kernel->mockKernel, 1, nullptr, gws, nullptr, 0, nullptr, &event);
+    cmdQ->finish(false);
+    EXPECT_EQ(csr.waitForCompletionWithTimeoutTaskCountCalled, 1u);
+
+    clReleaseEvent(event);
+
+    EXPECT_NE(csr.downloadAllocationsCalledCount.load(), 0u);
 }
 
 HWTEST_F(TimestampPacketTests, givenEventWhenReleasingThenCheckQueueResources) {
@@ -1035,7 +1079,7 @@ HWTEST_F(TimestampPacketTests, givenNewSubmissionWhileWaitingThenDontReleaseDefe
     auto tagAddress = csr.getTagAddress();
     *tagAddress = cmdQ->getHeaplessStateInitEnabled() ? 3 : 2;
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(1u, deferredTimestampPackets->peekNodes().size());
     EXPECT_EQ(1u, timestampPacketContainer->peekNodes().size());
@@ -1087,7 +1131,7 @@ HWTEST_F(TimestampPacketTests, givenNewBcsSubmissionWhileWaitingThenDontReleaseD
     auto tagAddress = csr.getTagAddress();
     *tagAddress = cmdQ->getHeaplessStateInitEnabled() ? 3 : 2;
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(cmdQ->getHeaplessStateInitEnabled() ? 4u : 3u, cmdQ->bcsStates[0].taskCount);
 
@@ -1148,7 +1192,7 @@ HWTEST_F(TimestampPacketTests, givenEnableTimestampWaitForQueuesWhenFinishThenCa
     CpuIntrinsicsTests::pauseCounter = 0u;
     EXPECT_FALSE(device->getUltCommandStreamReceiver<FamilyType>().downloadAllocationCalled);
 
-    cmdQ->finish();
+    cmdQ->finish(false);
 
     EXPECT_EQ(1u, CpuIntrinsicsTests::pauseCounter);
     EXPECT_TRUE(device->getUltCommandStreamReceiver<FamilyType>().downloadAllocationCalled);

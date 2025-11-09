@@ -196,8 +196,7 @@ void CommandStreamReceiverHw<GfxFamily>::addPipeControlFlushTaskIfNeeded(LinearS
         const auto programPipeControl = !timestampPacketWriteEnabled;
         if (programPipeControl) {
             PipeControlArgs args;
-            args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-            this->isWalkerWithProfilingEnqueued = false;
+            args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
             MemorySynchronizationCommands<GfxFamily>::addSingleBarrier(commandStreamCSR, args);
         }
         this->taskLevel = taskLevel;
@@ -469,7 +468,7 @@ CompletionStamp CommandStreamReceiverHw<GfxFamily>::flushTaskHeapful(
     handlePipelineSelectStateTransition(dispatchFlags);
 
     this->streamProperties.stateComputeMode.setPropertiesAll(false, dispatchFlags.numGrfRequired,
-                                                             dispatchFlags.threadArbitrationPolicy, device.getPreemptionMode());
+                                                             dispatchFlags.threadArbitrationPolicy, device.getPreemptionMode(), device.hasAnyPeerAccess());
 
     csrSizeRequestFlags.l3ConfigChanged = this->lastSentL3Config != newL3Config;
     csrSizeRequestFlags.preemptionRequestChanged = this->lastPreemptionMode != dispatchFlags.preemptionMode;
@@ -501,7 +500,8 @@ CompletionStamp CommandStreamReceiverHw<GfxFamily>::flushTaskHeapful(
 
     if (dispatchFlags.usePerDssBackedBuffer) {
         if (!perDssBackedBuffer) {
-            createPerDssBackedBuffer(device);
+            auto success = createPerDssBackedBuffer(device);
+            UNRECOVERABLE_IF(!success);
         }
         makeResident(*perDssBackedBuffer);
     }
@@ -698,7 +698,7 @@ inline bool CommandStreamReceiverHw<GfxFamily>::flushBatchedSubmissions() {
 
                 flushStampUpdateHelper.insert(nextCommandBuffer->flushStamp->getStampReference());
                 auto nextCommandBufferAddress = nextCommandBuffer->batchBuffer.commandBufferAllocation->getGpuAddress();
-                auto offsetedCommandBuffer = (uint64_t)ptrOffset(nextCommandBufferAddress, nextCommandBuffer->batchBuffer.startOffset);
+                auto offsetCommandBuffer = (uint64_t)ptrOffset(nextCommandBufferAddress, nextCommandBuffer->batchBuffer.startOffset);
                 auto cpuAddressForCommandBufferDestination = ptrOffset(nextCommandBuffer->batchBuffer.commandBufferAllocation->getUnderlyingBuffer(), nextCommandBuffer->batchBuffer.startOffset);
                 auto cpuAddressForCurrentCommandBufferEndingSection = alignUp(ptrOffset(currentBBendLocation, sizeof(MI_BATCH_BUFFER_START)), MemoryConstants::cacheLineSize);
 
@@ -706,7 +706,7 @@ inline bool CommandStreamReceiverHw<GfxFamily>::flushBatchedSubmissions() {
                 if (cpuAddressForCurrentCommandBufferEndingSection == cpuAddressForCommandBufferDestination) {
                     memset(currentBBendLocation, 0u, ptrDiff(cpuAddressForCurrentCommandBufferEndingSection, currentBBendLocation));
                 } else {
-                    addBatchBufferStart((MI_BATCH_BUFFER_START *)currentBBendLocation, offsetedCommandBuffer, false);
+                    addBatchBufferStart((MI_BATCH_BUFFER_START *)currentBBendLocation, offsetCommandBuffer, false);
                 }
 
                 if (debugManager.flags.FlattenBatchBufferForAUBDump.get()) {
@@ -869,7 +869,7 @@ inline WaitStatus CommandStreamReceiverHw<GfxFamily>::waitForTaskCountWithKmdNot
         status = waitForCompletionWithTimeout(WaitParams{false, false, false, 0}, taskCountToWait);
     }
 
-    // If GPU hang occured, then propagate it to the caller.
+    // If GPU hang occurred, then propagate it to the caller.
     if (status == WaitStatus::gpuHang) {
         return status;
     }
@@ -929,7 +929,7 @@ inline void CommandStreamReceiverHw<GfxFamily>::programVFEState(LinearStream &cs
 
         auto &gfxCoreHelper = getGfxCoreHelper();
         auto engineGroupType = gfxCoreHelper.getEngineGroupType(getOsContext().getEngineType(), getOsContext().getEngineUsage(), hwInfo);
-        auto pVfeState = PreambleHelper<GfxFamily>::getSpaceForVfeState(&csr, hwInfo, engineGroupType);
+        auto pVfeState = PreambleHelper<GfxFamily>::getSpaceForVfeState(&csr, hwInfo, engineGroupType, nullptr);
         PreambleHelper<GfxFamily>::programVfeState(
             pVfeState, peekRootDeviceEnvironment(), requiredScratchSlot0Size, getScratchPatchAddress(),
             maxFrontEndThreads, streamProperties);
@@ -1087,8 +1087,8 @@ TaskCountType CommandStreamReceiverHw<GfxFamily>::flushBcsTask(const BlitPropert
 
         if (blitProperties.blitSyncProperties.outputTimestampPacket) {
             bool deviceToHostPostSyncFenceRequired = getProductHelper().isDeviceToHostCopySignalingFenceRequired() &&
-                                                     !blitProperties.dstAllocation->isAllocatedInLocalMemoryPool() &&
-                                                     blitProperties.srcAllocation->isAllocatedInLocalMemoryPool();
+                                                     (blitProperties.dstAllocation && !blitProperties.dstAllocation->isAllocatedInLocalMemoryPool()) &&
+                                                     (blitProperties.srcAllocation && blitProperties.srcAllocation->isAllocatedInLocalMemoryPool());
 
             if (deviceToHostPostSyncFenceRequired) {
                 MemorySynchronizationCommands<GfxFamily>::addAdditionalSynchronization(commandStream, tagAllocation->getGpuAddress(), NEO::FenceType::release, peekRootDeviceEnvironment());
@@ -1107,10 +1107,14 @@ TaskCountType CommandStreamReceiverHw<GfxFamily>::flushBcsTask(const BlitPropert
         }
 
         blitProperties.csrDependencies.makeResident(*this);
-        blitProperties.srcAllocation->prepareHostPtrForResidency(this);
-        blitProperties.dstAllocation->prepareHostPtrForResidency(this);
-        makeResident(*blitProperties.srcAllocation);
-        makeResident(*blitProperties.dstAllocation);
+        if (blitProperties.srcAllocation) {
+            blitProperties.srcAllocation->prepareHostPtrForResidency(this);
+            makeResident(*blitProperties.srcAllocation);
+        }
+        if (blitProperties.dstAllocation) {
+            blitProperties.dstAllocation->prepareHostPtrForResidency(this);
+            makeResident(*blitProperties.dstAllocation);
+        }
         if (blitProperties.clearColorAllocation) {
             makeResident(*blitProperties.clearColorAllocation);
         }
@@ -1244,8 +1248,7 @@ SubmissionStatus CommandStreamReceiverHw<GfxFamily>::flushPipeControl(bool state
     args.dcFlushEnable = this->dcFlushSupport;
     args.notifyEnable = isUsedNotifyEnableForPostSync();
     args.workloadPartitionOffset = isMultiTileOperationEnabled();
-    args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-    this->isWalkerWithProfilingEnqueued = false;
+    args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
 
     if (stateCacheFlush) {
         args.textureCacheInvalidationEnable = true;
@@ -1324,7 +1327,7 @@ inline bool CommandStreamReceiverHw<GfxFamily>::isUpdateTagFromWaitEnabled() {
 
     auto enabled = gfxCoreHelper.isUpdateTaskCountFromWaitSupported();
 
-    if (productHelper.isL3FlushAfterPostSyncRequired(this->heaplessModeEnabled) && ApiSpecificConfig::isUpdateTagFromWaitEnabledForHeapless()) {
+    if (productHelper.isL3FlushAfterPostSyncSupported(this->heaplessModeEnabled) && ApiSpecificConfig::isUpdateTagFromWaitEnabledForHeapless()) {
         enabled &= true;
     } else {
         enabled &= this->isAnyDirectSubmissionEnabled();
@@ -1871,8 +1874,7 @@ inline void CommandStreamReceiverHw<GfxFamily>::processBarrierWithPostSync(Linea
     args.workloadPartitionOffset = isMultiTileOperationEnabled();
     args.stateCacheInvalidationEnable |= dispatchFlags.stateCacheInvalidation || this->heapStorageRequiresRecyclingTag;
     this->heapStorageRequiresRecyclingTag = false;
-    args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-    this->isWalkerWithProfilingEnqueued = false;
+    args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
 
     MemorySynchronizationCommands<GfxFamily>::addBarrierWithPostSyncOperation(
         commandStreamTask,
@@ -1922,8 +1924,7 @@ inline CompletionStamp CommandStreamReceiverHw<GfxFamily>::handleFlushTaskSubmis
                 this->latestFlushedTaskCount = this->taskCount + 1;
             }
         } else {
-            args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-            this->isWalkerWithProfilingEnqueued = false;
+            args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
             auto commandBuffer = new CommandBuffer(device);
             commandBuffer->batchBufferEndLocation = batchBuffer.endCmdPtr;
             commandBuffer->batchBuffer = std::move(batchBuffer);
@@ -2032,7 +2033,7 @@ void CommandStreamReceiverHw<GfxFamily>::dispatchImmediateFlushFrontEndCommand(I
         auto &gfxCoreHelper = getGfxCoreHelper();
         auto engineGroupType = gfxCoreHelper.getEngineGroupType(getOsContext().getEngineType(), getOsContext().getEngineUsage(), peekHwInfo());
 
-        auto feStateCmdSpace = PreambleHelper<GfxFamily>::getSpaceForVfeState(&csrStream, peekHwInfo(), engineGroupType);
+        auto feStateCmdSpace = PreambleHelper<GfxFamily>::getSpaceForVfeState(&csrStream, peekHwInfo(), engineGroupType, nullptr);
         PreambleHelper<GfxFamily>::programVfeState(feStateCmdSpace,
                                                    peekRootDeviceEnvironment(),
                                                    requiredScratchSlot0Size,
@@ -2244,8 +2245,7 @@ void CommandStreamReceiverHw<GfxFamily>::dispatchImmediateFlushClientBufferComma
         args.dcFlushEnable = this->dcFlushSupport;
         args.notifyEnable = isUsedNotifyEnableForPostSync();
         args.workloadPartitionOffset = isMultiTileOperationEnabled();
-        args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-        this->isWalkerWithProfilingEnqueued = false;
+        args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
         MemorySynchronizationCommands<GfxFamily>::addBarrierWithPostSyncOperation(
             epilogueCommandStream,
             PostSyncMode::immediateData,
@@ -2442,8 +2442,7 @@ bool CommandStreamReceiverHw<GfxFamily>::submitDependencyUpdate(TagNodeBase *tag
     auto cacheFlushTimestampPacketGpuAddress = TimestampPacketHelper::getContextEndGpuAddress(*tag);
     this->programEnginePrologue(commandStream);
     args.dcFlushEnable = MemorySynchronizationCommands<GfxFamily>::getDcFlushEnable(true, this->peekRootDeviceEnvironment());
-    args.isWalkerWithProfilingEnqueued = this->isWalkerWithProfilingEnqueued;
-    this->isWalkerWithProfilingEnqueued = false;
+    args.isWalkerWithProfilingEnqueued = this->getAndClearIsWalkerWithProfilingEnqueued();
     MemorySynchronizationCommands<GfxFamily>::addBarrierWithPostSyncOperation(
         commandStream,
         PostSyncMode::immediateData,

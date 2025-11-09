@@ -25,51 +25,13 @@ void MutableCommandListFixtureInit::setUp(bool createInOrder) {
 
     mutableCommandList = createMutableCmdList();
 
-    mockKernelImmData2 = std::make_unique<MockImmutableData>(0u);
-    mockKernelImmData2->kernelDescriptor->kernelAttributes.crossThreadDataSize = crossThreadInitSize;
-    mockKernelImmData2->crossThreadDataSize = crossThreadInitSize;
-    mockKernelImmData2->crossThreadDataTemplate.reset(new uint8_t[crossThreadInitSize]);
-
-    mockKernelImmData2->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.offset = 0;
-    mockKernelImmData2->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.pointerSize = sizeof(void *);
-    mockKernelImmData2->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.offset = 8;
-    mockKernelImmData2->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.pointerSize = sizeof(void *);
-
-    {
-        std::initializer_list<ZebinTestData::AppendElfAdditionalSection> additionalSections = {};
-        zebinData2 = std::make_unique<ZebinTestData::ZebinWithL0TestCommonModule>(device->getHwInfo(), additionalSections);
-        const auto &src = zebinData2->storage;
-
-        ze_module_desc_t moduleDesc = {};
-        moduleDesc.format = ZE_MODULE_FORMAT_NATIVE;
-        moduleDesc.pInputModule = reinterpret_cast<const uint8_t *>(src.data());
-        moduleDesc.inputSize = src.size();
-
-        ModuleBuildLog *moduleBuildLog = nullptr;
-
-        module2 = std::make_unique<MockModule>(device,
-                                               moduleBuildLog,
-                                               ModuleType::user,
-                                               0,
-                                               mockKernelImmData2.get());
-
-        module2->type = ModuleType::user;
-        ze_result_t result = ZE_RESULT_ERROR_MODULE_BUILD_FAILURE;
-        result = module2->initialize(&moduleDesc, device->getNEODevice());
-        EXPECT_EQ(ZE_RESULT_SUCCESS, result);
-    }
+    mockKernelImmData2 = prepareKernelImmData();
+    module2 = prepareModule(mockKernelImmData2.get());
     kernel2 = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module2.get());
     createKernel(kernel2.get());
     module2->mockKernelImmData->kernelDescriptor->kernelMetadata.kernelName = "test2";
 
-    mockKernelImmData = std::make_unique<MockImmutableData>(0u);
-    mockKernelImmData->kernelDescriptor->kernelAttributes.crossThreadDataSize = crossThreadInitSize;
-    mockKernelImmData->crossThreadDataSize = crossThreadInitSize;
-    mockKernelImmData->crossThreadDataTemplate.reset(new uint8_t[crossThreadInitSize]);
-    mockKernelImmData->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.offset = 0;
-    mockKernelImmData->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.pointerSize = sizeof(void *);
-    mockKernelImmData->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.offset = 8;
-    mockKernelImmData->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.pointerSize = sizeof(void *);
+    mockKernelImmData = prepareKernelImmData();
     createModuleFromMockBinary(0u, false, mockKernelImmData.get());
     kernel = std::make_unique<ModuleImmutableDataFixture::MockKernel>(module.get());
     createKernel(kernel.get());
@@ -105,6 +67,36 @@ void MutableCommandListFixtureInit::tearDown() {
     mockKernelImmData2.reset(nullptr);
 
     ModuleImmutableDataFixture::tearDown();
+}
+
+std::unique_ptr<ModuleImmutableDataFixture::MockImmutableData> MutableCommandListFixtureInit::prepareKernelImmData() {
+    auto immData = std::make_unique<MockImmutableData>(0u);
+    immData->kernelDescriptor->kernelAttributes.crossThreadDataSize = crossThreadInitSize;
+    immData->crossThreadDataSize = crossThreadInitSize;
+    immData->crossThreadDataTemplate.reset(new uint8_t[crossThreadInitSize]);
+    immData->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.offset = 0;
+    immData->kernelDescriptor->payloadMappings.implicitArgs.indirectDataPointerAddress.pointerSize = sizeof(void *);
+    immData->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.offset = 8;
+    immData->kernelDescriptor->payloadMappings.implicitArgs.scratchPointerAddress.pointerSize = sizeof(void *);
+    return immData;
+}
+
+std::unique_ptr<ModuleImmutableDataFixture::MockModule> MutableCommandListFixtureInit::prepareModule(MockImmutableData *immData) {
+    std::initializer_list<ZebinTestData::AppendElfAdditionalSection> additionalSections = {};
+    auto zebinDataOut = std::make_unique<ZebinTestData::ZebinWithL0TestCommonModule>(device->getHwInfo(), additionalSections);
+    const auto &src = zebinDataOut->storage;
+
+    ze_module_desc_t moduleDesc = {};
+    moduleDesc.format = ZE_MODULE_FORMAT_NATIVE;
+    moduleDesc.pInputModule = reinterpret_cast<const uint8_t *>(src.data());
+    moduleDesc.inputSize = src.size();
+
+    ModuleBuildLog *moduleBuildLog = nullptr;
+    auto mod = std::make_unique<ModuleImmutableDataFixture::MockModule>(device, moduleBuildLog, ModuleType::user, 0, immData);
+    mod->type = ModuleType::user;
+    ze_result_t result = mod->initialize(&moduleDesc, device->getNEODevice());
+    EXPECT_EQ(ZE_RESULT_SUCCESS, result);
+    return mod;
 }
 
 std::unique_ptr<MutableCommandList> MutableCommandListFixtureInit::createMutableCmdList() {
@@ -208,20 +200,20 @@ Event *MutableCommandListFixtureInit::createTestEvent(bool cbEvent, bool signalS
 }
 
 void MutableCommandListFixtureInit::resizeKernelArg(uint32_t resize) {
-    kernel->state.kernelArgInfos.resize(resize);
-    kernel->state.isArgUncached.resize(resize);
-    kernel->state.argumentsResidencyContainer.resize(resize);
-    kernel->state.slmArgOffsetValues.resize(resize);
-    kernel->state.slmArgSizes.resize(resize);
-    kernel->state.kernelArgHandlers.resize(resize);
+    kernel->privateState.kernelArgInfos.resize(resize);
+    kernel->privateState.isArgUncached.resize(resize);
+    kernel->privateState.argumentsResidencyContainer.resize(resize);
+    kernel->privateState.slmArgOffsetValues.resize(resize);
+    kernel->privateState.slmArgSizes.resize(resize);
+    kernel->privateState.kernelArgHandlers.resize(resize);
     mockKernelImmData->resizeExplicitArgs(resize);
 
-    kernel2->state.kernelArgInfos.resize(resize);
-    kernel2->state.isArgUncached.resize(resize);
-    kernel2->state.argumentsResidencyContainer.resize(resize);
-    kernel2->state.slmArgOffsetValues.resize(resize);
-    kernel2->state.slmArgSizes.resize(resize);
-    kernel2->state.kernelArgHandlers.resize(resize);
+    kernel2->privateState.kernelArgInfos.resize(resize);
+    kernel2->privateState.isArgUncached.resize(resize);
+    kernel2->privateState.argumentsResidencyContainer.resize(resize);
+    kernel2->privateState.slmArgOffsetValues.resize(resize);
+    kernel2->privateState.slmArgSizes.resize(resize);
+    kernel2->privateState.kernelArgHandlers.resize(resize);
     mockKernelImmData2->resizeExplicitArgs(resize);
 
     this->kernelArgCount = resize;
@@ -315,11 +307,11 @@ void MutableCommandListFixtureInit::prepareKernelArg(uint16_t argIndex, L0::MCL:
         argSlm.pointerSize = 8;
 
         if (kernelMask & kernel1Bit) {
-            memset(ptrOffset(kernel->state.crossThreadData.get(), argSlm.slmOffset), 0, 8);
+            memset(&kernel->getCrossThreadDataSpan()[argSlm.slmOffset], 0, 8);
             mockKernelImmData->kernelDescriptor->payloadMappings.explicitArgs[argIndex] = kernelArgSlm;
         }
         if (kernelMask & kernel2Bit) {
-            memset(ptrOffset(kernel2->state.crossThreadData.get(), argSlm.slmOffset), 0, 8);
+            memset(&kernel2->getCrossThreadDataSpan()[argSlm.slmOffset], 0, 8);
             mockKernelImmData2->kernelDescriptor->payloadMappings.explicitArgs[argIndex] = kernelArgSlm;
         }
     }

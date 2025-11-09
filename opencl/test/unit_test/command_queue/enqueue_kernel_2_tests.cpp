@@ -343,7 +343,7 @@ HWCMDTEST_P(IGFX_GEN12LP_CORE, EnqueueScratchSpaceTests, GivenKernelRequiringScr
     auto *sba = (STATE_BASE_ADDRESS *)*itorCmdForStateBase;
 
     const HardwareInfo &hwInfo = *defaultHwInfo;
-    uint32_t threadPerEU = (hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount) + hwInfo.capabilityTable.extraQuantityThreadsPerEU;
+    uint32_t threadPerEU = hwInfo.gtSystemInfo.NumThreadsPerEu + hwInfo.capabilityTable.extraQuantityThreadsPerEU;
     uint32_t maxNumberOfThreads = hwInfo.gtSystemInfo.EUCount * threadPerEU;
 
     // Verify we have a valid length
@@ -742,14 +742,13 @@ INSTANTIATE_TEST_SUITE_P(EnqueueKernel,
 
 using EnqueueKernelTests = ::testing::Test;
 
-HWTEST2_F(EnqueueKernelTests, whenEnqueueingKernelThenCsrCorrectlySetsRequiredThreadArbitrationPolicy, IsHeapfulSupported) {
+HWTEST2_F(EnqueueKernelTests, whenEnqueueingKernelThenCsrCorrectlySetsRequiredThreadArbitrationPolicy, IsHeapfulRequired) {
     struct MyCsr : public UltCommandStreamReceiver<FamilyType> {
         using CommandStreamReceiverHw<FamilyType>::streamProperties;
     };
 
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(1);
-    UnitTestSetter::disableHeaplessStateInit(restorer);
 
     cl_uint workDim = 1;
     size_t globalWorkOffset[3] = {0, 0, 0};
@@ -814,7 +813,7 @@ HWTEST2_F(EnqueueKernelTests, whenEnqueueingKernelThenCsrCorrectlySetsRequiredTh
               csr.streamProperties.stateComputeMode.threadArbitrationPolicy.value);
 }
 
-HWTEST2_F(EnqueueKernelTests, givenAgeBasedThreadArbitrationPolicyWhenEnqueueingKernelThenCsrCorrectlySetsRequiredThreadArbitrationPolicy, IsHeapfulSupported) {
+HWTEST2_F(EnqueueKernelTests, givenAgeBasedThreadArbitrationPolicyWhenEnqueueingKernelThenCsrCorrectlySetsRequiredThreadArbitrationPolicy, IsHeapfulRequired) {
     struct MyCsr : public UltCommandStreamReceiver<FamilyType> {
         using CommandStreamReceiverHw<FamilyType>::streamProperties;
     };
@@ -828,7 +827,6 @@ HWTEST2_F(EnqueueKernelTests, givenAgeBasedThreadArbitrationPolicyWhenEnqueueing
 
     DebugManagerStateRestore restorer;
     debugManager.flags.ForceThreadArbitrationPolicyProgrammingWithScm.set(1);
-    UnitTestSetter::disableHeaplessStateInit(restorer);
 
     cl_uint workDim = 1;
     size_t globalWorkOffset[3] = {0, 0, 0};
@@ -1010,8 +1008,7 @@ HWTEST_F(EnqueueAuxKernelTests, givenMultipleArgsWhenAuxTranslationIsRequiredThe
     EXPECT_EQ(AuxTranslationDirection::nonAuxToAux, cmdQ.auxTranslationDirections[1]);
 }
 
-HWTEST_F(EnqueueAuxKernelTests, givenKernelWithRequiredAuxTranslationWhenEnqueuedThenDispatchAuxTranslationBuiltin) {
-    USE_REAL_FILE_SYSTEM();
+HWTEST2_F(EnqueueAuxKernelTests, givenKernelWithRequiredAuxTranslationWhenEnqueuedThenDispatchAuxTranslationBuiltin, IsAtMostXeCore) {
     MockKernelWithInternals mockKernel(*pClDevice, context);
     MyCmdQ<FamilyType> cmdQ(context, pClDevice);
     size_t gws[3] = {1, 0, 0};
@@ -1361,9 +1358,34 @@ HWTEST_F(EnqueueKernelTest, givenTimestampWriteEnableWhenMarkerProfilingWithWait
     EXPECT_EQ(baseCommandStreamSize + 4 * EncodeStoreMMIO<FamilyType>::size, extendedCommandStreamSize);
 }
 
+TEST(EnqueuePropertiesTest, givenBlitEnqueuePropertiesThenStartTimestampOnCpuNotRequired) {
+    EnqueueProperties properties(true, false, false, false, false, false, nullptr);
+    EXPECT_FALSE(properties.isStartTimestampOnCpuRequired());
+}
+
 TEST(EnqueuePropertiesTest, givenGpuKernelEnqueuePropertiesThenStartTimestampOnCpuNotRequired) {
     EnqueueProperties properties(false, true, false, false, false, false, nullptr);
     EXPECT_FALSE(properties.isStartTimestampOnCpuRequired());
+}
+
+TEST(EnqueuePropertiesTest, givenCacheFlushEnqueuePropertiesThenStartTimestampOnCpuNotRequired) {
+    EnqueueProperties properties(false, false, true, false, false, false, nullptr);
+    EXPECT_FALSE(properties.isStartTimestampOnCpuRequired());
+}
+
+TEST(EnqueuePropertiesTest, givenFlushDependencyEnqueuePropertiesThenStartTimestampOnCpuNotRequired) {
+    EnqueueProperties properties(false, false, false, true, false, false, nullptr);
+    EXPECT_FALSE(properties.isStartTimestampOnCpuRequired());
+}
+
+TEST(EnqueuePropertiesTest, givenFlushWithEventEnqueuePropertiesThenStartTimestampOnCpuNotRequired) {
+    EnqueueProperties properties(false, false, false, false, true, false, nullptr);
+    EXPECT_FALSE(properties.isStartTimestampOnCpuRequired());
+}
+
+TEST(EnqueuePropertiesTest, givenEnqueuePropertiesWithoutSubmitThenStartTimestampOnCpuNotRequired) {
+    EnqueueProperties properties(false, false, false, false, false, false, nullptr);
+    EXPECT_TRUE(properties.isStartTimestampOnCpuRequired());
 }
 
 HWTEST_F(EnqueueKernelTest, whenEnqueueKernelWithImageFromBufferThenInvalidateTextureCache) {

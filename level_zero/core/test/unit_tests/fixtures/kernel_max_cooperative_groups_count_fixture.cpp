@@ -19,7 +19,7 @@ void KernelImpSuggestMaxCooperativeGroupCountFixture::setUp() {
     kernelInfo.kernelDescriptor = &kernelDescriptor;
     auto &hardwareInfo = device->getHwInfo();
     auto &helper = device->getNEODevice()->getRootDeviceEnvironment().getHelper<GfxCoreHelper>();
-    availableThreadCount = helper.calculateAvailableThreadCount(hardwareInfo, numGrf);
+    availableThreadCount = helper.calculateAvailableThreadCount(hardwareInfo, numGrf, device->getNEODevice()->getRootDeviceEnvironment());
 
     dssCount = hardwareInfo.gtSystemInfo.DualSubSliceCount;
     if (dssCount == 0) {
@@ -37,13 +37,13 @@ uint32_t KernelImpSuggestMaxCooperativeGroupCountFixture::getMaxWorkGroupCount()
     kernelInfo.kernelDescriptor->kernelAttributes.barrierCount = usesBarriers;
 
     Mock<KernelImp> kernel;
-    kernel.kernelImmData = &kernelInfo;
+    kernel.sharedState->kernelImmData = &kernelInfo;
     auto module = std::make_unique<ModuleImp>(device, nullptr, ModuleType::user);
     kernel.module = module.get();
-    kernel.implicitScalingEnabled = device->getNEODevice()->getDeviceBitfield().count() > 1;
-    kernel.state.groupSize[0] = lws[0];
-    kernel.state.groupSize[1] = lws[1];
-    kernel.state.groupSize[2] = lws[2];
+    kernel.sharedState->implicitScalingEnabled = device->getNEODevice()->getDeviceBitfield().count() > 1;
+    kernel.privateState.groupSize[0] = lws[0];
+    kernel.privateState.groupSize[1] = lws[1];
+    kernel.privateState.groupSize[2] = lws[2];
     uint32_t totalGroupCount = kernel.KernelImp::suggestMaxCooperativeGroupCount(NEO::EngineGroupType::cooperativeCompute, false);
     return totalGroupCount;
 }

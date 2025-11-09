@@ -19,6 +19,7 @@
 #include "shared/test/common/mocks/mock_cpu_page_fault_manager.h"
 #include "shared/test/common/mocks/mock_device.h"
 #include "shared/test/common/mocks/mock_graphics_allocation.h"
+#include "shared/test/common/mocks/mock_product_helper.h"
 #include "shared/test/common/mocks/ult_device_factory.h"
 #include "shared/test/common/test_macros/hw_test.h"
 
@@ -432,8 +433,8 @@ HWTEST_F(CommandQueueIndirectAllocations, givenDebugModeToTreatIndirectAllocatio
     ASSERT_NE(nullptr, gpuAlloc);
 
     createKernel();
-    kernel->state.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
-    kernel->state.kernelHasIndirectAccess = true;
+    kernel->privateState.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
+    kernel->privateState.kernelHasIndirectAccess = true;
 
     EXPECT_TRUE(kernel->getUnifiedMemoryControls().indirectDeviceAllocationsAllowed);
 
@@ -497,8 +498,8 @@ HWTEST_F(CommandQueueIndirectAllocations, givenDeviceThatSupportsSubmittingIndir
     ASSERT_NE(nullptr, gpuAlloc);
 
     createKernel();
-    kernel->state.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
-    kernel->state.kernelHasIndirectAccess = true;
+    kernel->privateState.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
+    kernel->privateState.kernelHasIndirectAccess = true;
     EXPECT_TRUE(kernel->getUnifiedMemoryControls().indirectDeviceAllocationsAllowed);
 
     ze_group_count_t groupCount{1, 1, 1};
@@ -560,8 +561,8 @@ HWTEST_F(CommandQueueIndirectAllocations, givenDeviceThatSupportsSubmittingIndir
     ASSERT_NE(nullptr, gpuAlloc);
 
     createKernel();
-    kernel->state.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
-    kernel->state.kernelHasIndirectAccess = true;
+    kernel->privateState.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
+    kernel->privateState.kernelHasIndirectAccess = true;
     EXPECT_TRUE(kernel->getUnifiedMemoryControls().indirectDeviceAllocationsAllowed);
 
     static_cast<MockMemoryManager *>(driverHandle->getMemoryManager())->overrideAllocateAsPackReturn = 1u;
@@ -614,8 +615,8 @@ HWTEST_F(CommandQueueIndirectAllocations,
     ASSERT_NE(nullptr, gpuAlloc);
 
     createKernel();
-    kernel->state.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
-    kernel->state.kernelHasIndirectAccess = true;
+    kernel->privateState.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
+    kernel->privateState.kernelHasIndirectAccess = true;
     EXPECT_TRUE(kernel->getUnifiedMemoryControls().indirectDeviceAllocationsAllowed);
 
     static_cast<MockMemoryManager *>(driverHandle->getMemoryManager())->overrideAllocateAsPackReturn = 1u;
@@ -672,7 +673,7 @@ HWTEST_F(CommandQueueIndirectAllocations, givenImmediateCommandListAndFlushTaskW
     ASSERT_NE(nullptr, gpuAlloc);
 
     createKernel();
-    kernel->state.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
+    kernel->privateState.unifiedMemoryControls.indirectDeviceAllocationsAllowed = true;
     EXPECT_TRUE(kernel->getUnifiedMemoryControls().indirectDeviceAllocationsAllowed);
 
     static_cast<MockMemoryManager *>(driverHandle->getMemoryManager())->overrideAllocateAsPackReturn = 1u;
@@ -1383,7 +1384,7 @@ TEST(CommandQueue, givenContextGroupEnabledWhenCreatingCommandQueuesWithInterrup
             newOsContext->incRefInternal();
 
             newOsContext->setIsPrimaryEngine(engine.osContext->getIsPrimaryEngine());
-            newOsContext->setContextGroup(engine.osContext->isPartOfContextGroup());
+            newOsContext->setContextGroupCount(engine.osContext->isPartOfContextGroup() ? 5 : 0);
 
             engine.osContext = newOsContext;
             engine.commandStreamReceiver->setupContext(*newOsContext);
@@ -1393,9 +1394,13 @@ TEST(CommandQueue, givenContextGroupEnabledWhenCreatingCommandQueuesWithInterrup
         allocateMsix.stype = ZEX_INTEL_STRUCTURE_TYPE_QUEUE_ALLOCATE_MSIX_HINT_EXP_PROPERTIES;
         allocateMsix.uniqueMsix = true;
 
+        auto mockProductHelper = new MockProductHelper;
+        mockProductHelper->isInterruptSupportedResult = true;
+        neoDevice->executionEnvironment->rootDeviceEnvironments[0]->productHelper.reset(mockProductHelper);
+
         ze_command_queue_desc_t desc = {};
         desc.pNext = &allocateMsix;
-        ze_command_queue_handle_t commandQueueHandle1, commandQueueHandle2, commandQueueHandle3;
+        ze_command_queue_handle_t commandQueueHandle1, commandQueueHandle2, commandQueueHandle3, commandQueueHandle4;
 
         auto result = device->createCommandQueue(&desc, &commandQueueHandle1);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
@@ -1407,6 +1412,11 @@ TEST(CommandQueue, givenContextGroupEnabledWhenCreatingCommandQueuesWithInterrup
 
         result = device->createCommandQueue(&desc, &commandQueueHandle3);
         EXPECT_EQ(ZE_RESULT_SUCCESS, result);
+
+        allocateMsix.uniqueMsix = true;
+        mockProductHelper->isInterruptSupportedResult = false;
+        result = device->createCommandQueue(&desc, &commandQueueHandle4);
+        EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, result);
 
         auto commandQueue1 = static_cast<CommandQueueImp *>(L0::CommandQueue::fromHandle(commandQueueHandle1));
         auto commandQueue2 = static_cast<CommandQueueImp *>(L0::CommandQueue::fromHandle(commandQueueHandle2));

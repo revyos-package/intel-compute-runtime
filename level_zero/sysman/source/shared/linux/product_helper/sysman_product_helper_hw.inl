@@ -36,9 +36,15 @@ void SysmanProductHelperHw<gfxProduct>::getFrequencyStepSize(double *pStepSize) 
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+ze_result_t SysmanProductHelperHw<gfxProduct>::getNumberOfMemoryChannels(LinuxSysmanImp *pLinuxSysmanImp, uint32_t *pNumChannels) {
+    return ZE_RESULT_ERROR_NOT_AVAILABLE;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryProperties(zes_mem_properties_t *pProperties, LinuxSysmanImp *pLinuxSysmanImp, NEO::Drm *pDrm, SysmanKmdInterface *pSysmanKmdInterface, uint32_t subDeviceId, bool isSubdevice) {
     auto pSysFsAccess = pSysmanKmdInterface->getSysFsAccess();
     bool isIntegratedDevice = pLinuxSysmanImp->getHardwareInfo().capabilityTable.isIntegratedDevice;
+    bool isNumChannelsFromTelemetry = false;
 
     if (isIntegratedDevice) {
         pProperties->location = ZES_MEM_LOC_SYSTEM;
@@ -80,16 +86,25 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryProperties(zes_mem_prope
             }
 
             if (pProperties->type == ZES_MEM_TYPE_HBM) {
-                pProperties->numChannels = memSystemInfo->getNumHbmStacksPerTile() * memSystemInfo->getNumChannlesPerHbmStack();
+                pProperties->numChannels = memSystemInfo->getNumHbmStacksPerTile() * memSystemInfo->getNumChannelsPerHbmStack();
+            } else if (pProperties->type == ZES_MEM_TYPE_GDDR6) {
+                uint32_t numChannels = 0;
+                ze_result_t result = this->getNumberOfMemoryChannels(pLinuxSysmanImp, &numChannels);
+                isNumChannelsFromTelemetry = true;
+                if (result == ZE_RESULT_SUCCESS) {
+                    pProperties->numChannels = numChannels;
+                    pProperties->busWidth = pProperties->numChannels * 32;
+                }
             } else {
                 pProperties->numChannels = memSystemInfo->getMaxMemoryChannels();
             }
         }
     }
 
-    pProperties->busWidth = memoryBusWidth;
     pProperties->physicalSize = 0;
-
+    if (!isNumChannelsFromTelemetry) {
+        pProperties->busWidth = memoryBusWidth;
+    }
     if (isIntegratedDevice) {
         pProperties->busWidth = -1;
         pProperties->numChannels = -1;
@@ -104,7 +119,7 @@ ze_result_t SysmanProductHelperHw<gfxProduct>::getMemoryProperties(zes_mem_prope
         if (isSubdevice) {
             std::string memval;
             std::string physicalSizeFile = pSysmanKmdInterface->getSysfsFilePathForPhysicalMemorySize(subDeviceId);
-            ze_result_t result = pSysFsAccess->read(physicalSizeFile, memval);
+            ze_result_t result = pSysFsAccess->read(std::move(physicalSizeFile), memval);
             uint64_t intval = strtoull(memval.c_str(), nullptr, 16);
             if (ZE_RESULT_SUCCESS != result) {
                 pProperties->physicalSize = 0u;
@@ -154,11 +169,8 @@ bool SysmanProductHelperHw<gfxProduct>::isFrequencySetRangeSupported() {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-zes_freq_throttle_reason_flags_t SysmanProductHelperHw<gfxProduct>::getThrottleReasons(LinuxSysmanImp *pLinuxSysmanImp, uint32_t subdeviceId) {
-
+zes_freq_throttle_reason_flags_t SysmanProductHelperHw<gfxProduct>::getThrottleReasons(SysmanKmdInterface *pSysmanKmdInterface, SysFsAccessInterface *pSysfsAccess, uint32_t subdeviceId, void *pNext) {
     zes_freq_throttle_reason_flags_t throttleReasons = 0u;
-    auto pSysmanKmdInterface = pLinuxSysmanImp->getSysmanKmdInterface();
-    auto pSysfsAccess = &pLinuxSysmanImp->getSysfsAccess();
     const std::string baseDir = pSysmanKmdInterface->getBasePath(subdeviceId);
     bool baseDirectoryExists = false;
 
@@ -176,16 +188,16 @@ zes_freq_throttle_reason_flags_t SysmanProductHelperHw<gfxProduct>::getThrottleR
         std::string throttleReasonPL4File = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonPL4, subdeviceId, baseDirectoryExists);
         std::string throttleReasonThermalFile = pSysmanKmdInterface->getSysfsFilePath(SysfsName::sysfsNameThrottleReasonThermal, subdeviceId, baseDirectoryExists);
 
-        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL1File, val)) && val) {
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(std::move(throttleReasonPL1File), val)) && val) {
             throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_AVE_PWR_CAP;
         }
-        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL2File, val)) && val) {
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(std::move(throttleReasonPL2File), val)) && val) {
             throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_BURST_PWR_CAP;
         }
-        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonPL4File, val)) && val) {
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(std::move(throttleReasonPL4File), val)) && val) {
             throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_CURRENT_LIMIT;
         }
-        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(throttleReasonThermalFile, val)) && val) {
+        if ((ZE_RESULT_SUCCESS == pSysfsAccess->read(std::move(throttleReasonThermalFile), val)) && val) {
             throttleReasons |= ZES_FREQ_THROTTLE_REASON_FLAG_THERMAL_LIMIT;
         }
     } else {
@@ -351,11 +363,6 @@ template <PRODUCT_FAMILY gfxProduct>
 void SysmanProductHelperHw<gfxProduct>::getDeviceSupportedFwTypes(FirmwareUtil *pFwInterface, std::vector<std::string> &fwTypes) {
     fwTypes.clear();
     pFwInterface->getDeviceSupportedFwTypes(fwTypes);
-}
-
-template <PRODUCT_FAMILY gfxProduct>
-bool SysmanProductHelperHw<gfxProduct>::isLateBindingSupported() {
-    return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>

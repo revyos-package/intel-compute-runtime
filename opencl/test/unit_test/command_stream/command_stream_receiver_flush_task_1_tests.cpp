@@ -739,7 +739,7 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenPreambleSentWhenFlushingTaskT
     }
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenStateBaseAddressNotSentWhenFlushingTaskThenStateBaseAddressIsSent, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenStateBaseAddressNotSentWhenFlushingTaskThenStateBaseAddressIsSent, IsHeapfulRequired) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     commandStreamReceiver.isPreambleSent = true;
     commandStreamReceiver.setMediaVFEStateDirty(false);
@@ -753,7 +753,7 @@ HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenStateBaseAddressNotSentWhenF
     EXPECT_NE(cmdList.end(), stateBaseAddressItor);
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenSizeChangedWhenFlushingTaskThenStateBaseAddressIsSent, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenSizeChangedWhenFlushingTaskThenStateBaseAddressIsSent, IsHeapfulRequired) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     auto dshSize = dsh.getMaxAvailableSpace();
     auto iohSize = ioh.getMaxAvailableSpace();
@@ -782,7 +782,7 @@ HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenSizeChangedWhenFlushingTaskT
     EXPECT_NE(cmdList.end(), stateBaseAddressItor);
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenDshHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenDshHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulRequired) {
     bool deviceUsesDsh = pDevice->getHardwareInfo().capabilityTable.supportsImages;
     if (!deviceUsesDsh) {
         GTEST_SKIP();
@@ -798,7 +798,7 @@ HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenDshHeapChangeWhenFlushTaskIs
     EXPECT_NE(cmdList.end(), stateBaseAddressItor);
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenSshHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenSshHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulRequired) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     configureCSRtoNonDirtyState<FamilyType>(false);
 
@@ -810,7 +810,7 @@ HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenSshHeapChangeWhenFlushTaskIs
     EXPECT_NE(cmdList.end(), stateBaseAddressItor);
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenIohHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenIohHeapChangeWhenFlushTaskIsCalledThenSbaIsReloaded, IsHeapfulRequired) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     configureCSRtoNonDirtyState<FamilyType>(false);
 
@@ -822,7 +822,7 @@ HWTEST2_F(CommandStreamReceiverFlushTaskTests, givenIohHeapChangeWhenFlushTaskIs
     EXPECT_NE(cmdList.end(), stateBaseAddressItor);
 }
 
-HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenStateBaseAddressNotChangedWhenFlushingTaskThenStateBaseAddressIsNotSent, IsHeapfulSupported) {
+HWTEST2_F(CommandStreamReceiverFlushTaskTests, GivenStateBaseAddressNotChangedWhenFlushingTaskThenStateBaseAddressIsNotSent, IsHeapfulRequired) {
     auto &commandStreamReceiver = pDevice->getUltCommandStreamReceiver<FamilyType>();
     commandStreamReceiver.isPreambleSent = true;
     configureCSRHeapStatesToNonDirty<FamilyType>();
@@ -912,7 +912,7 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenEnoughMemoryOnlyForPreambleWh
     csrCS.getSpace(csrCS.getAvailableSpace() - sizeNeededForPreamble);
 
     commandStreamReceiver.streamProperties.stateComputeMode.setPropertiesAll(false, flushTaskFlags.numGrfRequired,
-                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled);
+                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled, false);
     flushTask(commandStreamReceiver);
 
     EXPECT_GE(sizeNeeded, csrCS.getUsed());
@@ -952,7 +952,7 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenEnoughMemoryOnlyForPreambleAn
     csrCS.getSpace(csrCS.getAvailableSpace() - sizeNeededForPreamble - sizeNeededForStateBaseAddress);
 
     commandStreamReceiver.streamProperties.stateComputeMode.setPropertiesAll(false, flushTaskFlags.numGrfRequired,
-                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled);
+                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled, false);
     flushTask(commandStreamReceiver);
 
     EXPECT_GE(sizeNeeded, csrCS.getUsed());
@@ -992,7 +992,7 @@ HWTEST_F(CommandStreamReceiverFlushTaskTests, GivenEnoughMemoryOnlyForPreambleAn
     flushTaskFlags.preemptionMode = PreemptionHelper::getDefaultPreemptionMode(mockDevice->getHardwareInfo());
 
     commandStreamReceiver.streamProperties.stateComputeMode.setPropertiesAll(false, flushTaskFlags.numGrfRequired,
-                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled);
+                                                                             flushTaskFlags.threadArbitrationPolicy, PreemptionMode::Disabled, false);
     commandStreamReceiver.flushTask(
         commandStream,
         0,

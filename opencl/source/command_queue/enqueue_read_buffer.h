@@ -76,7 +76,6 @@ cl_int CommandQueueHw<GfxFamily>::enqueueReadBufferImpl(
 
     if (isCpuCopyAllowed) {
         if (isMemTransferNeeded) {
-            this->l3FlushedAfterCpuRead = false;
             return enqueueReadWriteBufferOnCpuWithMemoryTransfer(cmdType, buffer, offset, size, ptr,
                                                                  numEventsInWaitList, eventWaitList, event);
         } else {
@@ -88,9 +87,9 @@ cl_int CommandQueueHw<GfxFamily>::enqueueReadBufferImpl(
                                                   numEventsInWaitList, eventWaitList, event);
     }
 
-    const bool useStateless = forceStateless(buffer->getSize());
+    const bool isStateless = forceStateless(buffer->getSize());
     const bool useHeapless = this->getHeaplessModeEnabled();
-    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(useStateless, useHeapless);
+    auto builtInType = EBuiltInOps::adjustBuiltinType<EBuiltInOps::copyBufferToBuffer>(isStateless, useHeapless);
 
     void *dstPtr = ptr;
 

@@ -124,21 +124,8 @@ Program::~Program() {
     }
 
     for (const auto &buildInfo : buildInfos) {
-        if (buildInfo.constantSurface) {
-            if ((nullptr != context) && (nullptr != context->getSVMAllocsManager()) && (context->getSVMAllocsManager()->getSVMAlloc(reinterpret_cast<const void *>(buildInfo.constantSurface->getGpuAddress())))) {
-                context->getSVMAllocsManager()->freeSVMAlloc(reinterpret_cast<void *>(buildInfo.constantSurface->getGpuAddress()));
-            } else {
-                this->executionEnvironment.memoryManager->checkGpuUsageAndDestroyGraphicsAllocations(buildInfo.constantSurface);
-            }
-        }
-
-        if (buildInfo.globalSurface) {
-            if ((nullptr != context) && (nullptr != context->getSVMAllocsManager()) && (context->getSVMAllocsManager()->getSVMAlloc(reinterpret_cast<const void *>(buildInfo.globalSurface->getGpuAddress())))) {
-                context->getSVMAllocsManager()->freeSVMAlloc(reinterpret_cast<void *>(buildInfo.globalSurface->getGpuAddress()));
-            } else {
-                this->executionEnvironment.memoryManager->checkGpuUsageAndDestroyGraphicsAllocations(buildInfo.globalSurface);
-            }
-        }
+        freeGlobalBufferAllocation(buildInfo.constantSurface);
+        freeGlobalBufferAllocation(buildInfo.globalSurface);
     }
 
     notifyModuleDestroy();
@@ -148,13 +135,50 @@ Program::~Program() {
     }
 }
 
+void Program::freeGlobalBufferAllocation(const std::unique_ptr<NEO::SharedPoolAllocation> &globalBuffer) {
+    if (!globalBuffer) {
+        return;
+    }
+
+    auto graphicsAllocation = globalBuffer->getGraphicsAllocation();
+    if (!graphicsAllocation) {
+        return;
+    }
+
+    auto gpuAddress = reinterpret_cast<void *>(globalBuffer->getGpuAddress());
+
+    for (const auto &device : clDevices) {
+        if (auto usmPool = device->getDevice().getUsmConstantSurfaceAllocPool();
+            usmPool && usmPool->isInPool(gpuAddress)) {
+            [[maybe_unused]] auto ret = usmPool->freeSVMAlloc(gpuAddress, false);
+            DEBUG_BREAK_IF(!ret);
+            return;
+        }
+
+        if (auto usmPool = device->getDevice().getUsmGlobalSurfaceAllocPool();
+            usmPool && usmPool->isInPool(gpuAddress)) {
+            [[maybe_unused]] auto ret = usmPool->freeSVMAlloc(gpuAddress, false);
+            DEBUG_BREAK_IF(!ret);
+            return;
+        }
+    }
+
+    if ((nullptr != context) && (nullptr != context->getSVMAllocsManager()) && (context->getSVMAllocsManager()->getSVMAlloc(reinterpret_cast<const void *>(globalBuffer->getGpuAddress())))) {
+        context->getSVMAllocsManager()->freeSVMAlloc(reinterpret_cast<void *>(globalBuffer->getGpuAddress()));
+    } else {
+        this->executionEnvironment.memoryManager->checkGpuUsageAndDestroyGraphicsAllocations(globalBuffer->getGraphicsAllocation());
+    }
+}
+
 cl_int Program::createProgramFromBinary(
     const void *pBinary,
     size_t binarySize, ClDevice &clDevice) {
 
     auto rootDeviceIndex = clDevice.getRootDeviceIndex();
     cl_int retVal = CL_INVALID_BINARY;
-
+    if (pBinary == nullptr) {
+        return retVal;
+    }
     this->irBinary.reset();
     this->irBinarySize = 0U;
     this->isSpirV = false;
@@ -203,6 +227,7 @@ cl_int Program::createProgramFromBinary(
             SingleDeviceBinary binary = {};
             binary.deviceBinary = blob;
             binary.targetDevice = NEO::getTargetDevice(clDevice.getRootDeviceEnvironment());
+            binary.generatorFeatureVersions = singleDeviceBinary.generatorFeatureVersions;
 
             auto &gfxCoreHelper = clDevice.getGfxCoreHelper();
             std::tie(decodedSingleDeviceBinary.decodeError, std::ignore) = NEO::decodeSingleDeviceBinary(decodedSingleDeviceBinary.programInfo,
@@ -230,7 +255,6 @@ cl_int Program::createProgramFromBinary(
                 if (rebuild) {
                     return CL_INVALID_BINARY;
                 }
-                rebuild = 0;
             } else {
                 rebuild |= flagRebuild;
             }
@@ -258,6 +282,8 @@ cl_int Program::createProgramFromBinary(
                 break;
             }
         }
+    } else {
+        retVal = this->createFromILExt(context, pBinary, binarySize);
     }
 
     return retVal;
@@ -354,7 +380,7 @@ void Program::cleanCurrentKernelInfo(uint32_t rootDeviceIndex) {
 
             if (executionEnvironment.memoryManager->isKernelBinaryReuseEnabled()) {
                 auto lock = executionEnvironment.memoryManager->lockKernelAllocationMap();
-                auto kernelName = kernelInfo->kernelDescriptor.kernelMetadata.kernelName;
+                const auto &kernelName = kernelInfo->kernelDescriptor.kernelMetadata.kernelName;
                 auto &storedBinaries = executionEnvironment.memoryManager->getKernelAllocationMap();
                 auto kernelAllocations = storedBinaries.find(kernelName);
                 if (kernelAllocations != storedBinaries.end()) {
@@ -631,8 +657,8 @@ StackVec<NEO::GraphicsAllocation *, 32> Program::getModuleAllocations(uint32_t r
     for (const auto &kernelInfo : kernelInfoArray) {
         allocs.push_back(kernelInfo->getGraphicsAllocation());
     }
-    GraphicsAllocation *globalsForPatching = getGlobalSurface(rootIndex);
-    GraphicsAllocation *constantsForPatching = getConstantSurface(rootIndex);
+    GraphicsAllocation *globalsForPatching = getGlobalSurfaceGA(rootIndex);
+    GraphicsAllocation *constantsForPatching = getConstantSurfaceGA(rootIndex);
 
     if (globalsForPatching) {
         allocs.push_back(globalsForPatching);
@@ -652,6 +678,26 @@ void Program::callPopulateZebinExtendedArgsMetadataOnce(uint32_t rootDeviceIndex
 void Program::callGenerateDefaultExtendedArgsMetadataOnce(uint32_t rootDeviceIndex) {
     auto &buildInfo = this->buildInfos[rootDeviceIndex];
     metadataGeneration->callGenerateDefaultExtendedArgsMetadataOnce(buildInfo.kernelInfoArray);
+}
+
+NEO::SharedPoolAllocation *Program::getConstantSurface(uint32_t rootDeviceIndex) const {
+    return buildInfos[rootDeviceIndex].constantSurface.get();
+}
+
+NEO::GraphicsAllocation *Program::getConstantSurfaceGA(uint32_t rootDeviceIndex) const {
+    return buildInfos[rootDeviceIndex].constantSurface ? buildInfos[rootDeviceIndex].constantSurface->getGraphicsAllocation() : nullptr;
+}
+
+NEO::SharedPoolAllocation *Program::getGlobalSurface(uint32_t rootDeviceIndex) const {
+    return buildInfos[rootDeviceIndex].globalSurface.get();
+}
+
+NEO::GraphicsAllocation *Program::getGlobalSurfaceGA(uint32_t rootDeviceIndex) const {
+    return buildInfos[rootDeviceIndex].globalSurface ? buildInfos[rootDeviceIndex].globalSurface->getGraphicsAllocation() : nullptr;
+}
+
+NEO::GraphicsAllocation *Program::getExportedFunctionsSurface(uint32_t rootDeviceIndex) const {
+    return buildInfos[rootDeviceIndex].exportedFunctionsSurface;
 }
 
 } // namespace NEO

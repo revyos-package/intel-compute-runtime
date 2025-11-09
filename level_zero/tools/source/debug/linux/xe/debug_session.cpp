@@ -9,6 +9,7 @@
 
 #include "shared/source/debug_settings/debug_settings_manager.h"
 #include "shared/source/gmm_helper/gmm_helper.h"
+#include "shared/source/helpers/gfx_core_helper.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/memory_manager/memory_manager.h"
 #include "shared/source/os_interface/linux/drm_debug.h"
@@ -37,7 +38,7 @@ DebugSessionLinuxXe::DebugSessionLinuxXe(const zet_debug_config_t &config, Devic
     }
 };
 DebugSessionLinuxXe::~DebugSessionLinuxXe() {
-
+    closeExternalSipHandles();
     closeAsyncThread();
     closeInternalEventsThread();
     closeFd();
@@ -471,6 +472,13 @@ bool DebugSessionLinuxXe::handleVmBind(VmBindData &vmBindData) {
                         connection->vmToStateBaseAreaBindInfo[vmBindData.vmBind.vmHandle] = {vmBindOp.addr, vmBindOp.range};
                     }
                     if (metaDataEntry.metadata.type == euDebugInterface->getParamValue(NEO::EuDebugParam::metadataSipArea)) {
+                        auto neoDevice = connectedDevice->getNEODevice();
+                        auto &gfxCoreHelper = neoDevice->getGfxCoreHelper();
+                        if (gfxCoreHelper.getSipBinaryFromExternalLib()) {
+                            if (!openSipWrapper(neoDevice, vmBindData.vmBind.vmHandle, vmBindOp.addr)) {
+                                return false;
+                            }
+                        }
                         connection->vmToContextStateSaveAreaBindInfo[vmBindData.vmBind.vmHandle] = {vmBindOp.addr, vmBindOp.range};
                     }
                     if (metaDataEntry.metadata.type == euDebugInterface->getParamValue(NEO::EuDebugParam::metadataModuleArea)) {
@@ -742,7 +750,13 @@ void DebugSessionLinuxXe::handleAttentionEvent(NEO::EuDebugEventEuAttention *att
     }
 
     newAttentionRaised();
+
     std::vector<EuThread::ThreadId> threadsWithAttention;
+    if (interruptSent) {
+        auto tileIndex = 0u;
+        scanThreadsWithAttRaisedUntilSteadyState(tileIndex, threadsWithAttention);
+    }
+
     AttentionEventFields attentionEventFields;
     attentionEventFields.bitmask = attention->bitmask;
     attentionEventFields.bitmaskSize = attention->bitmaskSize;
@@ -812,8 +826,14 @@ int DebugSessionLinuxXe::threadControlStopped(std::unique_ptr<uint8_t[]> &bitmas
                                          euControlRetVal, errno, static_cast<uint32_t>(euControl.cmd), static_cast<uint64_t>(euControl.execQueueHandle),
                                          static_cast<uint64_t>(euControl.lrcHandle));
             } else {
-                PRINT_DEBUGGER_INFO_LOG("DRM_XE_EUDEBUG_IOCTL_EU_CONTROL: seqno = %llu command = %u\n", static_cast<uint64_t>(euControl.seqno),
-                                        static_cast<uint32_t>(euControl.cmd));
+                std::vector<EuThread::ThreadId> threadsWithAttention = l0GfxCoreHelper.getThreadsFromAttentionBitmask(hwInfo, 0, static_cast<uint8_t *>(bitmask.get()), bitmaskSize);
+                for (const auto &threadId : threadsWithAttention) {
+                    allThreads[threadId]->setContextHandle(execQueue.first);
+                    allThreads[threadId]->setLrcHandle(lrcHandle);
+                }
+
+                PRINT_DEBUGGER_INFO_LOG("DRM_XE_EUDEBUG_IOCTL_EU_CONTROL: seqno = %llu command = %u, execQueueHandle = %llu lrcHandle = %llu\n", static_cast<uint64_t>(euControl.seqno),
+                                        static_cast<uint32_t>(euControl.cmd), static_cast<uint64_t>(euControl.execQueueHandle), static_cast<uint64_t>(euControl.lrcHandle));
                 break;
             }
         }

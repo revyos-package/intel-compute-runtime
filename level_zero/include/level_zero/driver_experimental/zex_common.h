@@ -178,6 +178,8 @@ typedef enum _zex_counter_based_event_exp_flag_t {
     ZEX_COUNTER_BASED_EVENT_FLAG_KERNEL_TIMESTAMP = ZE_BIT(4),        ///< Event contains kernel timestamps
     ZEX_COUNTER_BASED_EVENT_FLAG_KERNEL_MAPPED_TIMESTAMP = ZE_BIT(5), ///< Event contains kernel timestamps synchronized to host time domain.
                                                                       ///< Cannot be combined with::ZEX_COUNTER_BASED_EVENT_FLAG_KERNEL_TIMESTAMP
+    ZEX_COUNTER_BASED_EVENT_FLAG_GRAPH_EXTERNAL_EVENT = ZE_BIT(6),    ///< Event when is used in graph record & replay, can be used outside
+                                                                      ///< recorded graph for synchronization (using as wait event or for host synchronization)
     ZEX_COUNTER_BASED_EVENT_FLAG_FORCE_UINT32 = 0x7fffffff
 
 } zex_counter_based_event_exp_flag_t;
@@ -199,15 +201,14 @@ typedef struct _zex_counter_based_event_desc_t {
                                                ///< additional cache hierarchies are invalidated.
 } zex_counter_based_event_desc_t;
 
-const zex_counter_based_event_desc_t defaultCounterBasedEventDesc = {
+static const zex_counter_based_event_desc_t defaultIntelCounterBasedEventDesc = {
     ZEX_STRUCTURE_COUNTER_BASED_EVENT_DESC, // stype
     nullptr,                                // pNext
-    static_cast<zex_counter_based_event_exp_flags_t>(
-        ZEX_COUNTER_BASED_EVENT_FLAG_IMMEDIATE |
+    ZEX_COUNTER_BASED_EVENT_FLAG_IMMEDIATE |
         ZEX_COUNTER_BASED_EVENT_FLAG_NON_IMMEDIATE |
-        ZEX_COUNTER_BASED_EVENT_FLAG_HOST_VISIBLE),                 // flags
-    static_cast<ze_event_scope_flags_t>(ZE_EVENT_SCOPE_FLAG_HOST),  // signalScope
-    static_cast<ze_event_scope_flags_t>(ZE_EVENT_SCOPE_FLAG_DEVICE) // waitScope
+        ZEX_COUNTER_BASED_EVENT_FLAG_HOST_VISIBLE, // flags
+    ZE_EVENT_SCOPE_FLAG_HOST,                      // signalScope
+    ZE_EVENT_SCOPE_FLAG_DEVICE                     // waitScope
 };
 
 ///////////////////////////////////////////////////////////////////////////////

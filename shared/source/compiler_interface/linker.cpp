@@ -232,6 +232,7 @@ bool LinkerInput::addSymbol(Elf::Elf<numBits> &elf, const SectionNameToSegmentId
     auto symbolSectionName = elf.getSectionName(elfSymbol.shndx);
     auto segment = getSegmentForSection(symbolSectionName);
     if (segment == SegmentType::unknown) {
+        externalSymbols.push_back(symbolName);
         return false;
     }
 
@@ -297,26 +298,45 @@ void LinkerInput::decodeElfSymbolTableAndRelocations(Elf::Elf<numBits> &elf, con
 }
 
 void LinkerInput::parseRelocationForExtFuncUsage(const RelocationInfo &relocInfo, const std::string &kernelName) {
-    auto extFuncSymIt = std::find_if(extFuncSymbols.begin(), extFuncSymbols.end(), [relocInfo](auto &pair) {
-        return pair.first == relocInfo.symbolName;
-    });
-    if (extFuncSymIt != extFuncSymbols.end()) {
-        if (kernelName == Zebin::Elf::SectionNames::externalFunctions.str()) {
-            auto callerIt = std::find_if(extFuncSymbols.begin(), extFuncSymbols.end(), [relocInfo](auto &pair) {
-                auto &symbol = pair.second;
-                return relocInfo.offset >= symbol.offset && relocInfo.offset < symbol.offset + symbol.size;
-            });
-            if (callerIt != extFuncSymbols.end()) {
-                extFunDependencies.push_back({relocInfo.symbolName, callerIt->first});
-            }
-        } else {
-            kernelDependencies.push_back({relocInfo.symbolName, kernelName});
+
+    bool isExternalSymbol = false;
+    auto shouldIgnoreRelocation = [&](const RelocationInfo &relocInfo) {
+        if (relocInfo.symbolName.empty()) {
+            return true;
         }
+
+        // ignore relocations for non-instruction symbols
+        if (std::find_if(symbols.begin(), symbols.end(), [relocInfo](auto &pair) {
+                auto &symbol = pair.second;
+                return relocInfo.symbolName == pair.first && symbol.segment != SegmentType::instructions;
+            }) != symbols.end()) {
+            return true;
+        }
+
+        if (std::ranges::find(externalSymbols, relocInfo.symbolName) != externalSymbols.end()) {
+            isExternalSymbol = true;
+        }
+        return false;
+    };
+
+    if (shouldIgnoreRelocation(relocInfo)) {
+        return;
+    }
+    if (kernelName == Zebin::Elf::SectionNames::externalFunctions.str()) {
+        auto callerIt = std::find_if(extFuncSymbols.begin(), extFuncSymbols.end(), [relocInfo](auto &pair) {
+            auto &symbol = pair.second;
+            return relocInfo.offset >= symbol.offset && relocInfo.offset < symbol.offset + symbol.size;
+        });
+        if (callerIt != extFuncSymbols.end()) {
+            extFunDependencies.push_back({relocInfo.symbolName, callerIt->first, isExternalSymbol});
+        }
+    } else {
+        kernelDependencies.push_back({relocInfo.symbolName, kernelName, isExternalSymbol});
     }
 }
 
 LinkingStatus Linker::link(const SegmentInfo &globalVariablesSegInfo, const SegmentInfo &globalConstantsSegInfo, const SegmentInfo &exportedFunctionsSegInfo,
-                           const SegmentInfo &globalStringsSegInfo, GraphicsAllocation *globalVariablesSeg, GraphicsAllocation *globalConstantsSeg,
+                           const SegmentInfo &globalStringsSegInfo, SharedPoolAllocation *globalVariablesSeg, SharedPoolAllocation *globalConstantsSeg,
                            const PatchableSegments &instructionsSegments, UnresolvedExternals &outUnresolvedExternals, Device *pDevice, const void *constantsInitData,
                            size_t constantsInitDataSize, const void *variablesInitData, size_t variablesInitDataSize, const KernelDescriptorsT &kernelDescriptors,
                            ExternalFunctionsT &externalFunctions) {
@@ -471,7 +491,7 @@ void Linker::patchInstructionsSegments(const std::vector<PatchableSegment> &inst
 }
 
 void Linker::patchDataSegments(const SegmentInfo &globalVariablesSegInfo, const SegmentInfo &globalConstantsSegInfo,
-                               GraphicsAllocation *globalVariablesSeg, GraphicsAllocation *globalConstantsSeg,
+                               SharedPoolAllocation *globalVariablesSeg, SharedPoolAllocation *globalConstantsSeg,
                                std::vector<UnresolvedExternal> &outUnresolvedExternals, Device *pDevice,
                                const void *constantsInitData, size_t constantsInitDataSize, const void *variablesInitData, size_t variablesInitDataSize) {
     std::vector<uint8_t> constantsData(globalConstantsSegInfo.segmentSize, 0u);
@@ -535,12 +555,12 @@ void Linker::patchDataSegments(const SegmentInfo &globalVariablesSegInfo, const 
         auto &rootDeviceEnvironment = pDevice->getRootDeviceEnvironment();
         auto &productHelper = pDevice->getProductHelper();
         if (globalConstantsSeg) {
-            bool useBlitter = productHelper.isBlitCopyRequiredForLocalMemory(rootDeviceEnvironment, *globalConstantsSeg);
-            MemoryTransferHelper::transferMemoryToAllocation(useBlitter, *pDevice, globalConstantsSeg, 0, constantsData.data(), constantsData.size());
+            bool useBlitter = productHelper.isBlitCopyRequiredForLocalMemory(rootDeviceEnvironment, *globalConstantsSeg->getGraphicsAllocation());
+            MemoryTransferHelper::transferMemoryToAllocation(useBlitter, *pDevice, globalConstantsSeg->getGraphicsAllocation(), globalConstantsSeg->getOffset(), constantsData.data(), constantsData.size());
         }
         if (globalVariablesSeg) {
-            bool useBlitter = productHelper.isBlitCopyRequiredForLocalMemory(rootDeviceEnvironment, *globalVariablesSeg);
-            MemoryTransferHelper::transferMemoryToAllocation(useBlitter, *pDevice, globalVariablesSeg, 0, variablesData.data(), variablesData.size());
+            bool useBlitter = productHelper.isBlitCopyRequiredForLocalMemory(rootDeviceEnvironment, *globalVariablesSeg->getGraphicsAllocation());
+            MemoryTransferHelper::transferMemoryToAllocation(useBlitter, *pDevice, globalVariablesSeg->getGraphicsAllocation(), globalVariablesSeg->getOffset(), variablesData.data(), variablesData.size());
         }
     }
 }
@@ -661,11 +681,16 @@ void Linker::resolveImplicitArgs(const KernelDescriptorsT &kernelDescriptors, De
                 kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs |= addImplcictArgs;
                 if (kernelDescriptor.kernelAttributes.flags.requiresImplicitArgs) {
                     uint64_t implicitArgsSize = 0;
-                    if (pDevice->getGfxCoreHelper().getImplicitArgsVersion() == 0) {
+                    uint8_t version = kernelDescriptor.kernelMetadata.indirectAccessBuffer;
+                    if (version == 0) {
+                        version = pDevice->getGfxCoreHelper().getImplicitArgsVersion();
+                    }
+
+                    if (version == 0) {
                         implicitArgsSize = ImplicitArgsV0::getAlignedSize();
-                    } else if (pDevice->getGfxCoreHelper().getImplicitArgsVersion() == 1) {
+                    } else if (version == 1) {
                         implicitArgsSize = ImplicitArgsV1::getAlignedSize();
-                    } else if (pDevice->getGfxCoreHelper().getImplicitArgsVersion() == 2) {
+                    } else if (version == 2) {
                         implicitArgsSize = ImplicitArgsV2::getAlignedSize();
                     } else {
                         UNRECOVERABLE_IF(true);

@@ -10,6 +10,7 @@
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/string.h"
 #include "shared/source/memory_manager/unified_memory_pooling.h"
+#include "shared/source/memory_manager/usm_pool_params.h"
 #include "shared/source/utilities/buffer_pool_allocator.h"
 #include "shared/source/utilities/stackvec.h"
 
@@ -49,7 +50,6 @@ struct OpenCLObjectMapper<_cl_context> {
 };
 
 class Context : public BaseObject<_cl_context> {
-    using UsmHostMemAllocPool = UsmMemAllocPool;
     using UsmDeviceMemAllocPool = UsmMemAllocPool;
 
   public:
@@ -148,6 +148,10 @@ class Context : public BaseObject<_cl_context> {
         return memoryManager;
     }
 
+    StagingBufferManager *getStagingBufferManager() const {
+        return stagingBufferManager;
+    }
+
     SVMAllocsManager *getSVMAllocsManager() const {
         return svmAllocsManager;
     }
@@ -244,20 +248,12 @@ class Context : public BaseObject<_cl_context> {
     UsmMemAllocPool &getDeviceMemAllocPool() {
         return usmDeviceMemAllocPool;
     }
-    UsmMemAllocPool &getHostMemAllocPool() {
-        return usmHostMemAllocPool;
-    }
 
     TagAllocatorBase *getMultiRootDeviceTimestampPacketAllocator();
     std::unique_lock<std::mutex> obtainOwnershipForMultiRootDeviceAllocator();
     void setMultiRootDeviceTimestampPacketAllocator(std::unique_ptr<TagAllocatorBase> &allocator);
-    void setContextAsNonZebin();
-    bool checkIfContextIsNonZebin() const;
 
-    void initializeUsmAllocationPools();
-    void cleanupUsmAllocationPools();
-
-    StagingBufferManager *getStagingBufferManager() const;
+    void initializeDeviceUsmAllocationPool();
 
   protected:
     struct BuiltInKernel {
@@ -270,15 +266,6 @@ class Context : public BaseObject<_cl_context> {
         }
     };
 
-    struct UsmPoolParams {
-        size_t poolSize{0};
-        size_t minServicedSize{0};
-        size_t maxServicedSize{0};
-    };
-
-    UsmPoolParams getUsmHostPoolParams() const;
-    UsmPoolParams getUsmDevicePoolParams() const;
-
     Context(void(CL_CALLBACK *pfnNotify)(const char *, const void *, size_t, void *) = nullptr,
             void *userData = nullptr);
 
@@ -286,6 +273,8 @@ class Context : public BaseObject<_cl_context> {
     void *getOsContextInfo(cl_context_info &paramName, size_t *srcParamSize);
 
     void setupContextType();
+
+    virtual void initializeManagers();
 
     RootDeviceIndicesContainer rootDeviceIndices;
     std::map<uint32_t, DeviceBitfield> deviceBitfields;
@@ -304,7 +293,6 @@ class Context : public BaseObject<_cl_context> {
     DriverDiagnostics *driverDiagnostics = nullptr;
     BufferPoolAllocator smallBufferPoolAllocator;
     UsmDeviceMemAllocPool usmDeviceMemAllocPool;
-    UsmHostMemAllocPool usmHostMemAllocPool;
 
     uint32_t maxRootDeviceIndex = std::numeric_limits<uint32_t>::max();
     cl_bool preferD3dSharedResources = 0u;
@@ -312,12 +300,12 @@ class Context : public BaseObject<_cl_context> {
     std::unique_ptr<TagAllocatorBase> multiRootDeviceTimestampPacketAllocator;
     std::mutex multiRootDeviceAllocatorMtx;
 
-    std::unique_ptr<StagingBufferManager> stagingBufferManager;
+    StagingBufferManager *stagingBufferManager = nullptr;
 
     bool interopUserSync = false;
     bool resolvesRequiredInKernels = false;
-    bool nonZebinContext = false;
     bool usmPoolInitialized = false;
+    bool platformManagersInitialized = false;
 };
 
 static_assert(NEO::NonCopyableAndNonMovable<Context>);

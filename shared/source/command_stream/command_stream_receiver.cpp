@@ -418,6 +418,16 @@ void CommandStreamReceiver::cleanupResources() {
         tagsMultiAllocation = nullptr;
     }
 
+    if (hostFunctionDataMultiAllocation) {
+        hostFunctionDataAllocation = nullptr;
+
+        for (auto graphicsAllocation : hostFunctionDataMultiAllocation->getGraphicsAllocations()) {
+            getMemoryManager()->freeGraphicsMemory(graphicsAllocation);
+        }
+        delete hostFunctionDataMultiAllocation;
+        hostFunctionDataMultiAllocation = nullptr;
+    }
+
     if (globalFenceAllocation) {
         getMemoryManager()->freeGraphicsMemory(globalFenceAllocation);
         globalFenceAllocation = nullptr;
@@ -538,7 +548,7 @@ void CommandStreamReceiver::setTagAllocation(GraphicsAllocation *allocation) {
         reinterpret_cast<uint8_t *>(allocation->getUnderlyingBuffer()) + TagAllocationLayout::debugPauseStateAddressOffset);
 }
 
-MultiGraphicsAllocation &CommandStreamReceiver::createTagsMultiAllocation() {
+MultiGraphicsAllocation &CommandStreamReceiver::createMultiAllocationInSystemMemoryPool(AllocationType allocationType) {
     RootDeviceIndicesContainer rootDeviceIndices;
 
     rootDeviceIndices.pushUnique(rootDeviceIndex);
@@ -546,7 +556,7 @@ MultiGraphicsAllocation &CommandStreamReceiver::createTagsMultiAllocation() {
     auto maxRootDeviceIndex = static_cast<uint32_t>(this->executionEnvironment.rootDeviceEnvironments.size() - 1);
     auto allocations = new MultiGraphicsAllocation(maxRootDeviceIndex);
 
-    AllocationProperties unifiedMemoryProperties{rootDeviceIndex, MemoryConstants::pageSize, AllocationType::tagBuffer, systemMemoryBitfield};
+    AllocationProperties unifiedMemoryProperties{rootDeviceIndex, MemoryConstants::pageSize, allocationType, systemMemoryBitfield};
 
     this->getMemoryManager()->createMultiGraphicsAllocationInSystemMemoryPool(rootDeviceIndices, unifiedMemoryProperties, *allocations);
     return *allocations;
@@ -664,6 +674,20 @@ void CommandStreamReceiver::drainPagingFenceQueue() {
     }
 }
 
+// Returns a unique identifier for the context group this CSR belongs to
+uint32_t CommandStreamReceiver::getContextGroupId() const {
+    const OsContext &osContext = this->getOsContext();
+    // If the context is part of a group, use the primary context's id as the group id
+    if (osContext.isPartOfContextGroup()) {
+        const OsContext *primary = osContext.getPrimaryContext();
+        if (primary != nullptr) {
+            return primary->getContextId();
+        }
+    }
+    // Otherwise, use this context's id
+    return osContext.getContextId();
+}
+
 GraphicsAllocation *CommandStreamReceiver::allocateDebugSurface(size_t size) {
     UNRECOVERABLE_IF(debugSurface != nullptr);
     if (primaryCsr) {
@@ -679,6 +703,37 @@ void *CommandStreamReceiver::getIndirectHeapCurrentPtr(IndirectHeapType heapType
         return heap->getSpace(0);
     }
     return nullptr;
+}
+
+void CommandStreamReceiver::ensureHostFunctionDataInitialization() {
+    if (!this->hostFunctionInitialized.load(std::memory_order_acquire)) {
+        initializeHostFunctionData();
+    }
+}
+
+void CommandStreamReceiver::initializeHostFunctionData() {
+
+    auto lock = obtainUniqueOwnership();
+
+    if (this->hostFunctionInitialized.load(std::memory_order_relaxed)) {
+        return;
+    }
+    this->hostFunctionDataMultiAllocation = &this->createMultiAllocationInSystemMemoryPool(AllocationType::hostFunction);
+    this->hostFunctionDataAllocation = hostFunctionDataMultiAllocation->getGraphicsAllocation(rootDeviceIndex);
+
+    void *hostFunctionBuffer = hostFunctionDataAllocation->getUnderlyingBuffer();
+    this->hostFunctionData.entry = reinterpret_cast<decltype(HostFunctionData::entry)>(ptrOffset(hostFunctionBuffer, HostFunctionHelper::entryOffset));
+    this->hostFunctionData.userData = reinterpret_cast<decltype(HostFunctionData::userData)>(ptrOffset(hostFunctionBuffer, HostFunctionHelper::userDataOffset));
+    this->hostFunctionData.internalTag = reinterpret_cast<decltype(HostFunctionData::internalTag)>(ptrOffset(hostFunctionBuffer, HostFunctionHelper::internalTagOffset));
+    this->hostFunctionInitialized.store(true, std::memory_order_release);
+}
+
+HostFunctionData &CommandStreamReceiver::getHostFunctionData() {
+    return hostFunctionData;
+}
+
+GraphicsAllocation *CommandStreamReceiver::getHostFunctionDataAllocation() {
+    return hostFunctionDataAllocation;
 }
 
 IndirectHeap &CommandStreamReceiver::getIndirectHeap(IndirectHeap::Type heapType,
@@ -810,8 +865,12 @@ void *CommandStreamReceiver::asyncDebugBreakConfirmation(void *arg) {
     return nullptr;
 }
 
+void CommandStreamReceiver::makeResidentHostFunctionAllocation() {
+    makeResident(*hostFunctionDataAllocation);
+}
+
 bool CommandStreamReceiver::initializeTagAllocation() {
-    this->tagsMultiAllocation = &this->createTagsMultiAllocation();
+    this->tagsMultiAllocation = &this->createMultiAllocationInSystemMemoryPool(AllocationType::tagBuffer);
 
     auto tagAllocation = tagsMultiAllocation->getGraphicsAllocation(rootDeviceIndex);
     if (!tagAllocation) {
@@ -910,6 +969,9 @@ bool CommandStreamReceiver::createPreemptionAllocation() {
 
 std::unique_lock<CommandStreamReceiver::MutexType> CommandStreamReceiver::obtainUniqueOwnership() {
     return std::unique_lock<CommandStreamReceiver::MutexType>(this->ownershipMutex);
+}
+std::unique_lock<CommandStreamReceiver::MutexType> CommandStreamReceiver::tryObtainUniqueOwnership() {
+    return std::unique_lock<CommandStreamReceiver::MutexType>(this->ownershipMutex, std::try_to_lock);
 }
 std::unique_lock<CommandStreamReceiver::MutexType> CommandStreamReceiver::obtainHostPtrSurfaceCreationLock() {
     return std::unique_lock<CommandStreamReceiver::MutexType>(this->hostPtrSurfaceCreationMutex);
@@ -1026,6 +1088,12 @@ bool CommandStreamReceiver::checkImplicitFlushForGpuIdle() {
     return false;
 }
 
+bool CommandStreamReceiver::getAndClearIsWalkerWithProfilingEnqueued() {
+    bool retVal = this->isWalkerWithProfilingEnqueued;
+    this->isWalkerWithProfilingEnqueued = false;
+    return retVal;
+}
+
 void CommandStreamReceiver::downloadTagAllocation(TaskCountType taskCountToWait) {
     if (this->getTagAllocation()) {
         if (taskCountToWait && taskCountToWait <= this->peekLatestFlushedTaskCount()) {
@@ -1118,6 +1186,10 @@ bool CommandStreamReceiver::isTbxMode() const {
 
 bool CommandStreamReceiver::isAubMode() const {
     return (getType() == NEO::CommandStreamReceiverType::aub || getType() == NEO::CommandStreamReceiverType::tbxWithAub || getType() == NEO::CommandStreamReceiverType::hardwareWithAub || getType() == NEO::CommandStreamReceiverType::nullAub);
+}
+
+bool CommandStreamReceiver::isHardwareMode() const {
+    return (getType() == NEO::CommandStreamReceiverType::hardware);
 }
 
 TaskCountType CompletionStamp::getTaskCountFromSubmissionStatusError(SubmissionStatus status) {

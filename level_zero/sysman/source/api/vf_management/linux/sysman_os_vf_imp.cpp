@@ -33,7 +33,7 @@ ze_result_t LinuxVfImp::getVfBDFAddress(uint32_t vfIdMinusOne, zes_pci_address_t
     }
     std::size_t loc = vfRealPath.find_last_of("/");
     if (loc == std::string::npos) {
-        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to get the last occurence of '/' and returning error:0x%x \n", __FUNCTION__, ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE);
+        NEO::printDebugString(NEO::debugManager.flags.PrintDebugMessages.get(), stderr, "Error@ %s(): Failed to get the last occurrence of '/' and returning error:0x%x \n", __FUNCTION__, ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE);
         return ZE_RESULT_ERROR_DEPENDENCY_UNAVAILABLE;
     }
     std::string vfBdfString = vfRealPath.substr(loc + 1);
@@ -137,6 +137,7 @@ ze_result_t LinuxVfImp::vfEngineDataInit() {
     vfGetInstancesFromEngineInfo(pDrm);
     for (const auto &engine : engineGroupInstance) {
         auto engineClass = engineGroupToEngineClass.find(engine.first);
+        UNRECOVERABLE_IF(engineClass == engineGroupToEngineClass.end());
         std::pair<uint64_t, uint64_t> configPair{UINT64_MAX, UINT64_MAX};
         auto result = pSysmanKmdInterface->getBusyAndTotalTicksConfigsForVf(pPmuInterface, vfId, engine.second.first, engineClass->second, engine.second.second, configPair);
         if (result != ZE_RESULT_SUCCESS) {

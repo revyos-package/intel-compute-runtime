@@ -14,6 +14,7 @@
 
 #include "level_zero/core/source/kernel/kernel.h"
 #include "level_zero/core/source/kernel/kernel_mutable_state.h"
+#include "level_zero/core/source/kernel/kernel_shared_state.h"
 #include "level_zero/core/source/module/module.h"
 #include "level_zero/core/source/module/module_imp.h"
 
@@ -27,23 +28,29 @@ struct ImplicitArgs;
 
 namespace L0 {
 
+struct KernelSharedState;
+
 struct KernelExt {
     virtual ~KernelExt() = default;
 };
 
 struct KernelImp : Kernel {
-    KernelImp(Module *module);
+    KernelImp(Module *module) : module(module),
+                                ownedSharedState(module ? std::make_unique<KernelSharedState>(module) : nullptr),
+                                sharedState(ownedSharedState.get()) {}
 
-    ~KernelImp() override;
+    ~KernelImp() override = default;
 
     ze_result_t destroy() override {
-        if (this->devicePrintfKernelMutex == nullptr) {
+        if (this->sharedState->devicePrintfKernelMutex == nullptr) {
             delete this;
             return ZE_RESULT_SUCCESS;
         } else {
             return static_cast<ModuleImp *>(this->module)->destroyPrintfKernel(this);
         }
     }
+
+    std::unique_ptr<KernelImp> makeDependentClone();
 
     ze_result_t getBaseAddress(uint64_t *baseAddress) override;
     ze_result_t getKernelProgramBinary(size_t *kernelSize, char *pKernelBinary) override;
@@ -68,26 +75,27 @@ struct KernelImp : Kernel {
     ze_result_t getKernelName(size_t *pSize, char *pName) override;
     ze_result_t getArgumentSize(uint32_t argIndex, uint32_t *argSize) const override;
     ze_result_t getArgumentType(uint32_t argIndex, uint32_t *pSize, char *pString) const override;
+    void populateMetadata() const;
 
     uint32_t suggestMaxCooperativeGroupCount(NEO::EngineGroupType engineGroupType, bool forceSingleTileQuery) override {
-        UNRECOVERABLE_IF(0 == this->state.groupSize[0]);
-        UNRECOVERABLE_IF(0 == this->state.groupSize[1]);
-        UNRECOVERABLE_IF(0 == this->state.groupSize[2]);
+        UNRECOVERABLE_IF(0 == this->privateState.groupSize[0]);
+        UNRECOVERABLE_IF(0 == this->privateState.groupSize[1]);
+        UNRECOVERABLE_IF(0 == this->privateState.groupSize[2]);
 
-        return suggestMaxCooperativeGroupCount(engineGroupType, this->state.groupSize, forceSingleTileQuery);
+        return suggestMaxCooperativeGroupCount(engineGroupType, this->privateState.groupSize, forceSingleTileQuery);
     }
 
     uint32_t suggestMaxCooperativeGroupCount(NEO::EngineGroupType engineGroupType, uint32_t *groupSize, bool forceSingleTileQuery);
 
-    const uint8_t *getCrossThreadData() const override { return state.crossThreadData.get(); }
-    uint32_t getCrossThreadDataSize() const override { return state.crossThreadDataSize; }
+    const uint8_t *getCrossThreadData() const override { return privateState.crossThreadData.data(); }
+    uint32_t getCrossThreadDataSize() const override { return static_cast<uint32_t>(privateState.crossThreadData.size()); }
 
     const std::vector<NEO::GraphicsAllocation *> &getArgumentsResidencyContainer() const override {
-        return state.argumentsResidencyContainer;
+        return privateState.argumentsResidencyContainer;
     }
 
     const std::vector<NEO::GraphicsAllocation *> &getInternalResidencyContainer() const override {
-        return state.internalResidencyContainer;
+        return privateState.internalResidencyContainer;
     }
 
     ze_result_t setArgImmediate(uint32_t argIndex, size_t argSize, const void *argVal);
@@ -98,7 +106,7 @@ struct KernelImp : Kernel {
 
     ze_result_t setArgRedescribedImage(uint32_t argIndex, ze_image_handle_t argVal, bool isPacked) override;
 
-    ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *peerAllocData) override;
+    ze_result_t setArgBufferWithAlloc(uint32_t argIndex, uintptr_t argVal, NEO::GraphicsAllocation *allocation, NEO::SvmAllocationData *allocData) override;
 
     ze_result_t setArgImage(uint32_t argIndex, size_t argSize, const void *argVal);
 
@@ -110,15 +118,17 @@ struct KernelImp : Kernel {
 
     ze_result_t initialize(const ze_kernel_desc_t *desc);
 
-    const uint8_t *getPerThreadData() const override { return state.perThreadDataForWholeThreadGroup; }
-    uint32_t getPerThreadDataSizeForWholeThreadGroup() const override { return state.perThreadDataSizeForWholeThreadGroup; }
+    const uint8_t *getPerThreadData() const override { return privateState.perThreadDataForWholeThreadGroup; }
+    uint32_t getPerThreadDataSizeForWholeThreadGroup() const override { return privateState.perThreadDataSizeForWholeThreadGroup; }
 
-    uint32_t getPerThreadDataSize() const override { return state.perThreadDataSize; }
-    uint32_t getNumThreadsPerThreadGroup() const override { return state.numThreadsPerThreadGroup; }
-    uint32_t getThreadExecutionMask() const override { return state.threadExecutionMask; }
+    uint32_t getPerThreadDataSize() const override { return privateState.perThreadDataSize; }
+    uint32_t getNumThreadsPerThreadGroup() const override { return privateState.numThreadsPerThreadGroup; }
+    uint32_t getThreadExecutionMask() const override { return privateState.threadExecutionMask; }
 
-    std::mutex *getDevicePrintfKernelMutex() override { return this->devicePrintfKernelMutex; }
-    NEO::GraphicsAllocation *getPrintfBufferAllocation() override { return this->printfBuffer; }
+    std::mutex *getDevicePrintfKernelMutex() override { return this->sharedState->devicePrintfKernelMutex; }
+    NEO::GraphicsAllocation *getPrintfBufferAllocation() override {
+        return this->sharedState->printfBuffer;
+    }
     void printPrintfOutput(bool hangDetected) override;
 
     bool usesSyncBuffer() override;
@@ -126,28 +136,28 @@ struct KernelImp : Kernel {
     void patchSyncBuffer(NEO::GraphicsAllocation *gfxAllocation, size_t bufferOffset) override;
     void patchRegionGroupBarrier(NEO::GraphicsAllocation *gfxAllocation, size_t bufferOffset) override;
 
-    const uint8_t *getSurfaceStateHeapData() const override { return state.surfaceStateHeapData.get(); }
+    const uint8_t *getSurfaceStateHeapData() const override { return privateState.surfaceStateHeapData.data(); }
     uint32_t getSurfaceStateHeapDataSize() const override;
 
-    const uint8_t *getDynamicStateHeapData() const override { return state.dynamicStateHeapData.get(); }
+    const uint8_t *getDynamicStateHeapData() const override { return privateState.dynamicStateHeapData.data(); }
 
-    const KernelImmutableData *getImmutableData() const override { return kernelImmData; }
+    const KernelImmutableData *getImmutableData() const override { return sharedState->kernelImmData; }
 
-    UnifiedMemoryControls getUnifiedMemoryControls() const override { return state.unifiedMemoryControls; }
+    UnifiedMemoryControls getUnifiedMemoryControls() const override { return privateState.unifiedMemoryControls; }
     bool hasIndirectAllocationsAllowed() const override;
 
     const NEO::KernelDescriptor &getKernelDescriptor() const override {
-        return kernelImmData->getDescriptor();
+        return getImmutableData()->getDescriptor();
     }
     const uint32_t *getGroupSize() const override {
-        return state.groupSize;
+        return privateState.groupSize;
     }
     uint32_t getSlmTotalSize() const override;
 
     NEO::SlmPolicy getSlmPolicy() const override {
-        if (state.cacheConfigFlags & ZE_CACHE_CONFIG_FLAG_LARGE_SLM) {
+        if (privateState.cacheConfigFlags & ZE_CACHE_CONFIG_FLAG_LARGE_SLM) {
             return NEO::SlmPolicy::slmPolicyLargeSlm;
-        } else if (state.cacheConfigFlags & ZE_CACHE_CONFIG_FLAG_LARGE_DATA) {
+        } else if (privateState.cacheConfigFlags & ZE_CACHE_CONFIG_FLAG_LARGE_DATA) {
             return NEO::SlmPolicy::slmPolicyLargeData;
         } else {
             return NEO::SlmPolicy::slmPolicyNone;
@@ -157,27 +167,27 @@ struct KernelImp : Kernel {
     NEO::GraphicsAllocation *getIsaAllocation() const override;
     uint64_t getIsaOffsetInParentAllocation() const override;
 
-    uint32_t getRequiredWorkgroupOrder() const override { return state.requiredWorkgroupOrder; }
-    bool requiresGenerationOfLocalIdsByRuntime() const override { return state.kernelRequiresGenerationOfLocalIdsByRuntime; }
-    bool getKernelRequiresUncachedMocs() { return (state.kernelRequiresUncachedMocsCount > 0); }
-    bool getKernelRequiresQueueUncachedMocs() { return (state.kernelRequiresQueueUncachedMocsCount > 0); }
-    void setKernelArgUncached(uint32_t index, bool val) { state.isArgUncached[index] = val; }
+    uint32_t getRequiredWorkgroupOrder() const override { return privateState.requiredWorkgroupOrder; }
+    bool requiresGenerationOfLocalIdsByRuntime() const override { return privateState.kernelRequiresGenerationOfLocalIdsByRuntime; }
+    bool getKernelRequiresUncachedMocs() { return (privateState.kernelRequiresUncachedMocsCount > 0); }
+    bool getKernelRequiresQueueUncachedMocs() { return (privateState.kernelRequiresQueueUncachedMocsCount > 0); }
+    void setKernelArgUncached(uint32_t index, bool val) { privateState.isArgUncached[index] = val; }
 
     uint32_t *getGlobalOffsets() override {
-        return this->state.globalOffsets;
+        return this->privateState.globalOffsets;
     }
     ze_result_t setGlobalOffsetExp(uint32_t offsetX, uint32_t offsetY, uint32_t offsetZ) override;
     void patchGlobalOffset() override;
 
     ze_result_t setCacheConfig(ze_cache_config_flags_t flags) override;
     bool usesRayTracing() {
-        return kernelImmData->getDescriptor().kernelAttributes.flags.hasRTCalls;
+        return getImmutableData()->getDescriptor().kernelAttributes.flags.hasRTCalls;
     }
 
     ze_result_t getProfileInfo(zet_profile_properties_t *pProfileProperties) override;
 
     bool hasIndirectAccess() const {
-        return state.kernelHasIndirectAccess;
+        return privateState.kernelHasIndirectAccess;
     }
 
     const Module &getParentModule() const {
@@ -191,56 +201,67 @@ struct KernelImp : Kernel {
     void patchSamplerBindlessOffsetsInCrossThreadData(uint64_t samplerStateOffset) const override;
 
     NEO::GraphicsAllocation *getPrivateMemoryGraphicsAllocation() override {
-        return privateMemoryGraphicsAllocation;
+        return this->sharedState->privateMemoryGraphicsAllocation;
     }
 
     ze_result_t setSchedulingHintExp(ze_scheduling_hint_exp_desc_t *pHint) override;
 
-    NEO::ImplicitArgs *getImplicitArgs() const override { return state.pImplicitArgs.get(); }
+    NEO::ImplicitArgs *getImplicitArgs() const override { return privateState.pImplicitArgs.ptr.get(); }
+
+    uint32_t getMaxWgCountPerTile(NEO::EngineGroupType engineGroupType) const override {
+        auto value = this->sharedState->maxWgCountPerTileCcs;
+        if (engineGroupType == NEO::EngineGroupType::renderCompute) {
+            value = this->sharedState->maxWgCountPerTileRcs;
+        } else if (engineGroupType == NEO::EngineGroupType::cooperativeCompute) {
+            value = this->sharedState->maxWgCountPerTileCooperative;
+        }
+        return value;
+    }
 
     KernelExt *getExtension(uint32_t extensionType);
 
     bool checkKernelContainsStatefulAccess();
 
     size_t getSyncBufferIndex() const {
-        return state.syncBufferIndex;
+        return privateState.syncBufferIndex;
     }
 
     NEO::GraphicsAllocation *getSyncBufferAllocation() const {
-        if (std::numeric_limits<size_t>::max() == state.syncBufferIndex) {
+        if (std::numeric_limits<size_t>::max() == privateState.syncBufferIndex) {
             return nullptr;
         }
-        return state.internalResidencyContainer[state.syncBufferIndex];
+        return privateState.internalResidencyContainer[privateState.syncBufferIndex];
     }
 
     size_t getRegionGroupBarrierIndex() const {
-        return state.regionGroupBarrierIndex;
+        return privateState.regionGroupBarrierIndex;
     }
 
     NEO::GraphicsAllocation *getRegionGroupBarrierAllocation() const {
-        if (std::numeric_limits<size_t>::max() == state.regionGroupBarrierIndex) {
+        if (std::numeric_limits<size_t>::max() == privateState.regionGroupBarrierIndex) {
             return nullptr;
         }
-        return state.internalResidencyContainer[state.regionGroupBarrierIndex];
+        return privateState.internalResidencyContainer[privateState.regionGroupBarrierIndex];
     }
 
     const std::vector<uint32_t> &getSlmArgSizes() {
-        return state.slmArgSizes;
+        return privateState.slmArgSizes;
     }
     const std::vector<uint32_t> &getSlmArgOffsetValues() {
-        return state.slmArgOffsetValues;
+        return privateState.slmArgOffsetValues;
     }
     uint8_t getRequiredSlmAlignment(uint32_t argIndex) const;
 
     const std::vector<KernelArgInfo> &getKernelArgInfos() const {
-        return state.kernelArgInfos;
+        return privateState.kernelArgInfos;
     }
 
     uint32_t getIndirectSize() const override;
-    KernelMutableState &getMutableState() { return state; }
+    KernelMutableState &getPrivateState() { return privateState; }
 
   protected:
-    KernelImp() = default;
+    KernelImp() : ownedSharedState(std::make_unique<KernelSharedState>(module)),
+                  sharedState(ownedSharedState.get()) {}
 
     void patchWorkgroupSizeInCrossThreadData(uint32_t x, uint32_t y, uint32_t z);
     void createPrintfBuffer();
@@ -249,21 +270,15 @@ struct KernelImp : Kernel {
     void *patchBindlessSurfaceState(NEO::GraphicsAllocation *alloc, uint32_t bindless);
     uint32_t getSurfaceStateIndexForBindlessOffset(NEO::CrossThreadDataOffset bindlessOffset) const;
     ze_result_t validateWorkgroupSize() const;
-    ArrayRef<uint8_t> getCrossThreadDataSpan() { return ArrayRef<uint8_t>(state.crossThreadData.get(), state.crossThreadDataSize); }
+    ArrayRef<uint8_t> getCrossThreadDataSpan() { return ArrayRef<uint8_t>(privateState.crossThreadData.data(), privateState.crossThreadData.size()); }
+    ArrayRef<uint8_t> getSurfaceStateHeapDataSpan() { return ArrayRef<uint8_t>(privateState.surfaceStateHeapData.data(), privateState.surfaceStateHeapData.size()); }
+    ArrayRef<uint8_t> getDynamicStateHeapDataSpan() { return ArrayRef<uint8_t>(privateState.dynamicStateHeapData.data(), privateState.dynamicStateHeapData.size()); }
 
-    const KernelImmutableData *kernelImmData = nullptr;
     Module *module = nullptr;
-    std::mutex *devicePrintfKernelMutex = nullptr;
 
-    NEO::GraphicsAllocation *privateMemoryGraphicsAllocation = nullptr;
-    NEO::GraphicsAllocation *printfBuffer = nullptr;
-    uintptr_t surfaceStateAlignmentMask = 0;
-    uintptr_t surfaceStateAlignment = 0;
-
-    uint32_t implicitArgsVersion = 0;
-    uint32_t walkerInlineDataSize = 0;
-
-    KernelMutableState state{};
+    std::unique_ptr<KernelSharedState> ownedSharedState = nullptr;
+    KernelSharedState *sharedState = nullptr;
+    KernelMutableState privateState{};
 };
 
 } // namespace L0

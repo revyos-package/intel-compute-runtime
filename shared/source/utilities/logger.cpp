@@ -161,8 +161,6 @@ const char *getAllocationTypeString(GraphicsAllocation const *graphicsAllocation
         return "MAP_ALLOCATION";
     case AllocationType::mcs:
         return "MCS";
-    case AllocationType::pipe:
-        return "PIPE";
     case AllocationType::preemption:
         return "PREEMPTION";
     case AllocationType::printfSurface:
@@ -223,6 +221,8 @@ const char *getAllocationTypeString(GraphicsAllocation const *graphicsAllocation
         return "ASSERT_BUFFER";
     case AllocationType::syncDispatchToken:
         return "SYNC_DISPATCH_TOKEN";
+    case AllocationType::hostFunction:
+        return "HOST_FUNCTION";
     default:
         return "ILLEGAL_VALUE";
     }

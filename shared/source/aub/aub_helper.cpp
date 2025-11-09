@@ -23,7 +23,6 @@ namespace NEO {
 
 bool AubHelper::isOneTimeAubWritableAllocationType(const AllocationType &type) {
     switch (type) {
-    case AllocationType::pipe:
     case AllocationType::constantSurface:
     case AllocationType::globalSurface:
     case AllocationType::kernelIsa:
@@ -41,6 +40,7 @@ bool AubHelper::isOneTimeAubWritableAllocationType(const AllocationType &type) {
     case AllocationType::assertBuffer:
     case AllocationType::tagBuffer:
     case AllocationType::syncDispatchToken:
+    case AllocationType::hostFunction:
         return true;
     case AllocationType::bufferHostMemory:
         return NEO::debugManager.isTbxPageFaultManagerEnabled() ||

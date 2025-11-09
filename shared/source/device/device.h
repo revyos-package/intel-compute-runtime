@@ -70,7 +70,7 @@ struct SecondaryContexts : NEO::NonCopyableAndNonMovableClass {
     }
     SecondaryContexts &operator=(SecondaryContexts &&other) noexcept = delete;
 
-    EngineControl *getEngine(const EngineUsage usage, int priority);
+    EngineControl *getEngine(const EngineUsage usage, std::optional<int> priority);
 
     EnginesT engines;                                 // vector of secondary EngineControls
     std::atomic<uint8_t> regularCounter = 0;          // Counter used to assign next regular EngineControl
@@ -90,6 +90,8 @@ struct RTDispatchGlobalsInfo {
     GraphicsAllocation *rtDispatchGlobalsArray = nullptr;
     std::vector<GraphicsAllocation *> rtStacks; // per tile
 };
+
+using QueryPeerAccessFunc = std::function<bool(Device &, Device &, bool &)>;
 
 class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMovableClass {
   public:
@@ -211,6 +213,12 @@ class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMova
     UsmMemAllocPool *getUsmMemAllocPool() {
         return usmMemAllocPool.get();
     }
+    UsmMemAllocPool *getUsmConstantSurfaceAllocPool() {
+        return usmConstantSurfaceAllocPool.get();
+    }
+    UsmMemAllocPool *getUsmGlobalSurfaceAllocPool() {
+        return usmGlobalSurfaceAllocPool.get();
+    }
     MOCKABLE_VIRTUAL void stopDirectSubmissionAndWaitForCompletion();
     MOCKABLE_VIRTUAL void pollForCompletion();
     bool isAnyDirectSubmissionEnabled() const;
@@ -219,7 +227,7 @@ class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMova
         return (getPreemptionMode() == PreemptionMode::MidThread || getDebugger() != nullptr) && getCompilerInterface();
     }
 
-    MOCKABLE_VIRTUAL EngineControl *getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, int priority, bool allocateInterrupt);
+    MOCKABLE_VIRTUAL EngineControl *getSecondaryEngineCsr(EngineTypeUsage engineTypeUsage, std::optional<int> priority, bool allocateInterrupt);
     bool isSecondaryContextEngineType(aub_stream::EngineType type) {
         return EngineHelpers::isCcs(type) || EngineHelpers::isBcs(type);
     }
@@ -258,7 +266,24 @@ class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMova
     UsmReuseInfo usmReuseInfo;
 
     void resetUsmAllocationPool(UsmMemAllocPool *usmMemAllocPool);
+    void resetUsmAllocationPoolManager(UsmMemAllocPoolsManager *usmMemAllocPoolManager);
     void cleanupUsmAllocationPool();
+
+    void resetUsmConstantSurfaceAllocPool(UsmMemAllocPool *usmMemAllocPool);
+    void resetUsmGlobalSurfaceAllocPool(UsmMemAllocPool *usmMemAllocPool);
+
+    std::unordered_map<uint32_t, bool> crossAccessEnabledDevices;
+    bool canAccessPeer(QueryPeerAccessFunc queryPeerAccess, Device *peerDevice, bool &canAccess);
+    static void initializePeerAccessForDevices(QueryPeerAccessFunc queryPeerAccess, const std::vector<NEO::Device *> &devices);
+
+    std::optional<bool> hasAnyPeerAccess() const {
+        return hasPeerAccess;
+    }
+
+    void updatePeerAccessCache(Device *peerDevice, bool value) {
+        this->crossAccessEnabledDevices[peerDevice->getRootDeviceIndex()] = value;
+        peerDevice->crossAccessEnabledDevices[this->getRootDeviceIndex()] = value;
+    }
 
   protected:
     Device() = delete;
@@ -338,10 +363,14 @@ class Device : public ReferenceTrackedObject<Device>, NEO::NonCopyableAndNonMova
     TimestampPoolAllocator deviceTimestampPoolAllocator;
     std::unique_ptr<UsmMemAllocPoolsManager> deviceUsmMemAllocPoolsManager;
     std::unique_ptr<UsmMemAllocPool> usmMemAllocPool;
+    std::unique_ptr<UsmMemAllocPool> usmConstantSurfaceAllocPool;
+    std::unique_ptr<UsmMemAllocPool> usmGlobalSurfaceAllocPool;
 
     std::atomic_uint32_t bufferPoolCount = 0u;
     uint32_t maxBufferPoolCount = 0u;
     uint32_t microsecondResolution = 1000u;
+
+    std::optional<bool> hasPeerAccess = std::nullopt;
 
     struct {
         bool isValid = false;

@@ -15,6 +15,7 @@
 #include "shared/source/helpers/cache_policy.h"
 #include "shared/source/helpers/constants.h"
 #include "shared/source/helpers/definitions/indirect_detection_versions.h"
+#include "shared/source/helpers/device_caps_reader.h"
 #include "shared/source/helpers/hw_info.h"
 #include "shared/source/helpers/hw_mapper.h"
 #include "shared/source/helpers/kernel_helpers.h"
@@ -37,6 +38,15 @@
 #include <bitset>
 
 namespace NEO {
+
+template <PRODUCT_FAMILY gfxProduct>
+std::unique_ptr<DeviceCapsReader> ProductHelperHw<gfxProduct>::getDeviceCapsReader(const DriverModel &driverModel) const { return nullptr; }
+
+template <PRODUCT_FAMILY gfxProduct>
+std::unique_ptr<DeviceCapsReader> ProductHelperHw<gfxProduct>::getDeviceCapsReader(aub_stream::AubManager &aubManager) const { return nullptr; }
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::setupHardwareInfo(HardwareInfo &hwInfo, const DeviceCapsReader &capsReader) const { return true; }
 
 template <PRODUCT_FAMILY gfxProduct>
 int ProductHelperHw<gfxProduct>::configureHardwareCustom(HardwareInfo *hwInfo, OSInterface *osIface) const {
@@ -238,8 +248,7 @@ bool ProductHelperHw<gfxProduct>::isMaxThreadsForWorkgroupWARequired(const Hardw
 
 template <PRODUCT_FAMILY gfxProduct>
 uint32_t ProductHelperHw<gfxProduct>::getMaxThreadsForWorkgroup(const HardwareInfo &hwInfo, uint32_t maxNumEUsPerSubSlice) const {
-    uint32_t numThreadsPerEU = hwInfo.gtSystemInfo.ThreadCount / hwInfo.gtSystemInfo.EUCount;
-    return maxNumEUsPerSubSlice * numThreadsPerEU;
+    return maxNumEUsPerSubSlice * hwInfo.gtSystemInfo.NumThreadsPerEu;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -894,7 +903,7 @@ bool ProductHelperHw<gfxProduct>::isDeviceToHostCopySignalingFenceRequired() con
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-size_t ProductHelperHw<gfxProduct>::getMaxFillPaternSizeForCopyEngine() const {
+size_t ProductHelperHw<gfxProduct>::getMaxFillPatternSizeForCopyEngine() const {
     return 4 * sizeof(uint32_t);
 }
 
@@ -941,6 +950,11 @@ uint64_t ProductHelperHw<gfxProduct>::getPatIndex(CacheRegion cacheRegion, Cache
 }
 
 template <PRODUCT_FAMILY gfxProduct>
+uint64_t ProductHelperHw<gfxProduct>::getSharedSystemPatIndex() const {
+    return 0;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
 uint32_t ProductHelperHw<gfxProduct>::getGmmResourceUsageOverride(uint32_t usageType) const {
     return 0u;
 }
@@ -951,7 +965,7 @@ bool ProductHelperHw<gfxProduct>::isEvictionIfNecessaryFlagSupported() const {
 }
 
 template <PRODUCT_FAMILY gfxProduct>
-bool ProductHelperHw<gfxProduct>::isL3FlushAfterPostSyncRequired(bool heaplessEnabled) const {
+bool ProductHelperHw<gfxProduct>::isL3FlushAfterPostSyncSupported(bool heaplessEnabled) const {
     return false;
 }
 
@@ -1082,6 +1096,16 @@ bool ProductHelperHw<gfxProduct>::checkBcsForDirectSubmissionStop() const {
 
 template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::shouldRegisterEnqueuedWalkerWithProfiling() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isInterruptSupported() const {
+    return false;
+}
+
+template <PRODUCT_FAMILY gfxProduct>
+bool ProductHelperHw<gfxProduct>::isCompressionFormatFromGmmRequired() const {
     return false;
 }
 

@@ -113,7 +113,7 @@ struct Variable : public VariableHandle {
     ze_result_t addCsUsage(CommandBufferOffset csOffset, CommandBufferOffset csFullOffset);
 
     inline void addDispatch(VariableDispatch *vd) { usedInDispatch.push_back(vd); }
-    inline const auto &getDispatchs() const { return usedInDispatch; }
+    inline const auto &getDispatches() const { return usedInDispatch; }
 
     void setBufferUsages(BufferUsages &&bufferUsages) { this->bufferUsages = std::move(bufferUsages); }
     inline const auto &getBufferUsages() const { return bufferUsages; }
@@ -177,9 +177,9 @@ struct Variable : public VariableHandle {
     void commitVariable();
     void updateAllocationResidency(NEO::GraphicsAllocation *oldAllocation, NEO::GraphicsAllocation *newAllocation);
 
-    void updateCmdListNoopPatchData(size_t noopPatchIndex, void *newCpuPtr, size_t newPatchSize, size_t newOffset);
-    size_t createNewCmdListNoopPatchData(void *newCpuPtr, size_t newPatchSize, size_t newOffset);
-    void fillCmdListNoopPatchData(size_t noopPatchIndex, void *&cpuPtr, size_t &patchSize, size_t &offset);
+    void updateCmdListNoopPatchData(size_t noopPatchIndex, void *newCpuPtr, size_t newPatchSize, size_t newOffset, uint64_t newGpuAddress);
+    size_t createNewCmdListNoopPatchData(void *newCpuPtr, size_t newPatchSize, size_t newOffset, uint64_t newGpuAddress);
+    void fillCmdListNoopPatchData(size_t noopPatchIndex, void *&cpuPtr, size_t &patchSize, size_t &offset, uint64_t &gpuAddress);
 
     bool isCooperativeVariable() const;
     inline VariableDispatch *getInitialVariableDispatch() const {

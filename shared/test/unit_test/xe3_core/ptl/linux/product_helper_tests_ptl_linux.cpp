@@ -16,6 +16,19 @@
 
 using namespace NEO;
 
+struct PtlProductHelperLinux : ProductHelperTestLinux {
+    void SetUp() override {
+        ProductHelperTestLinux::SetUp();
+
+        drm = new DrmMockExtended(*executionEnvironment->rootDeviceEnvironments[0]);
+        osInterface->setDriverModel(std::unique_ptr<DriverModel>(drm));
+    }
+};
+
+PTLTEST_F(PtlProductHelperLinux, givenProductHelperWhenAskedGetSharedSystemPatIndexThenReturnCorrectValue) {
+    EXPECT_EQ(1ull, productHelper->getSharedSystemPatIndex());
+}
+
 using PtlHwInfoLinux = ::testing::Test;
 
 PTLTEST_F(PtlHwInfoLinux, WhenGtIsSetupThenGtSystemInfoIsCorrect) {
@@ -40,4 +53,10 @@ PTLTEST_F(PtlHwInfoLinux, WhenGtIsSetupThenGtSystemInfoIsCorrect) {
     EXPECT_TRUE(gtSystemInfo.IsDynamicallyPopulated);
     EXPECT_GT(gtSystemInfo.DualSubSliceCount, 0u);
     EXPECT_GT(gtSystemInfo.MaxDualSubSlicesSupported, 0u);
+}
+
+using PtlProductHelperTest = ProductHelperTest;
+
+PTLTEST_F(PtlProductHelperTest, givenProductHelperWhenAskedIfIsTlbFlushRequiredThenFalseIsReturned) {
+    EXPECT_FALSE(productHelper->isTlbFlushRequired());
 }

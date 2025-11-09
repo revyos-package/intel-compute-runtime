@@ -54,7 +54,8 @@ struct CommandQueueHw : public CommandQueueImp {
                                              uint32_t perThreadScratchSpaceSlot1Size);
 
     bool getPreemptionCmdProgramming() override;
-    void patchCommands(CommandList &commandList, uint64_t scratchAddress, bool patchNewScratchController);
+    void patchCommands(CommandList &commandList, uint64_t scratchAddress, bool patchNewScratchController,
+                       void **patchPreambleBuffer);
 
   protected:
     struct CommandListExecutionContext {
@@ -77,11 +78,15 @@ struct CommandQueueHw : public CommandQueueImp {
         NEO::StreamProperties cmdListBeginState{};
         uint64_t scratchGsba = 0;
         uint64_t childGpuAddressPositionBeforeDynamicPreamble = 0;
+        uint64_t currentGpuAddressForChainedBbStart = 0;
 
         size_t spaceForResidency = 10;
+        size_t bufferSpaceForPatchPreamble = 0;
+        size_t totalNoopSpaceForPatchPreamble = 0;
         CommandList *firstCommandList = nullptr;
         CommandList *lastCommandList = nullptr;
         void *currentPatchForChainedBbStart = nullptr;
+        void *currentPatchPreambleBuffer = nullptr;
         NEO::ScratchSpaceController *scratchSpaceController = nullptr;
         NEO::GraphicsAllocation *globalStatelessAllocation = nullptr;
         std::unique_lock<std::mutex> *outerLockForIndirect = nullptr;
@@ -90,6 +95,7 @@ struct CommandQueueHw : public CommandQueueImp {
         NEO::PreemptionMode statePreemption{};
         uint32_t perThreadScratchSpaceSlot0Size = 0;
         uint32_t perThreadScratchSpaceSlot1Size = 0;
+        uint32_t totalActiveScratchPatchElements = 0;
         UnifiedMemoryControls unifiedMemoryControls{};
 
         bool anyCommandListWithCooperativeKernels = false;
@@ -150,6 +156,15 @@ struct CommandQueueHw : public CommandQueueImp {
                                                                    bool stateCacheFlushRequired);
     inline size_t estimateCommandListSecondaryStart(CommandList *commandList);
     inline size_t estimateCommandListPrimaryStart(bool required);
+    inline size_t estimateCommandListPatchPreamble(CommandListExecutionContext &ctx, uint32_t numCommandLists);
+    inline size_t estimateCommandListPatchPreambleFrontEndCmd(CommandListExecutionContext &ctx, CommandList *commandList);
+    inline void getCommandListPatchPreambleData(CommandListExecutionContext &ctx, CommandList *commandList);
+    inline size_t estimateCommandListPatchPreambleWaitSync(CommandListExecutionContext &ctx, CommandList *commandList);
+    inline size_t estimateTotalPatchPreambleData(CommandListExecutionContext &ctx);
+    inline void retrivePatchPreambleSpace(CommandListExecutionContext &ctx, NEO::LinearStream &commandStream);
+    inline void dispatchPatchPreambleEnding(CommandListExecutionContext &ctx);
+    inline void dispatchPatchPreambleInOrderNoop(CommandListExecutionContext &ctx, CommandList *commandList);
+    inline void dispatchPatchPreambleCommandListWaitSync(CommandListExecutionContext &ctx, CommandList *commandList);
     inline size_t estimateCommandListResidencySize(CommandList *commandList);
     inline void setFrontEndStateProperties(CommandListExecutionContext &ctx);
     inline void handleScratchSpaceAndUpdateGSBAStateDirtyFlag(CommandListExecutionContext &ctx);
@@ -199,7 +214,9 @@ struct CommandQueueHw : public CommandQueueImp {
     NEO::SubmissionStatus prepareAndSubmitBatchBuffer(CommandListExecutionContext &ctx, NEO::LinearStream &innerCommandStream);
 
     inline void cleanLeftoverMemory(NEO::LinearStream &outerCommandStream, NEO::LinearStream &innerCommandStream);
-    inline void updateTaskCountAndPostSync(bool isDispatchTaskCountPostSyncRequired);
+    inline void updateTaskCountAndPostSync(bool isDispatchTaskCountPostSyncRequired,
+                                           uint32_t numCommandLists,
+                                           ze_command_list_handle_t *commandListHandles);
     inline ze_result_t waitForCommandQueueCompletionAndCleanHeapContainer();
     inline ze_result_t handleSubmissionAndCompletionResults(NEO::SubmissionStatus submitRet, ze_result_t completionRet);
     inline size_t estimatePipelineSelectCmdSizeForMultipleCommandLists(NEO::StreamProperties &csrState,
@@ -250,6 +267,7 @@ struct CommandQueueHw : public CommandQueueImp {
     inline void updateBaseAddressState(CommandList *lastCommandList);
     inline void updateDebugSurfaceState(CommandListExecutionContext &ctx);
     inline void patchCommands(CommandList &commandList, CommandListExecutionContext &ctx);
+    void prepareInOrderCommandList(CommandListImp *commandList, CommandListExecutionContext &ctx);
 
     size_t alignedChildStreamPadding{};
 };

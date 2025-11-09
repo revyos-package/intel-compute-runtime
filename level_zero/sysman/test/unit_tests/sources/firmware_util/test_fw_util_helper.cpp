@@ -26,6 +26,7 @@ namespace ult {
 constexpr static uint32_t mockMaxTileCount = 2;
 static int mockMemoryHealthIndicator = IGSC_HEALTH_INDICATOR_HEALTHY;
 static int mockGetFwVersion = IGSC_SUCCESS;
+static int mockGetFwDataVersion = IGSC_SUCCESS;
 static int mockGetOpromCodeVersion = IGSC_SUCCESS;
 static int mockGetOpromDataVersion = IGSC_SUCCESS;
 static int mockGetPscVersion = IGSC_SUCCESS;
@@ -93,7 +94,7 @@ static int mockGetEccAvailable(struct igsc_device_handle *handle, uint32_t gfspC
 
     switch (gfspCmd) {
     case GfspHeciConstants::Cmd::getConfigurationCmd16:
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccAvailable] = mockEccHeciCmd16Val;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::availableBytePosition] = mockEccHeciCmd16Val;
         return IGSC_SUCCESS;
     case GfspHeciConstants::Cmd::getConfigurationCmd9:
         outBuffer[GfspHeciConstants::GetEccCmd9BytePostition::currentState] = mockEccCurrentState;
@@ -112,7 +113,7 @@ static int mockGetEccConfigurable(struct igsc_device_handle *handle, uint32_t gf
 
     switch (gfspCmd) {
     case GfspHeciConstants::Cmd::getConfigurationCmd16:
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccConfigurable] = mockEccHeciCmd16Val;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::configurableBytePosition] = mockEccHeciCmd16Val;
         return IGSC_SUCCESS;
     case GfspHeciConstants::Cmd::getConfigurationCmd9:
         outBuffer[GfspHeciConstants::GetEccCmd9BytePostition::currentState] = mockEccCurrentState;
@@ -131,14 +132,14 @@ static int mockGetEccConfig(struct igsc_device_handle *handle, uint32_t gfspCmd,
 
     switch (gfspCmd) {
     case GfspHeciConstants::Cmd::getConfigurationCmd16:
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccCurrentState] = mockEccCurrentState;
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccPendingState] = mockEccPendingState;
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccDefaultState] = mockEccDefaultState;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::currentStateBytePosition] = mockEccCurrentState;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::pendingStateBytePosition] = mockEccPendingState;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::defaultStateBytePosition] = mockEccDefaultState;
         return IGSC_SUCCESS;
     case GfspHeciConstants::Cmd::getConfigurationCmd9:
         outBuffer[GfspHeciConstants::GetEccCmd9BytePostition::currentState] = mockEccCurrentState;
         outBuffer[GfspHeciConstants::GetEccCmd9BytePostition::pendingState] = mockEccPendingState;
-        outBuffer[GfspHeciConstants::GetEccCmd16BytePostition::eccDefaultState] = 0xff;
+        outBuffer[GfspHeciConstants::GetCmd16BytePostition::defaultStateBytePosition] = 0xff;
         return IGSC_SUCCESS;
     case GfspHeciConstants::Cmd::setConfigurationCmd15:
         outBuffer[GfspHeciConstants::SetCmd15BytePostition::response] = inBuffer[GfspHeciConstants::SetCmd15BytePostition::request];
@@ -152,17 +153,14 @@ static int mockGetEccConfig(struct igsc_device_handle *handle, uint32_t gfspCmd,
     }
 }
 
-static int mockSetPcieDowngradeConfig(struct igsc_device_handle *handle, uint32_t gfspCmd, uint8_t *inBuffer, size_t inBufferSize, uint8_t *outBuffer, size_t outBufferSize, size_t *actualOutBufferSize) {
-    if (mockSetPcieDowngradeConfigFailure) {
-        return IGSC_ERROR_NOT_SUPPORTED;
-    }
-    outBuffer[GfspHeciConstants::SetCmd15BytePostition::response] = inBuffer[GfspHeciConstants::SetCmd15BytePostition::request];
-    return IGSC_SUCCESS;
-}
-
 static int mockIgscDeviceFwVersion(struct igsc_device_handle *handle,
                                    struct igsc_fw_version *version) {
     return mockGetFwVersion;
+}
+
+static int mockIgscDeviceFwDataVersion(struct igsc_device_handle *handle,
+                                       struct igsc_fwdata_version *version) {
+    return mockGetFwDataVersion;
 }
 
 static int mockIgscDeviceOpromVersion(struct igsc_device_handle *handle,
@@ -245,7 +243,7 @@ TEST(FwRunDiagTest, GivenValidSupportedDiagnosticsTestsParamWhenFirmwareUtilSupp
     delete pFwUtilImp;
 }
 
-TEST(FwGetProcAddressTest, GivenValidFwUtilMethodNameWhenFirmwareUtilIsInitalizedThenCorrectMethodsAreLoaded) {
+TEST(FwGetProcAddressTest, GivenValidFwUtilMethodNameWhenFirmwareUtilIsInitializedThenCorrectMethodsAreLoaded) {
     struct IFRmockOsLibrary : OsLibrary {
       public:
         ~IFRmockOsLibrary() override = default;
@@ -591,7 +589,7 @@ TEST(FwUtilImpProgressTest, GivenFirmwareUtilImpAndNullContextWhenSettingProgres
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccAvailableSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccAvailableSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -616,7 +614,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccAvailableSu
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccAvailableSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccAvailableSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -682,7 +680,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd9AndCmd16AreUnsupportedWhenCallingFwGetEccAvail
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigurableSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigurableSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -707,7 +705,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigurabl
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccConfigurableSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccConfigurableSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -773,7 +771,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd9AndCmd16AreUnsupportedWhenCallingFwGetEccConfi
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -799,7 +797,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedThenWhenCallingFwGetEccConfigSuces
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccConfigSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd16IsNotSupportedBut9IsSupportedThenWhenCallingFwGetEccConfigSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -856,7 +854,7 @@ TEST(LinuxFwEccTest, GivenUnavailableHeciFunctionPointersWhenCallingEccMethodsTh
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetEccConfigSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetEccConfigSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -880,7 +878,7 @@ TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetEccConfigSuces
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetEccConfigAndFwGetEccConfigFailsThenFailureReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedAndCmd16IsNotSupportedThenWhenCallingFwSetEccConfigFailureIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -889,6 +887,28 @@ TEST(LinuxFwEccTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetEccConfigAndFw
     mockSupportedHeciCmds.clear();
     mockSupportedHeciCmds.push_back(0xff);
     mockSupportedHeciCmds.push_back(GfspHeciConstants::Cmd::setConfigurationCmd15);
+    mockEccCurrentState = 0;
+
+    uint8_t currentState;
+    uint8_t pendingState;
+    uint8_t newState = 1;
+    auto ret = pFwUtilImp->fwSetEccConfig(newState, &currentState, &pendingState);
+    EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, ret);
+
+    delete pFwUtilImp->libraryHandle;
+    pFwUtilImp->libraryHandle = nullptr;
+    delete pFwUtilImp;
+}
+
+TEST(LinuxFwEccTest, GivenHeciCmd16IsSupportedAndCmd15IsNotSupportedThenWhenCallingFwSetEccConfigFailureIsReturned) {
+    restoreEccMockVars();
+    L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
+    MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
+    osLibHandle->funcMap["igsc_gfsp_heci_cmd"] = reinterpret_cast<void *>(&mockGetEccConfig);
+    pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
+    mockSupportedHeciCmds.clear();
+    mockSupportedHeciCmds.push_back(0xff);
+    mockSupportedHeciCmds.push_back(GfspHeciConstants::Cmd::getConfigurationCmd16);
     mockEccCurrentState = 0;
 
     uint8_t currentState;
@@ -923,7 +943,7 @@ TEST(LinuxFwEccTest, GivenHeciSetCommandsAreNotSupportedThenWhenCallingFwSetEccC
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwEccTest, GivenHeciCmd15IsNotSupportedButCmd8IsSupportedThenWhenCallingFwSetEccConfigSucessIsReturned) {
+TEST(LinuxFwEccTest, GivenHeciCmd15IsNotSupportedButCmd8IsSupportedThenWhenCallingFwSetEccConfigSuccessIsReturned) {
     restoreEccMockVars();
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
@@ -947,73 +967,24 @@ TEST(LinuxFwEccTest, GivenHeciCmd15IsNotSupportedButCmd8IsSupportedThenWhenCalli
     delete pFwUtilImp;
 }
 
-TEST(LinuxFwPcieDowngradeTest, GivenUnavailableHeciFunctionPointersWhenCallingPcieSetConfigThenFailureIsReturned) {
-    restorePcieDowngradeMockVars();
-    L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
-    MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
-    pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
-
-    uint8_t pendingState;
-    uint8_t newState = 1;
-    EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, pFwUtilImp->fwSetDowngradeConfig(newState, &pendingState));
-
-    delete pFwUtilImp->libraryHandle;
-    pFwUtilImp->libraryHandle = nullptr;
-    delete pFwUtilImp;
-}
-
-TEST(LinuxFwPcieDowngradeTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetDowngradeConfigSucessIsReturned) {
-    restorePcieDowngradeMockVars();
-    L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
-    MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
-    osLibHandle->funcMap["igsc_gfsp_heci_cmd"] = reinterpret_cast<void *>(&mockSetPcieDowngradeConfig);
-    pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
-
-    uint8_t pendingState;
-    uint8_t newState = 1;
-    auto ret = pFwUtilImp->fwSetDowngradeConfig(newState, &pendingState);
-    EXPECT_EQ(pendingState, newState);
-    EXPECT_EQ(ZE_RESULT_SUCCESS, ret);
-
-    delete pFwUtilImp->libraryHandle;
-    pFwUtilImp->libraryHandle = nullptr;
-    delete pFwUtilImp;
-}
-
-TEST(LinuxFwPcieDowngradeTest, GivenHeciCmd15IsSupportedThenWhenCallingFwSetDowngradeConfigAndTheCallFailsThenFailureIsReturned) {
-    restorePcieDowngradeMockVars();
-    L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
-    MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
-    osLibHandle->funcMap["igsc_gfsp_heci_cmd"] = reinterpret_cast<void *>(&mockSetPcieDowngradeConfig);
-    pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
-    mockSetPcieDowngradeConfigFailure = true;
-
-    uint8_t pendingState;
-    uint8_t newState = 1;
-    auto ret = pFwUtilImp->fwSetDowngradeConfig(newState, &pendingState);
-    EXPECT_EQ(ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, ret);
-
-    delete pFwUtilImp->libraryHandle;
-    pFwUtilImp->libraryHandle = nullptr;
-    delete pFwUtilImp;
-}
-
 TEST(FwGetSupportedFwTypesTest, GivenFirmwareUtilAndAllFwTypesSupportedWhenCallingGetSupportedFwTypesThenExpectValidFwTypes) {
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
     osLibHandle->funcMap["igsc_device_fw_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwVersion);
+    osLibHandle->funcMap["igsc_device_fwdata_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwDataVersion);
     osLibHandle->funcMap["igsc_device_oprom_version"] = reinterpret_cast<void *>(&mockIgscDeviceOpromVersion);
     osLibHandle->funcMap["igsc_device_psc_version"] = reinterpret_cast<void *>(&mockIgscDevicePscVersion);
     pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
 
     mockGetFwVersion = IGSC_SUCCESS;
+    mockGetFwDataVersion = IGSC_SUCCESS;
     mockGetOpromCodeVersion = IGSC_SUCCESS;
     mockGetOpromDataVersion = IGSC_SUCCESS;
     mockGetPscVersion = IGSC_SUCCESS;
 
     std::vector<std::string> fwTypes{};
     pFwUtilImp->getDeviceSupportedFwTypes(fwTypes);
-    EXPECT_EQ(fwTypes.size(), 3u);
+    EXPECT_EQ(fwTypes.size(), 4u);
 
     delete pFwUtilImp->libraryHandle;
     pFwUtilImp->libraryHandle = nullptr;
@@ -1024,11 +995,13 @@ TEST(FwGetSupportedFwTypesTest, GivenFirmwareUtilAndAllFwTypesUnsupportedWhenCal
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
     osLibHandle->funcMap["igsc_device_fw_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwVersion);
+    osLibHandle->funcMap["igsc_device_fwdata_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwDataVersion);
     osLibHandle->funcMap["igsc_device_oprom_version"] = reinterpret_cast<void *>(&mockIgscDeviceOpromVersion);
     osLibHandle->funcMap["igsc_device_psc_version"] = reinterpret_cast<void *>(&mockIgscDevicePscVersion);
     pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
 
     mockGetFwVersion = IGSC_ERROR_NOT_SUPPORTED;
+    mockGetFwDataVersion = IGSC_ERROR_NOT_SUPPORTED;
     mockGetOpromCodeVersion = IGSC_ERROR_NOT_SUPPORTED;
     mockGetOpromDataVersion = IGSC_ERROR_NOT_SUPPORTED;
     mockGetPscVersion = IGSC_ERROR_NOT_SUPPORTED;
@@ -1046,18 +1019,20 @@ TEST(FwGetSupportedFwTypesTest, GivenFirmwareUtilAndOnlyOpromCodeSupportedWhenCa
     L0::Sysman::FirmwareUtilImp *pFwUtilImp = new L0::Sysman::FirmwareUtilImp(0, 0, 0, 0);
     MockFwUtilOsLibrary *osLibHandle = new MockFwUtilOsLibrary();
     osLibHandle->funcMap["igsc_device_fw_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwVersion);
+    osLibHandle->funcMap["igsc_device_fwdata_version"] = reinterpret_cast<void *>(&mockIgscDeviceFwDataVersion);
     osLibHandle->funcMap["igsc_device_oprom_version"] = reinterpret_cast<void *>(&mockIgscDeviceOpromVersion);
     osLibHandle->funcMap["igsc_device_psc_version"] = reinterpret_cast<void *>(&mockIgscDevicePscVersion);
     pFwUtilImp->libraryHandle = static_cast<OsLibrary *>(osLibHandle);
 
     mockGetFwVersion = IGSC_SUCCESS;
+    mockGetFwDataVersion = IGSC_SUCCESS;
     mockGetOpromCodeVersion = IGSC_SUCCESS;
     mockGetOpromDataVersion = IGSC_ERROR_NOT_SUPPORTED;
     mockGetPscVersion = IGSC_SUCCESS;
 
     std::vector<std::string> fwTypes{};
     pFwUtilImp->getDeviceSupportedFwTypes(fwTypes);
-    EXPECT_EQ(fwTypes.size(), 2u);
+    EXPECT_EQ(fwTypes.size(), 3u);
 
     delete pFwUtilImp->libraryHandle;
     pFwUtilImp->libraryHandle = nullptr;

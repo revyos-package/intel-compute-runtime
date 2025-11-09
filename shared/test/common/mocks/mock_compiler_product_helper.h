@@ -9,16 +9,6 @@
 #include "shared/test/common/test_macros/mock_method_macros.h"
 
 namespace NEO {
-template <PRODUCT_FAMILY productFamily>
-class MockCompilerProductHelperHeaplessHw : public CompilerProductHelperHw<productFamily> {
-  public:
-    bool isHeaplessModeEnabled(const HardwareInfo &hwInfo) const override {
-        return heaplessModeEnabled;
-    }
-
-    MockCompilerProductHelperHeaplessHw(bool heaplessModeEnabled) : CompilerProductHelperHw<productFamily>(), heaplessModeEnabled(heaplessModeEnabled) {}
-    bool heaplessModeEnabled = false;
-};
 
 class MockCompilerProductHelper : public CompilerProductHelper {
   public:
@@ -33,7 +23,6 @@ class MockCompilerProductHelper : public CompilerProductHelper {
     ADDMETHOD_CONST_NOBASE(isSplitMatrixMultiplyAccumulateSupported, bool, false, (const ReleaseHelper *releaseHelper));
     ADDMETHOD_CONST_NOBASE(isBFloat16ConversionSupported, bool, false, (const ReleaseHelper *releaseHelper));
     ADDMETHOD_CONST_NOBASE(isSubgroupLocalBlockIoSupported, bool, false, ());
-    ADDMETHOD_CONST_NOBASE(isDotAccumulateSupported, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isDotProductAccumulateSystolicSupported, bool, false, (const ReleaseHelper *releaseHelper));
     ADDMETHOD_CONST_NOBASE(isCreateBufferWithPropertiesSupported, bool, false, ());
     ADDMETHOD_CONST_NOBASE(isSubgroupNamedBarrierSupported, bool, false, ());
@@ -66,6 +55,18 @@ class MockCompilerProductHelper : public CompilerProductHelper {
     ADDMETHOD_CONST_NOBASE(getFinalizerLibraryName, const char *, nullptr, ());
     ADDMETHOD_CONST_NOBASE(useIgcAsFcl, bool, false, ());
     ADDMETHOD_CONST_NOBASE(getPreferredIntermediateRepresentation, IGC::CodeType::CodeType_t, IGC::CodeType::undefined, ());
+    ADDMETHOD_CONST_NOBASE(isSpirSupported, bool, true, (const ReleaseHelper *releaseHelper));
+};
+
+class MockCompilerProductHelperHeapless : public MockCompilerProductHelper {
+  public:
+    bool isHeaplessModeEnabled(const HardwareInfo &hwInfo) const override {
+        return heaplessModeEnabled;
+    }
+
+    MockCompilerProductHelperHeapless() = default;
+    MockCompilerProductHelperHeapless(bool heaplessModeEnabled) : MockCompilerProductHelper(), heaplessModeEnabled(heaplessModeEnabled) {}
+    bool heaplessModeEnabled = false;
 };
 
 } // namespace NEO

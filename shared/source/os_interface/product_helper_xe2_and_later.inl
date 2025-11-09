@@ -21,7 +21,7 @@ bool ProductHelperHw<gfxProduct>::deferMOCSToPatIndex(bool isWddmOnLinux) const 
 
 template <PRODUCT_FAMILY gfxProduct>
 bool ProductHelperHw<gfxProduct>::isInitBuiltinAsyncSupported(const HardwareInfo &hwInfo) const {
-    return true;
+    return false;
 }
 
 template <PRODUCT_FAMILY gfxProduct>
@@ -59,7 +59,7 @@ bool ProductHelperHw<gfxProduct>::isNonCoherentTimestampsModeEnabled() const {
     if (debugManager.flags.ForceNonCoherentModeForTimestamps.get() != -1) {
         return debugManager.flags.ForceNonCoherentModeForTimestamps.get();
     }
-    return true;
+    return !this->isDcFlushAllowed();
 }
 
 template <PRODUCT_FAMILY gfxProduct>
